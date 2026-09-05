@@ -1,11 +1,34 @@
 # Daybook — feature inventory
 
-What the app does, area by area. Written against **versionCode 13 / versionName 0.5.5 / Room DB v17**
-(the journal-habit round — versionCode/versionName are unchanged from the prior customization round;
-only the DB schema moved). Package `com.daybook.app`. Android-only, offline-first, dark-only.
+What the app does, area by area. Written against **versionCode 20 / versionName 0.5.6 / Room DB v19**.
+Package `com.daybook.app`. Android-only, offline-first, dark-only.
 
 Each feature has a one-to-three-sentence description and, in parentheses, the main files/screens
 that implement it. "Where the setting lives" is called out wherever a feature is configurable.
+
+**Rounds since the journal-habit round (v0.5.5 / DB v17), newest last:**
+
+- **Login-redesign round** — sign-in gate + onboarding reworked (bottom-anchored "Continue with
+  Google", name asked once only when unknown, conflict/restore dialog, four-stage launch gate);
+  Firebase Crashlytics added. See §1.
+- **Accent-updates round** (DB v17→v18, `MIGRATION_17_18`) — fresh-install defaults changed to
+  **lavender accent + Literata font + reduce-motion off**; the Ongoing/STREAK habit-card
+  alignment bug fixed; **Firebase App Distribution** wired in as the OTA / in-app-update
+  mechanism. It also briefly split the accent into three independent App/Habits/Intake knobs —
+  **that split was reverted** the next round ("make it like before"): back to one global accent.
+  The two `habits_accent_color` / `intake_accent_color` columns `MIGRATION_17_18` added are left
+  in place as inert, unread columns.
+- **Accent-revert + update-toggle + calendar-fix round** (DB v18→v19, `MIGRATION_18_19`) —
+  reverted the 3-axis accent (above); added the **"Check for updates" toggle** (Settings →
+  Notifications & alarms; auto-flips off if the tester declines App Distribution sign-in); fixed
+  two `WeekStrip` calendar bugs (selection drift; no future-date guard on the programmatic path).
+- **Calendar-drift / "back to today" / keyboard / sheet round** (versionCode 17→20, no DB
+  change) — completed the calendar-drift fix (Sync 1 / Sync 2 gated on `expanded`); added a
+  **"Back to today"** link to the Home calendar (visible only when a non-today date is selected);
+  set `windowSoftInputMode="adjustResize"` on `MainActivity` (fixes the journal-chat black-screen
+  keyboard bug); **restyled `SortSheet`** (content-height sheet, accent-aware, compact hand-drawn
+  `RadioDot`) and **moved the Habits/Intake sort/filter opener to a bottom-left FAB** in the
+  one-hand reach zone.
 
 ---
 
@@ -55,9 +78,16 @@ that implement it. "Where the setting lives" is called out wherever a feature is
 - **Week strip ↔ inline month calendar.** A horizontal seven-day strip that expands in place into
   a month grid and collapses back, with a size-morph animation. Tapping a day selects it; the
   selected column stays put when you change week-start. Default view (week or month on cold start)
-  is configurable.
+  is configurable. Future days are untappable (dimmed) in both the strip and the grid.
   (`ui/components/WeekStrip.kt`, `ui/home/HomeScreen.kt`; setting: Settings → Today & calendar →
   Calendar → Default calendar view)
+- **"Back to today" link.** A centered `TextLink` in the calendar header, shown (spring-in) only
+  when the selected date is not today; tapping it returns the selection to today. Works in both
+  the collapsed strip and the expanded grid. (`ui/components/WeekStrip.kt`, `ui/components/TextLink.kt`)
+- **Calendar selection stability.** The two week-pager sync effects in `WeekStrip` are gated on
+  `expanded` so an off-screen pager's settle events can't feed a wrong date back in (this fixed a
+  bug where, in the expanded month grid, the selected date drifted on its own with no user input);
+  the programmatic selection path also honours the future-date guard. (`ui/components/WeekStrip.kt`)
 - **"Your progress" cards.** Two cards, **Habits** (Mint) and **Intake** (Peach), each showing a
   percent-complete ring/bar for the viewed day and a streak flame pill when the streak is > 0.
   The two cards use their own tint accent, not the app accent, so they read as distinct.
@@ -136,8 +166,14 @@ that implement it. "Where the setting lives" is called out wherever a feature is
   show-archived. The type facet is *not* persisted (resets each session); sort and show-archived
   are. **Note:** the type facet list is still hardcoded to Individual/Batch/Ongoing — there is no
   "Journal" chip yet, so Journal habits can only be excluded from view via the other three facets
-  combined, never selected on their own. (`ui/routines/RoutinesScreen.kt`,
-  `ui/components/SortSheet.kt`)
+  combined, never selected on their own. The sheet opener is a `CircleStyle.Tonal` button at
+  `Alignment.BottomStart` (one-hand reach zone, level with the Add FAB at `BottomEnd`), not a
+  top-corner header action; it carries an accent dot when a filter/sort is active and stays
+  visible when the list is empty. The sheet itself is content-height and accent-aware (restyled
+  round): section labels, the selected sort row + its `RadioDot`, ticked facet + count pill, the
+  archived `Switch`, and the Reset button all render in the user's chosen accent. Same
+  `SortSheet` also backs the Intake filter and the app-lock "Lock after" chooser.
+  (`ui/routines/RoutinesScreen.kt`, `ui/components/SortSheet.kt`)
 - **Habit detail — History + Stats tabs.** A `SegmentedControl` switch. History is a paged
   timeline of events (shown / snoozed / completed / skipped / replied). Stats shows completion
   rate, this-month figure, current streak and best (streak figures hidden when "Show streak
@@ -303,6 +339,17 @@ conflated: §5a is legacy and effectively dead; §5b is the new, live feature.
 - **Channels.** Two: `habits_v2`, `food_med_v2`, both `IMPORTANCE_HIGH`. Channel IDs are
   versioned because a channel is immutable once created — legacy `habits` / `food_med` are deleted
   on startup. (`util/notification/NotificationUtils.kt` `createNotificationChannels`)
+- **In-app update check (Firebase App Distribution).** The app is sideloaded (no Play listing),
+  so updates come via Firebase App Distribution. `MainActivity.onResume()` calls
+  `InAppUpdateChecker.checkForUpdate()` — which runs App Distribution's `updateIfNewReleaseAvailable()`
+  (its own "Update available" dialog + download + install) — gated by the **"Check for updates"**
+  toggle. The toggle defaults ON and auto-flips OFF the first time the tester declines the SDK's
+  "Enable testing features" sign-in prompt (`FirebaseAppDistributionException.Status.AUTHENTICATION_CANCELED`
+  only — network / no-access failures don't touch it); it can be turned back on manually. For a
+  plain sideloaded APK not installed via an App Distribution invite, the check is inert.
+  (`util/update/InAppUpdateChecker.kt`, `ui/MainActivity.kt` `onResume`; setting: Settings →
+  Notifications & alarms → Updates → Check for updates; `HOW_TO_PUSH_UPDATES.md` for the push
+  workflow)
 
 ## 7. Streaks
 
@@ -337,10 +384,16 @@ is gone** (journal-habit round) — question sets are now configured per-habit i
 (`ui/settings/SettingsScreen.kt`, `ui/settings/SettingsViewModel.kt`, `data/model/DataModel.kt`
 `AppSettings`, `data/AppSettingsRepository.kt`)
 
-- **Accent colour** — 5 options; tints buttons, toggles, highlights and every default M3 control.
+- **Accent colour** — a single global accent, 5 options (Mint / Lavender / Coral / Sky / Amber);
+  tints nav, chips, switches, primary buttons, week-strip pill, progress fills and every default
+  M3 control. Fresh-install default is **Lavender** (`AccentColor.DEFAULT`). (An accent-updates
+  round briefly split this into independent App/Habits/Intake accents; that was reverted — one
+  accent everywhere again. The `habits_accent_color` / `intake_accent_color` `app_settings`
+  columns from that round remain as dead, unread columns.)
   (Settings → Appearance → Accent color; `ui/theme/Accent.kt`, `ui/theme/Theme.kt`)
-- **App font** — 5 typefaces, applied app-wide. (Settings → Appearance → Font; `ui/theme/Type.kt`,
-  `res/font/`)
+- **App font** — 5 typefaces (Space Grotesk / System / Literata / Nunito / Space Mono), applied
+  app-wide, all bundled OFL fonts so they work offline. Fresh-install default is **Literata**
+  (`FontChoice.DEFAULT`). (Settings → Appearance → Font; `ui/theme/Type.kt`, `res/font/`)
 - **Week-start day** — Monday / Sunday / Saturday; re-lays-out the week strip and month grid.
   (Settings → Today & calendar → Calendar; `util/WeekStartTest`)
 - **12- / 24-hour clock** — flips every time display and the M3 time-picker dial; storage stays
@@ -416,9 +469,12 @@ is gone** (journal-habit round) — question sets are now configured per-habit i
   the token is still valid, with an optional "also erase this device" checkbox and a re-auth retry
   path. (`ui/account/AccountScreen.kt`, `ui/account/AccountViewModel.kt`,
   `data/sync/CloudSyncRepository.kt` `deleteRemoteDoc`)
-- **No analytics, offline-first.** No tracking SDKs. Every Firebase call is failure-inert and none
-  is on the launch path; the app is fully usable with no network once signed in.
-  (`data/sync/CloudSyncRepository.kt` class doc, `di/FirebaseModule.kt`)
+- **No analytics, offline-first.** No behavioural tracking or ad SDKs. Firebase Crashlytics is
+  present (login-redesign round) for crash/stack-trace reporting only — no usage analytics. Every
+  Firebase call is failure-inert and none is on the launch path; the app is fully usable with no
+  network once signed in. A local `CrashHandler` also writes uncaught exceptions to internal
+  storage for later retrieval. (`data/sync/CloudSyncRepository.kt` class doc, `di/FirebaseModule.kt`,
+  `util/CrashHandler.kt`)
 
 ## 11. Navigation
 
@@ -443,24 +499,36 @@ is gone** (journal-habit round) — question sets are now configured per-habit i
 ## 12. Under the hood
 
 - **Tech stack.** Kotlin 2.0.21 (K2), Jetpack Compose (BOM 2024.12.01) + Material 3, MVVM +
-  Repository, Hilt (kapt) for DI, Room 2.6.1 (SQLite) for local storage, `AlarmManager` for exact
-  reminders + `WorkManager` for periodic top-up, `kotlinx.serialization` for JSON, Firebase Auth
-  (Google-only, Credential Manager) + Firestore for sync, Coil for images, `androidx.biometric` +
-  `security-crypto` for the app lock. AGP 8.3.2, Gradle 8.6, minSdk 26, compile/targetSdk 34.
+  Repository, Hilt 2.51 (kapt) for DI, Room 2.6.1 (SQLite) for local storage, `AlarmManager` for
+  exact reminders + `WorkManager` for periodic top-up, `kotlinx.serialization` for JSON, Firebase
+  (BOM 33.1.2): Auth (Google-only, Credential Manager) + Firestore for sync + Crashlytics for
+  crash reporting; Firebase App Distribution (16.0.0-beta14) for OTA test builds + the in-app
+  update check; Coil for images, `androidx.biometric` + `security-crypto` for the app lock.
+  AGP 8.3.2, Gradle 8.6, minSdk 26, compile/targetSdk 34.
 - **Data model.** `Habit` / `HabitOccurrence` / `HabitEvent`, `FoodMedTask` / `FoodMedOccurrence`
   / `FoodMedEvent`, `AppSettings` (single row), `CustomCategory`, `CustomPrompt`. **`JournalQuestion`
   is gone** (journal-habit round) — its table is dropped and a Journal habit's questions live
   instead as an ordinary string column on `Habit` (`journalQuestionsJson`). Occurrences are
   concrete scheduled instances; events are an append-only log with an identical shape on both
   sides. (`data/model/DataModel.kt`)
-- **DB version history.** Currently v17. Exported schemas live in
-  `app/schemas/com.daybook.app.data.local.AppDatabase/` (`3.json` … `17.json`); migrations in
-  `data/local/Migrations.kt` (`MIGRATION_2_3` … `MIGRATION_16_17`), registered in
-  `di/DatabaseModule.kt` with `fallbackToDestructiveMigrationFrom(1)`. `MIGRATION_16_17` (the
-  journal-habit round) adds `habits.journal_questions_json` and `habit_occurrences.qa_json`,
-  purges every `food_med_tasks` row of type `JOURNAL` (with its occurrences/events), and drops the
-  retired `journal_questions` table. Instrumented coverage in
-  `app/src/androidTest/.../MigrationTest.kt`.
+- **DB version history.** Currently **v19**. Exported schemas live in
+  `app/schemas/com.daybook.app.data.local.AppDatabase/` (`3.json` … `19.json`); migrations in
+  `data/local/Migrations.kt` (`MIGRATION_2_3` … `MIGRATION_18_19`), registered in
+  `di/DatabaseModule.kt` with `fallbackToDestructiveMigrationFrom(1)` +
+  `fallbackToDestructiveMigrationOnDowngrade()`.
+  - `MIGRATION_16_17` (journal-habit round) adds `habits.journal_questions_json` and
+    `habit_occurrences.qa_json`, purges every `food_med_tasks` row of type `JOURNAL` (with its
+    occurrences/events), and drops the retired `journal_questions` table.
+  - `MIGRATION_17_18` (accent-updates round) adds `app_settings.habits_accent_color` and
+    `app_settings.intake_accent_color` (`NOT NULL DEFAULT 'LAVENDER'`, back-filled from the
+    existing `accent_color`). Both columns are now **dead** — the per-section accent feature was
+    reverted; nothing reads or writes them, and no migration drops them (a SQLite column drop was
+    judged needlessly risky here).
+  - `MIGRATION_18_19` (accent-revert round) adds
+    `app_settings.check_for_updates_enabled INTEGER NOT NULL DEFAULT 1` — the flag behind the
+    "Check for updates" toggle (§6).
+  Instrumented coverage in `app/src/androidTest/.../MigrationTest.kt` (plus `ChunkedDeleteTest.kt`
+  for the large-delete path and `NavIconInflateTest.kt`).
 - **What "offline-first" means here.** The live store is on-device Room, which Android persists
   automatically — so not backing up is safe by default. JSON export and Firestore are *derived*
   mirrors, never the source of truth. Every network call is failure-inert; none blocks a launch
