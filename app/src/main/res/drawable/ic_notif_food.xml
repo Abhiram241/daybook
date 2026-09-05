@@ -1,0 +1,22 @@
+<!--
+  v0.5.1 §F-drawables — per-category notification small icon: FOOD / CUSTOM (a mug).
+  Do NOT rename: NotificationUtils.smallIconFor() references R.drawable.ic_notif_food.
+
+  Constraints (see ic_notification.xml's header):
+    - a small icon SystemUI cannot inflate makes the WHOLE notification vanish, silently;
+    - flat white silhouette only: android:fillColor="#FFFFFFFF" on solid closed paths,
+      NO strokeColor / strokeWidth;
+    - 24dp x 24dp, viewport 24x24, glyph inset from every edge (some OEMs circle-mask);
+    - no degenerate near-zero-length arcs. Straight-edge polygons only, no arcs.
+  NavIconInflateTest.notifFood() inflates this against a real Resources.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5,5L17,5L17,14L16,19L6,19L5,14Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M17,7L20.5,7L20.5,13L17,13L17,11L18.7,11L18.7,9L17,9Z" />
+</vector>

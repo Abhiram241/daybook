@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The Compose UI uses string literals throughout; app_name (referenced from the
+         manifest) was the only live entry, the rest were removed (REV-33). -->
+    <string name="app_name">Daybook</string>
+</resources>

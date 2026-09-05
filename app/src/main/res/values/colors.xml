@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Only the colours the window/splash theme (themes.xml) needs live here. The app UI is
+      Compose and dark-only; its real palette is in ui/theme/Tokens.kt and ui/theme/Accent.kt.
+      The former legacy accent set (ember_orange / violet_pulse / lime_focus / …) and the
+      values-night/ duplicate were unreferenced and removed (REV-35).
+    -->
+    <color name="background">#0B0D0F</color>
+    <color name="signal_teal">#2DD4BF</color>
+    <color name="black">#000000</color>
+</resources>

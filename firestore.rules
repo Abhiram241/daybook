@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Parent: definitions + sync metadata (v0.5.1 §N).
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 14 (S-11, Low): shape/size validation on writes.
+      // Every path here is already confirmed owner-uid-scoped (the `request.auth.uid == uid`
+      // check above/below) — this is defense-in-depth, not a confidentiality fix. `hasOnly` covers
+      // both a full `set()` (every field CloudSyncRepository.parentData writes) and the
+      // month-hashes-only `update()` it also issues, since `request.resource.data` for an
+      // `update()` is the FULL resulting document (existing fields merged in), not just the
+      // changed ones. The size guard mirrors Firestore's own 1MiB document cap — redundant with
+      // the platform limit today, but cheap insurance if that ever changes.
+      allow create, update: if request.auth != null && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly([
+          'definitions', 'definitionsHash', 'revision', 'deviceId', 'updatedAt',
+          'formatVersion', 'appVersion', 'monthHashes'
+        ]) &&
+        request.resource.data.definitions is bytes &&
+        request.resource.data.definitions.size() < 1048576;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // One doc per local calendar month of day-logs (v0.5.1 §N).
+    // A nested match does NOT inherit the rule above — this block is required, and without it
+    // every month write returns PERMISSION_DENIED while the app can only report SyncStatus.Error.
+    // DEPLOY THIS BEFORE installing a 0.5.1 build on any signed-in device:
+    //   firebase deploy --only firestore:rules
+    match /users/{uid}/months/{month} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 14 (S-11) — see the parent match's identical note.
+      allow create, update: if request.auth != null && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly([
+          'payload', 'contentHash', 'revision', 'deviceId', 'updatedAt'
+        ]) &&
+        request.resource.data.payload is bytes &&
+        request.resource.data.payload.size() < 1048576;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

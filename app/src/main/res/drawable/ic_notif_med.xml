@@ -1,0 +1,23 @@
+<!--
+  v0.5.1 §F-drawables — per-category notification small icon: MED (a capsule / pill).
+  Do NOT rename: NotificationUtils.smallIconFor() references R.drawable.ic_notif_med.
+
+  Constraints (see ic_notification.xml's header):
+    - a small icon SystemUI cannot inflate makes the WHOLE notification vanish, silently;
+    - flat white silhouette only: android:fillColor="#FFFFFFFF" on solid closed paths,
+      NO strokeColor / strokeWidth;
+    - 24dp x 24dp, viewport 24x24, glyph inset from every edge (some OEMs circle-mask);
+    - rounded ends are cubic beziers, NOT elliptical arcs — no degenerate arcs. The 0.6-unit
+      gap at x=12 reads as the capsule seam.
+  NavIconInflateTest.notifMed() inflates this against a real Resources.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8,7L12,7L12,17L8,17C5.24,17 3,14.76 3,12C3,9.24 5.24,7 8,7Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12.6,7L16,7C18.76,7 21,9.24 21,12C21,14.76 18.76,17 16,17L12.6,17L12.6,7Z" />
+</vector>

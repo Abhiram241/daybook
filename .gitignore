@@ -1,0 +1,27 @@
+# --- Secrets / signing ---
+keystore.properties
+app/daybook-release.jks
+*.jks
+*.keystore
+*.p12
+*.pem
+app-distribution-key.json
+*service-account*.json
+
+# --- Build output ---
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+captures/
+*.hprof
+
+# --- Kotlin / Gradle local ---
+.kotlin/
+local.properties
+
+# --- IDE ---
+.idea/
+*.iml
+.DS_Store

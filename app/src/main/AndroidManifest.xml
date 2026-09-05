@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SCHEDULE_EXACT_ALARM only: USE_EXACT_ALARM (auto-granted, non-revocable) is Play-policy
+         restricted to alarm/clock/calendar apps. A habit tracker relies on the user-grantable
+         SCHEDULE_EXACT_ALARM + the ACTION_REQUEST_SCHEDULE_EXACT_ALARM flow in Settings, and
+         NotificationUtils.scheduleReminderAlarm falls back to an inexact alarm on SecurityException. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 12 (N-5): required for the Settings → Notifications
+         "Battery" row's ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS one-tap fix. Normal-level,
+         no runtime prompt of its own — it only permits requesting the OS's own dialog. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Firebase Auth + Firestore sync (v0.5). ACCESS_NETWORK_STATE lets WorkManager gate the
+         sync-flush worker on NetworkType.CONNECTED. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:name=".DaybookApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Daybook"
+        tools:targetApi="31">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Daybook"
+            android:windowSoftInputMode="adjustResize">
+            <!-- adjustResize (not the OEM-default adjustPan): the app is edge-to-edge
+                 (WindowCompat.setDecorFitsSystemWindows(window, false)) and relies on
+                 WindowInsets.ime / Modifier.imePadding() in Compose. Under adjustPan the whole
+                 window is translated up when the keyboard opens, which — combined with imePadding
+                 on the sticky input bars — pushed fixed headers (e.g. the journal chat's
+                 BackHeader) and list content off the top of the screen entirely. -->
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Disable WorkManager's default on-startup initializer: DaybookApplication implements
+             Configuration.Provider (Hilt WorkerFactory) and WorkManager initializes on demand. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+
+        <receiver
+            android:name=".util.alarm.AlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".util.alarm.BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 15 (N-9): LOCKED_BOOT_COMPLETED removed
+                     — it is undeliverable to a receiver that isn't direct-boot-aware (this app
+                     correctly isn't; Room lives in credential-encrypted storage), so declaring it
+                     was dead/misleading, not a functional gap. -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <!-- LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 12 (N-4) — API 31+ only; harmless
+                     no-op declaration on older OSes, which simply never send it. -->
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".util.alarm.NotificationActionReceiver"
+            android:exported="false" />
+
+    </application>
+</manifest>

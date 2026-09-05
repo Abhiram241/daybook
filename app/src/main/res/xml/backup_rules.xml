@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy (API < 31) full-backup rules. An explicit <include> means ONLY what's listed is
+  eligible for Google Drive auto-backup — so the Room health database (databases/*) is
+  already excluded by omission. The app ships an explicit export/import flow for moving
+  data deliberately.
+-->
+<full-backup-content>
+  <include domain="sharedpref" path="." />
+</full-backup-content>
