@@ -88,7 +88,9 @@ fun BottomSheetMenu(
                         Text(
                             action.label,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = if (action.destructive) DaybookColors.Danger else DaybookColors.TextPrimary
+                            color = if (action.destructive) DaybookColors.Danger else DaybookColors.TextPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         if (action.description != null) {
                             Text(

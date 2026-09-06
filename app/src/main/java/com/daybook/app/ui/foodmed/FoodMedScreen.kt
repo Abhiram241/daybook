@@ -206,6 +206,7 @@ private fun IntakeFilterButton(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FoodMedCard(
     item: FoodMedItem,
@@ -228,11 +229,16 @@ private fun FoodMedCard(
                 Text(
                     item.subtitle,
                     style = DaybookText.CardSubtitle,
-                    color = tint.onFillMuted
+                    color = tint.onFillMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (item.times.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         // v0.5.3 Phase 4 (§4.11) — inert time pills; was DaybookChip(onClick = {}).
                         item.times.take(3).forEach { t -> TimeTag(t) }
                         if (item.times.size > 3) {

@@ -209,7 +209,7 @@ fun DaybookChip(
     val fg = if (selected) DaybookColors.OnSolid else DaybookColors.TextMuted
     Row(
         modifier = modifier
-            .height(height)
+            .heightIn(min = height)
             .clip(AppShapes.pill)
             .background(bg)
             .border(1.dp, if (selected) Color.Transparent else DaybookColors.Hairline, AppShapes.pill)
@@ -234,7 +234,14 @@ fun DaybookChip(
             Icon(leadingIcon, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
         }
-        Text(label, style = MaterialTheme.typography.labelLarge, color = fg, maxLines = 1)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
         if (count != null) {
             Spacer(Modifier.width(6.dp))
             Box(
@@ -270,8 +277,14 @@ fun SectionHeader(
             .padding(bottom = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = DaybookText.SectionTitle, color = DaybookColors.TextPrimary)
-            Spacer(Modifier.weight(1f))
+            Text(
+                title,
+                style = DaybookText.SectionTitle,
+                color = DaybookColors.TextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             trailing?.invoke(this)
             if (actionLabel != null && onAction != null) {
                 TextLink(actionLabel, onClick = onAction)
@@ -389,10 +402,22 @@ fun StatPill(
     ) {
         Icon(icon, contentDescription = null, tint = tint.accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(6.dp))
-        Text(value, style = MaterialTheme.typography.titleMedium, color = tint.onFill)
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = tint.onFill,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
         if (label != null) {
             Spacer(Modifier.width(4.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = tint.onFillMuted)
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = tint.onFillMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -412,7 +437,7 @@ fun TimeTag(text: String, modifier: Modifier = Modifier) {
             .semantics { }
             .padding(horizontal = 10.dp, vertical = 5.dp)
     ) {
-        Text(text, style = DaybookText.Caption, color = DaybookColors.TextMuted, maxLines = 1)
+        Text(text, style = DaybookText.Caption, color = DaybookColors.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -490,7 +515,7 @@ fun MiniBadge(
             )
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
-        Text(text, style = DaybookText.Caption, color = tint.accent, maxLines = 1)
+        Text(text, style = DaybookText.Caption, color = tint.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -516,7 +541,7 @@ fun PrimaryButton(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .fillMaxWidth()
-            .height(50.dp)
+            .heightIn(min = 50.dp)
             .clip(AppShapes.button)
             .background(if (enabled) accent else DaybookColors.SurfaceElevated)
             .clickableImpl(interaction) { if (enabled && !loading) onClick() },
@@ -526,6 +551,7 @@ fun PrimaryButton(
             CircularProgressIndicator(strokeWidth = 2.dp, color = DaybookColors.OnSolid, modifier = Modifier.size(18.dp))
         } else {
             Row(
+                modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
@@ -536,7 +562,10 @@ fun PrimaryButton(
                 Text(
                     text,
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (enabled) DaybookColors.OnSolid else DaybookColors.TextFaint
+                    color = if (enabled) DaybookColors.OnSolid else DaybookColors.TextFaint,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
                 )
             }
         }
@@ -565,14 +594,14 @@ fun GhostButton(
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .height(50.dp)
+            .heightIn(min = 50.dp)
             .clip(AppShapes.button)
             .border(BorderStroke(1.5.dp, DaybookColors.Hairline), AppShapes.button)
             .clickableImpl(interaction) { if (enabled && !loading) onClick() },
         contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = Spacing.xl), // fix: shrink-wrap callers (no fillMaxWidth) hugged the label with zero margin
+            modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -583,7 +612,10 @@ fun GhostButton(
             Text(
                 if (loading) "…" else text,
                 style = MaterialTheme.typography.labelLarge,
-                color = if (enabled) DaybookColors.TextPrimary else DaybookColors.TextFaint
+                color = if (enabled) DaybookColors.TextPrimary else DaybookColors.TextFaint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }

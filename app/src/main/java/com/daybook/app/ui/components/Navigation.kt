@@ -22,6 +22,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.daybook.app.ui.theme.AppShapes
@@ -70,10 +72,16 @@ fun FloatingPillNav(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(NavContentHeight)
+                .heightIn(min = NavContentHeight)
         ) {
             Row(
-                modifier = Modifier.fillMaxSize(),
+                // B23 hotfix — was `fillMaxSize()`. With the outer Box now `heightIn(min = …)`
+                // (B9) instead of a fixed `height(…)`, its max height propagates as the full
+                // screen; `fillMaxSize()`'s height-fill made this Row (and the nav bar) expand to
+                // consume the whole MainActivity content column, collapsing the pager to 0 and
+                // stranding the nav items mid-screen. Width-fill only; the Row wraps its content
+                // height and the Box's `heightIn(min = NavContentHeight)` sets the floor.
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -87,7 +95,13 @@ fun FloatingPillNav(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxHeight()
+                            // B23 hotfix — `fillMaxHeight()` removed. It assumed the fixed-height
+                            // parent Box from before B9; with the Box now `heightIn(min = …)` its
+                            // bounded max height is the full screen, so this fill would re-inflate
+                            // the Row to full-screen height even after the Row itself stopped
+                            // filling. The column wraps its content (icon + label + 8.dp vertical
+                            // padding); `Arrangement.Center` + the Box's `heightIn(min =
+                            // NavContentHeight)` keep the items vertically centred in the bar.
                             .clickableImpl(remember { MutableInteractionSource() }) { onSelect(item.route) }
                             .padding(vertical = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -108,7 +122,10 @@ fun FloatingPillNav(
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
                             ),
                             color = tint,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }

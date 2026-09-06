@@ -209,6 +209,7 @@ private fun HabitFilterButton(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HabitCard(
     habit: RoutineItem,
@@ -302,7 +303,7 @@ private fun HabitCard(
                                 tint = tint.accent, modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(4.dp))
-                            Text("Start", style = DaybookText.ButtonLabel, color = tint.accent, maxLines = 1)
+                            Text("Start", style = DaybookText.ButtonLabel, color = tint.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     // Task C (Phase 8) — Ongoing habit, running: the inclusive day count + a muted
@@ -320,13 +321,15 @@ private fun HabitCard(
                             Spacer(Modifier.width(4.dp))
                             Text(
                                 if (habit.streakDays == 1) "1 day" else "${habit.streakDays} days",
-                                style = DaybookText.Metadata, color = tint.accent, maxLines = 1
+                                style = DaybookText.Metadata, color = tint.accent, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (habit.streakLongest > 0) {
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     "Best ${habit.streakLongest}",
-                                    style = DaybookText.Metadata, color = tint.onFillMuted, maxLines = 1
+                                    style = DaybookText.Metadata, color = tint.onFillMuted, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -334,7 +337,10 @@ private fun HabitCard(
                     else -> {
                         if (habit.times.isNotEmpty()) {
                             Spacer(Modifier.height(6.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 // v0.5.3 Phase 4 (§4.11) — inert time pills; was DaybookChip(onClick = {}).
                                 habit.times.take(3).forEach { t -> TimeTag(t) }
                                 if (habit.times.size > 3) {

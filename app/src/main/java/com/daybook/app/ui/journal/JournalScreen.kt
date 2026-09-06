@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -77,112 +75,113 @@ fun JournalScreen(
         // v0.5.3 Phase 4 (§4.1) — pinned back header (owns the status-bar inset).
         BackHeader(title = state.title.ifBlank { "Entry" }, onBack = onBack)
 
-        Box(Modifier.weight(1f)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.screenH,
-                    end = Spacing.screenH,
-                    top = Spacing.listTop,
-                    bottom = Spacing.formSaveBarClearance
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
-            ) {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = Spacing.screenH,
+                end = Spacing.screenH,
+                top = Spacing.listTop,
+                bottom = Spacing.listGap
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
+        ) {
+            item {
+                BigHeadline(state.title.ifBlank { "Entry" })   // v0.5.3 Phase 7 (#37)
+                Text(
+                    "Scheduled ${state.scheduledTime}",
+                    style = DaybookText.Metadata,
+                    color = DaybookColors.TextMuted
+                )
+                Spacer(Modifier.height(6.dp))
+                // v0.5.3 Phase 4 (§4.3) — TextLink primitive (44dp tap target). itemId is
+                // resolved asynchronously in the VM init, so a blank id is guarded out.
+                TextLink(
+                    "View history",
+                    onClick = { if (vm.itemId.isNotBlank()) onOpenHistory(vm.itemType, vm.itemId) },
+                    color = DaybookColors.TextMuted,
+                    leadingIcon = DaybookIcons.Clock
+                )
+            }
+
+            if (currentStep != null) {
                 item {
-                    BigHeadline(state.title.ifBlank { "Entry" })   // v0.5.3 Phase 7 (#37)
+                    // v0.5.4 Phase 4 — the "3 / 7" step indicator + a thin progress bar.
                     Text(
-                        "Scheduled ${state.scheduledTime}",
+                        state.progressLabel,
                         style = DaybookText.Metadata,
                         color = DaybookColors.TextMuted
                     )
                     Spacer(Modifier.height(6.dp))
-                    // v0.5.3 Phase 4 (§4.3) — TextLink primitive (44dp tap target). itemId is
-                    // resolved asynchronously in the VM init, so a blank id is guarded out.
-                    TextLink(
-                        "View history",
-                        onClick = { if (vm.itemId.isNotBlank()) onOpenHistory(vm.itemType, vm.itemId) },
-                        color = DaybookColors.TextMuted,
-                        leadingIcon = DaybookIcons.Clock
+                    LinearProgressIndicator(
+                        progress = { (state.index + 1).toFloat() / steps.size },
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
-
-                if (currentStep != null) {
-                    item {
-                        // v0.5.4 Phase 4 — the "3 / 7" step indicator + a thin progress bar.
-                        Text(
-                            state.progressLabel,
-                            style = DaybookText.Metadata,
-                            color = DaybookColors.TextMuted
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { (state.index + 1).toFloat() / steps.size },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    item {
-                        // v0.5.4 Phase 4 — question + answer field swap, keyed on the step index.
-                        Crossfade(
-                            targetState = state.index,
-                            animationSpec = Motion.fast(),
-                            label = "journalStep"
-                        ) { idx ->
-                            val step = steps.getOrNull(idx) ?: return@Crossfade
-                            Column(verticalArrangement = Arrangement.spacedBy(Spacing.listGap)) {
-                                Text(
-                                    step.question,
-                                    style = DaybookText.SectionTitle,
-                                    color = DaybookColors.TextPrimary
-                                )
-                                DaybookTextField(
-                                    value = step.answer,
-                                    onValueChange = vm::onAnswerChange,
-                                    label = null,
-                                    placeholder = "Your answer",
-                                    singleLine = false,
-                                    minLines = 3
-                                )
-                            }
+                item {
+                    // v0.5.4 Phase 4 — question + answer field swap, keyed on the step index.
+                    Crossfade(
+                        targetState = state.index,
+                        animationSpec = Motion.fast(),
+                        label = "journalStep"
+                    ) { idx ->
+                        val step = steps.getOrNull(idx) ?: return@Crossfade
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.listGap)) {
+                            Text(
+                                step.question,
+                                style = DaybookText.SectionTitle,
+                                color = DaybookColors.TextPrimary
+                            )
+                            DaybookTextField(
+                                value = step.answer,
+                                onValueChange = vm::onAnswerChange,
+                                label = null,
+                                placeholder = "Your answer",
+                                singleLine = false,
+                                minLines = 3
+                            )
                         }
                     }
                 }
             }
+        }
 
-            // v0.5.3 Phase 4 (§4.2) — shared sticky save bar (scrim + nav/IME padding).
-            StickySaveBar(modifier = Modifier.align(Alignment.BottomCenter)) {
-                // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 9 (C-4): a rejected save (canBackfill /
-                // month not resident / row gone) now surfaces here instead of silently popping
-                // back as if it had saved.
-                state.rejectedMessage?.let {
-                    Text(it, style = DaybookText.Metadata, color = DaybookColors.Warning)
-                    Spacer(Modifier.height(Spacing.sm))
+        // v0.5.3 Phase 4 (§4.2) — shared sticky save bar (scrim + nav/IME padding).
+        StickySaveBar {
+            // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 9 (C-4): a rejected save (canBackfill /
+            // month not resident / row gone) now surfaces here instead of silently popping
+            // back as if it had saved.
+            state.rejectedMessage?.let {
+                Text(it, style = DaybookText.Metadata, color = DaybookColors.Warning)
+                Spacer(Modifier.height(Spacing.sm))
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.listGap)
+            ) {
+                if (state.index > 0) {
+                    GhostButton(
+                        text = "Back",
+                        onClick = vm::back,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(Spacing.listGap)
-                ) {
-                    if (state.index > 0) {
-                        GhostButton(
-                            text = "Back",
-                            onClick = vm::back,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    if (lastStep) {
-                        PrimaryButton(
-                            text = "Save",
-                            onClick = { vm.save() },
-                            enabled = anyAnswerNonBlank && !state.busy,
-                            modifier = Modifier.weight(1f)
-                        )
-                    } else {
-                        PrimaryButton(
-                            text = "Next",
-                            onClick = vm::next,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                if (lastStep) {
+                    PrimaryButton(
+                        text = "Save",
+                        onClick = { vm.save() },
+                        enabled = anyAnswerNonBlank && !state.busy,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    PrimaryButton(
+                        text = "Next",
+                        onClick = vm::next,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
     }
 }
+

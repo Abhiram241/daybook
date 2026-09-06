@@ -2,11 +2,11 @@ package com.daybook.app.ui.journal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -15,7 +15,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -54,47 +53,47 @@ fun HabitJournalEditScreen(
     ) {
         BackHeader(title = state.title.ifBlank { "Entry" }, onBack = onNavigateBack)
 
-        Box(Modifier.weight(1f)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.screenH,
-                    end = Spacing.screenH,
-                    top = Spacing.listTop,
-                    bottom = Spacing.formSaveBarClearance
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
-            ) {
-                item {
-                    BigHeadline(state.title.ifBlank { "Entry" })
-                    Text(
-                        "Scheduled ${state.scheduledTime}",
-                        style = DaybookText.Metadata,
-                        color = DaybookColors.TextMuted
-                    )
-                }
-                itemsIndexed(vm.fields) { index, field ->
-                    FormGroup(title = null) {
-                        Text(field.question, style = DaybookText.CardTitle, color = DaybookColors.TextPrimary)
-                        Spacer(Modifier.height(8.dp))
-                        DaybookTextField(
-                            value = field.answer,
-                            onValueChange = { vm.onAnswerChange(index, it) },
-                            label = null,
-                            singleLine = false,
-                            minLines = 2
-                        )
-                    }
-                }
-            }
-
-            StickySaveBar(modifier = Modifier.align(Alignment.BottomCenter)) {
-                PrimaryButton(
-                    text = "Save",
-                    onClick = vm::save,
-                    enabled = !state.busy
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = Spacing.screenH,
+                end = Spacing.screenH,
+                top = Spacing.listTop,
+                bottom = Spacing.listGap
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
+        ) {
+            item {
+                BigHeadline(state.title.ifBlank { "Entry" })
+                Text(
+                    "Scheduled ${state.scheduledTime}",
+                    style = DaybookText.Metadata,
+                    color = DaybookColors.TextMuted
                 )
             }
+            itemsIndexed(vm.fields) { index, field ->
+                FormGroup(title = null) {
+                    Text(field.question, style = DaybookText.CardTitle, color = DaybookColors.TextPrimary)
+                    Spacer(Modifier.height(8.dp))
+                    DaybookTextField(
+                        value = field.answer,
+                        onValueChange = { vm.onAnswerChange(index, it) },
+                        label = null,
+                        singleLine = false,
+                        minLines = 2
+                    )
+                }
+            }
+        }
+
+        StickySaveBar {
+            PrimaryButton(
+                text = "Save",
+                onClick = vm::save,
+                enabled = !state.busy
+            )
         }
     }
 }

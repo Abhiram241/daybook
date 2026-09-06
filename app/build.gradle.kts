@@ -31,7 +31,7 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 20          // v0.5.6 build 20 — SortSheet made more compact: custom RadioDot replaces the 48dp-padded M3 RadioButton, tighter row/section/divider spacing, lighter active-row fill. (b19 one-hand FAB; b18 SortSheet restyle; b17 calendar drift / "Back to today" / adjustResize.)
+        versionCode = 22          // v0.5.6 build 22 — HOTFIX for the build-21 nav regression: FloatingPillNav's inner Row (fillMaxSize) and per-item Column (fillMaxHeight) still assumed the pre-B9 fixed-height parent Box; with B9's heightIn(min=) the nav bar expanded to full screen, blanking the pager and stranding the nav items mid-screen. Row -> fillMaxWidth, per-item Column drops fillMaxHeight; B9 heightIn(min=) + label changes kept.
         versionName = "0.5.6"     // v0.5.6 — fresh-install lavender+Literata defaults, Ongoing-habit-card alignment fix, Firebase App Distribution in-app updates, single global accent
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

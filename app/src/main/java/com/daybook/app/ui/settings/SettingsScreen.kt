@@ -165,7 +165,7 @@ fun SettingsScreen(
         BackHeader(title = "Settings", onBack = onNavigateBack)
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().imePadding(),
             contentPadding = PaddingValues(
                 start = Spacing.screenH, end = Spacing.screenH,
                 top = Spacing.listTop, bottom = Spacing.screenBottomInset
@@ -359,6 +359,7 @@ internal fun SettingsSubScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(
                     start = Spacing.screenH, end = Spacing.screenH,
                     top = Spacing.listTop, bottom = Spacing.screenBottomInset

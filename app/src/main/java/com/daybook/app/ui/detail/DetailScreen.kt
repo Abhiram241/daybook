@@ -115,7 +115,7 @@ fun DetailScreen(
                     if (rmTab) fadeIn(snap()) togetherWith fadeOut(snap())
                     else fadeIn(Motion.fast()) togetherWith fadeOut(Motion.fast())
                 },
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
                 label = "detailTab"
             ) { current ->
                 when (current) {
@@ -346,16 +346,18 @@ private fun StatsTab(
         if (streaksVisible) item(key = "stat-streaks") {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.listGap),
-                modifier = Modifier.animateItem(fadeInSpec = if (rmDetail) snap() else Motion.medium(), fadeOutSpec = if (rmDetail) snap() else Motion.fast())
+                modifier = Modifier
+                    .height(IntrinsicSize.Min)
+                    .animateItem(fadeInSpec = if (rmDetail) snap() else Motion.medium(), fadeOutSpec = if (rmDetail) snap() else Motion.fast())
             ) {
-                StatCard(label = "Current streak", modifier = Modifier.weight(1f)) {
+                StatCard(label = "Current streak", modifier = Modifier.weight(1f).fillMaxHeight()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.material3.Icon(DaybookIcons.Flame, null, tint = tint.accent, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("${stats.currentStreak}", style = MaterialTheme.typography.displayMedium, color = tint.accent)
                     }
                 }
-                StatCard(label = "Best", modifier = Modifier.weight(1f)) {
+                StatCard(label = "Best", modifier = Modifier.weight(1f).fillMaxHeight()) {
                     Text("${stats.longestStreak}", style = MaterialTheme.typography.displayMedium, color = tint.accent)
                 }
             }
@@ -366,12 +368,14 @@ private fun StatsTab(
             item(key = "stat-rates") {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(Spacing.listGap),
-                    modifier = Modifier.animateItem(fadeInSpec = if (rmDetail) snap() else Motion.medium(), fadeOutSpec = if (rmDetail) snap() else Motion.fast())
+                    modifier = Modifier
+                        .height(IntrinsicSize.Min)
+                        .animateItem(fadeInSpec = if (rmDetail) snap() else Motion.medium(), fadeOutSpec = if (rmDetail) snap() else Motion.fast())
                 ) {
-                    StatCard(label = "Completion rate", modifier = Modifier.weight(1f)) {
+                    StatCard(label = "Completion rate", modifier = Modifier.weight(1f).fillMaxHeight()) {
                         Text("${stats.completionRatePct}%", style = MaterialTheme.typography.displayMedium, color = tint.accent)
                     }
-                    StatCard(label = "This month", modifier = Modifier.weight(1f)) {
+                    StatCard(label = "This month", modifier = Modifier.weight(1f).fillMaxHeight()) {
                         Text("${stats.thisMonthCount}", style = MaterialTheme.typography.displayMedium, color = tint.accent)
                     }
                 }

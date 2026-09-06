@@ -119,7 +119,11 @@ object Spacing {
 
     // v0.5.3 Phase 4 (§4.8) — named list bottom-clearance constants replacing the ad-hoc
     // `+24.dp` / `120.dp` / `72.dp` / `40.dp` literals scattered across the screens.
-    /** Bottom contentPadding for a form list that sits under a [com.daybook.app.ui.components.StickySaveBar]. */
+    /**
+     * Legacy — the save bar is an in-flow sibling now (see KEYBOARD_FONT_FIXES_PLAN.md D1), so form
+     * lists no longer reserve bottom clearance for it. Kept declared because `Spacing` is referenced
+     * from tests.
+     */
     val formSaveBarClearance = 96.dp
 
     /** Bottom contentPadding for a plain scrolling screen with no docked bar or FAB. */

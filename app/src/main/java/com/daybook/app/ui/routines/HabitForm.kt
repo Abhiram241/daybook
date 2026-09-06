@@ -58,6 +58,7 @@ class HabitFormState {
     val journalQuestions = mutableStateListOf<String>()
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HabitFormScaffold(
     headline: String,
@@ -93,190 +94,193 @@ fun HabitFormScaffold(
             }
         )
 
-        Box(Modifier.weight(1f)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.screenH,
-                    end = Spacing.screenH,
-                    top = Spacing.listTop,
-                    bottom = Spacing.formSaveBarClearance
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
-            ) {
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = Spacing.screenH,
+                end = Spacing.screenH,
+                top = Spacing.listTop,
+                bottom = Spacing.listGap
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
+        ) {
+            item {
+                // v0.5.3 Phase 4 (§4.9) — canonical order: name (+ helper) → Type → times →
+                // type-specific sections → Advanced. Helper text matches FoodMed's tone.
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DaybookTextField(
+                        value = state.title,
+                        onValueChange = { state.title = it },
+                        label = "Habit name",
+                        placeholder = "Drink water"
+                    )
+                    Text(
+                        "You'll be reminded at each time you set, and asked to check it off.",
+                        style = DaybookText.Caption,
+                        color = DaybookColors.TextMuted
+                    )
+                }
+            }
+            item {
+                FormGroup("Type") {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        DaybookChip(label = "Individual", selected = state.type == HabitType.INDIVIDUAL,
+                            onClick = { state.type = HabitType.INDIVIDUAL })
+                        DaybookChip(label = "Batch", selected = state.type == HabitType.BATCH,
+                            onClick = { state.type = HabitType.BATCH })
+                        // v0.5.5: "Ongoing" (enum value STREAK) — a passive running day-count.
+                        DaybookChip(label = "Ongoing", selected = state.type == HabitType.STREAK,
+                            onClick = { state.type = HabitType.STREAK })
+                        // Journal-as-habit round: asks the saved questions at each reminder
+                        // time, in a chat. Seed one default question the first time a NEW
+                        // (still-empty) form switches into Journal — never overwrites an
+                        // already-populated list (an edit, or flipping the chip back and forth).
+                        DaybookChip(label = "Journal", selected = state.type == HabitType.JOURNAL,
+                            onClick = {
+                                state.type = HabitType.JOURNAL
+                                if (state.journalQuestions.isEmpty()) {
+                                    state.journalQuestions.add("What's on your mind?")
+                                }
+                            })
+                    }
+                    Text(
+                        when (state.type) {
+                            HabitType.BATCH ->
+                                "Batch habits share one daily check-in notification, at the time set in " +
+                                    "Settings → Notifications & alarms."
+                            HabitType.STREAK ->
+                                "Ongoing habits track a running day count. No reminders — start and stop " +
+                                    "them from the Habits tab."
+                            HabitType.INDIVIDUAL ->
+                                "This habit gets its own reminder at each time you set."
+                            HabitType.JOURNAL ->
+                                "Journal habits ask your saved questions at each reminder time, in a chat."
+                        },
+                        style = DaybookText.Caption, color = DaybookColors.TextMuted
+                    )
+                }
+            }
+            if (state.type == HabitType.INDIVIDUAL || state.type == HabitType.JOURNAL) {
                 item {
-                    // v0.5.3 Phase 4 (§4.9) — canonical order: name (+ helper) → Type → times →
-                    // type-specific sections → Advanced. Helper text matches FoodMed's tone.
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ReminderTimesEditor(
+                        times = state.times,
+                        onAdd = { if (state.times.none { t -> t == it }) { state.times.add(it); state.times.sort() } },
+                        onUpdate = { i, t -> state.times[i] = t; state.times.sort() },
+                        onRemove = { state.times.removeAt(it) }
+                    )
+                }
+            }
+            item {
+                AdvancedSection(expandedInitially = advancedExpanded) {
+                    FormGroup("Description") {
                         DaybookTextField(
-                            value = state.title,
-                            onValueChange = { state.title = it },
-                            label = "Habit name",
-                            placeholder = "Drink water"
-                        )
-                        Text(
-                            "You'll be reminded at each time you set, and asked to check it off.",
-                            style = DaybookText.Caption,
-                            color = DaybookColors.TextMuted
+                            value = state.description,
+                            onValueChange = { state.description = it },
+                            label = "Notes (optional)",
+                            singleLine = false
                         )
                     }
-                }
-                item {
-                    FormGroup("Type") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            DaybookChip(label = "Individual", selected = state.type == HabitType.INDIVIDUAL,
-                                onClick = { state.type = HabitType.INDIVIDUAL })
-                            DaybookChip(label = "Batch", selected = state.type == HabitType.BATCH,
-                                onClick = { state.type = HabitType.BATCH })
-                            // v0.5.5: "Ongoing" (enum value STREAK) — a passive running day-count.
-                            DaybookChip(label = "Ongoing", selected = state.type == HabitType.STREAK,
-                                onClick = { state.type = HabitType.STREAK })
-                            // Journal-as-habit round: asks the saved questions at each reminder
-                            // time, in a chat. Seed one default question the first time a NEW
-                            // (still-empty) form switches into Journal — never overwrites an
-                            // already-populated list (an edit, or flipping the chip back and forth).
-                            DaybookChip(label = "Journal", selected = state.type == HabitType.JOURNAL,
-                                onClick = {
-                                    state.type = HabitType.JOURNAL
-                                    if (state.journalQuestions.isEmpty()) {
-                                        state.journalQuestions.add("What's on your mind?")
-                                    }
-                                })
-                        }
-                        Text(
-                            when (state.type) {
-                                HabitType.BATCH ->
-                                    "Batch habits share one daily check-in notification, at the time set in " +
-                                        "Settings → Notifications & alarms."
-                                HabitType.STREAK ->
-                                    "Ongoing habits track a running day count. No reminders — start and stop " +
-                                        "them from the Habits tab."
-                                HabitType.INDIVIDUAL ->
-                                    "This habit gets its own reminder at each time you set."
-                                HabitType.JOURNAL ->
-                                    "Journal habits ask your saved questions at each reminder time, in a chat."
-                            },
-                            style = DaybookText.Caption, color = DaybookColors.TextMuted
-                        )
-                    }
-                }
-                if (state.type == HabitType.INDIVIDUAL || state.type == HabitType.JOURNAL) {
-                    item {
-                        ReminderTimesEditor(
-                            times = state.times,
-                            onAdd = { if (state.times.none { t -> t == it }) { state.times.add(it); state.times.sort() } },
-                            onUpdate = { i, t -> state.times[i] = t; state.times.sort() },
-                            onRemove = { state.times.removeAt(it) }
-                        )
-                    }
-                }
-                item {
-                    AdvancedSection(expandedInitially = advancedExpanded) {
-                        FormGroup("Description") {
-                            DaybookTextField(
-                                value = state.description,
-                                onValueChange = { state.description = it },
-                                label = "Notes (optional)",
-                                singleLine = false
-                            )
-                        }
-                        FormGroup("Icon") {
-                            // v0.5.3 Phase 5 (§5.10) — the picker item is an IconTile with a selected
-                            // accent ring, matching how the icon renders on the card (was a circular
-                            // CircleIconButton, a different shape from the card's rounded-square tile).
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(Icons.getCuratedIconSet()) { ic ->
-                                    val selected = state.iconKey == ic
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(AppShapes.tile)
-                                            .then(
-                                                if (selected)
-                                                    Modifier.border(2.dp, LocalAccent.current, AppShapes.tile)
-                                                else Modifier
-                                            )
-                                            .clickableImpl(remember { MutableInteractionSource() }) { state.iconKey = ic }
-                                    ) {
-                                        IconTile(icon = Icons.getIcon(ic), tint = CardTints.Neutral, size = IconButtonSize.Lg.dp)
-                                    }
+                    FormGroup("Icon") {
+                        // v0.5.3 Phase 5 (§5.10) — the picker item is an IconTile with a selected
+                        // accent ring, matching how the icon renders on the card (was a circular
+                        // CircleIconButton, a different shape from the card's rounded-square tile).
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(Icons.getCuratedIconSet()) { ic ->
+                                val selected = state.iconKey == ic
+                                Box(
+                                    modifier = Modifier
+                                        .clip(AppShapes.tile)
+                                        .then(
+                                            if (selected)
+                                                Modifier.border(2.dp, LocalAccent.current, AppShapes.tile)
+                                            else Modifier
+                                        )
+                                        .clickableImpl(remember { MutableInteractionSource() }) { state.iconKey = ic }
+                                ) {
+                                    IconTile(icon = Icons.getIcon(ic), tint = CardTints.Neutral, size = IconButtonSize.Lg.dp)
                                 }
                             }
                         }
-                        FormGroup("Card color") {
-                            TintPicker(selectedName = state.tintName, onSelect = { state.tintName = it })
-                        }
-                        // v0.5.5: an Ongoing (STREAK) habit has no schedule and no reminders, so
-                        // Active days / Snooze do not apply — hide them. Description / Icon / Card
-                        // color still apply.
-                        // Customization round (rec 8): per-habit reminder text (hidden for STREAK —
-                        // no notifications) + a "why this matters" note (all types).
-                        // Journal-as-habit round: also hidden for JOURNAL — its notification body is
-                        // the fixed "Tap to write today's entry" (Phase 2), so a custom prompt has
-                        // nowhere to surface, mirroring why STREAK hides it.
-                        if (state.type != HabitType.STREAK && state.type != HabitType.JOURNAL) {
-                            FormGroup("Reminder text") {
-                                DaybookTextField(
-                                    value = state.promptMessage,
-                                    onValueChange = { state.promptMessage = it },
-                                    label = "Shown in the notification (optional)",
-                                    placeholder = "Time to complete this habit"
-                                )
-                            }
-                        }
-                        if (state.type == HabitType.JOURNAL) {
-                            JournalQuestionsFormGroup(state)
-                        }
-                        FormGroup("Why this matters") {
+                    }
+                    FormGroup("Card color") {
+                        TintPicker(selectedName = state.tintName, onSelect = { state.tintName = it })
+                    }
+                    // v0.5.5: an Ongoing (STREAK) habit has no schedule and no reminders, so
+                    // Active days / Snooze do not apply — hide them. Description / Icon / Card
+                    // color still apply.
+                    // Customization round (rec 8): per-habit reminder text (hidden for STREAK —
+                    // no notifications) + a "why this matters" note (all types).
+                    // Journal-as-habit round: also hidden for JOURNAL — its notification body is
+                    // the fixed "Tap to write today's entry" (Phase 2), so a custom prompt has
+                    // nowhere to surface, mirroring why STREAK hides it.
+                    if (state.type != HabitType.STREAK && state.type != HabitType.JOURNAL) {
+                        FormGroup("Reminder text") {
                             DaybookTextField(
-                                value = state.motivation,
-                                onValueChange = { state.motivation = it },
-                                label = "A note to your future self (optional)",
-                                singleLine = false
+                                value = state.promptMessage,
+                                onValueChange = { state.promptMessage = it },
+                                label = "Shown in the notification (optional)",
+                                placeholder = "Time to complete this habit"
                             )
                         }
-                        if (state.type != HabitType.STREAK) {
-                            FormGroup("Active days (all = every day)") {
-                                DayOfWeekSelector(
-                                    selected = state.activeDays,
-                                    showAllWhenEmpty = true,
-                                    onToggle = { day ->
-                                        when {
-                                            state.activeDays.isEmpty() -> {
-                                                state.activeDays.addAll(DayOfWeek.entries); state.activeDays.remove(day)
-                                            }
-                                            state.activeDays.contains(day) -> state.activeDays.remove(day)
-                                            else -> state.activeDays.add(day)
+                    }
+                    if (state.type == HabitType.JOURNAL) {
+                        JournalQuestionsFormGroup(state)
+                    }
+                    FormGroup("Why this matters") {
+                        DaybookTextField(
+                            value = state.motivation,
+                            onValueChange = { state.motivation = it },
+                            label = "A note to your future self (optional)",
+                            singleLine = false
+                        )
+                    }
+                    if (state.type != HabitType.STREAK) {
+                        FormGroup("Active days (all = every day)") {
+                            DayOfWeekSelector(
+                                selected = state.activeDays,
+                                showAllWhenEmpty = true,
+                                onToggle = { day ->
+                                    when {
+                                        state.activeDays.isEmpty() -> {
+                                            state.activeDays.addAll(DayOfWeek.entries); state.activeDays.remove(day)
                                         }
-                                        if (state.activeDays.size == 7) state.activeDays.clear()
+                                        state.activeDays.contains(day) -> state.activeDays.remove(day)
+                                        else -> state.activeDays.add(day)
                                     }
-                                )
-                            }
-                            FormGroup("Snooze") {
-                                SnoozeStepper(minutes = state.snooze, onChange = { state.snooze = it })
-                            }
+                                    if (state.activeDays.size == 7) state.activeDays.clear()
+                                }
+                            )
+                        }
+                        FormGroup("Snooze") {
+                            SnoozeStepper(minutes = state.snooze, onChange = { state.snooze = it })
                         }
                     }
                 }
-                if (state.type == HabitType.INDIVIDUAL && !nextReminderPreview.isNullOrBlank()) {
-                    item {
-                        Text("Next reminder: $nextReminderPreview", style = DaybookText.CardSubtitle, color = DaybookColors.TextMuted)
-                    }
+            }
+            if (state.type == HabitType.INDIVIDUAL && !nextReminderPreview.isNullOrBlank()) {
+                item {
+                    Text("Next reminder: $nextReminderPreview", style = DaybookText.CardSubtitle, color = DaybookColors.TextMuted)
                 }
             }
+        }
 
-            // v0.5.3 Phase 4 (§4.2 / §4.9) — shared sticky save bar; the validation error now
-            // renders inside the bar's column, above the button (was below the fold, under Save).
-            StickySaveBar(modifier = Modifier.align(Alignment.BottomCenter)) {
-                if (!errorMessage.isNullOrBlank()) {
-                    Text(errorMessage, style = DaybookText.CardSubtitle, color = DaybookColors.Danger)
-                    Spacer(Modifier.height(8.dp))
-                }
-                PrimaryButton(
-                    text = saveLabel,
-                    onClick = onSave,
-                    enabled = habitFormSaveEnabled(state.title, state.type, state.times.size)
-                )
+        // v0.5.3 Phase 4 (§4.2 / §4.9) — shared sticky save bar; the validation error now
+        // renders inside the bar's column, above the button (was below the fold, under Save).
+        StickySaveBar {
+            if (!errorMessage.isNullOrBlank()) {
+                Text(errorMessage, style = DaybookText.CardSubtitle, color = DaybookColors.Danger)
+                Spacer(Modifier.height(8.dp))
             }
+            PrimaryButton(
+                text = saveLabel,
+                onClick = onSave,
+                enabled = habitFormSaveEnabled(state.title, state.type, state.times.size)
+            )
         }
     }
 }

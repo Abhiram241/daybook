@@ -291,6 +291,8 @@ private fun ArchivedRow(label: String, checked: Boolean, accent: Color, onToggle
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal,
             color = if (checked) accent else DaybookColors.TextPrimary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
         Switch(

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookColors
@@ -65,7 +67,7 @@ fun SegmentedControl(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(40.dp)
+            .heightIn(min = 40.dp)
             .clip(AppShapes.segmented)
             .background(DaybookColors.SurfaceElevated)
             .padding(4.dp)
@@ -102,7 +104,14 @@ fun SegmentedControl(
                         Icon(spec.icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(IconSize.Sm))
                         Spacer(Modifier.width(6.dp))
                     }
-                    Text(spec.label, style = DaybookText.NavLabel, color = contentColor, maxLines = 1)
+                    Text(
+                        spec.label,
+                        style = DaybookText.NavLabel,
+                        color = contentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
                 }
             }
         }

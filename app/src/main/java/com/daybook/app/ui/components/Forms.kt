@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -251,8 +252,14 @@ fun SnoozeStepper(
     // v0.5.3 Phase 5 (§5.10) — DaybookIcons.Remove and Material Icons.Filled.Add render at the same
     // (core) weight after the Phase 4.6 icon standardisation, so the mixed source is accepted.
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("Snooze interval", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
-        Spacer(Modifier.weight(1f))
+        Text(
+            "Snooze interval",
+            style = MaterialTheme.typography.bodyLarge,
+            color = DaybookColors.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
         CircleIconButton(
             icon = DaybookIcons.Remove,
             contentDescription = "Decrease",
@@ -301,7 +308,7 @@ private fun RowScope.RedFlagOption(
     Row(
         modifier = Modifier
             .weight(1f)
-            .height(34.dp)
+            .heightIn(min = 34.dp)
             .clip(AppShapes.pill)
             .background(if (selected) color.copy(alpha = 0.18f) else DaybookColors.SurfaceElevated)
             .border(1.dp, if (selected) color else DaybookColors.Hairline, AppShapes.pill)
@@ -313,7 +320,7 @@ private fun RowScope.RedFlagOption(
                 role = Role.RadioButton,
                 onClick = onClick
             )
-            .padding(horizontal = 6.dp),
+            .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -323,7 +330,8 @@ private fun RowScope.RedFlagOption(
             label,
             style = MaterialTheme.typography.labelLarge,
             color = if (selected) DaybookColors.TextPrimary else DaybookColors.TextMuted,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

@@ -70,59 +70,59 @@ fun HabitJournalChatScreen(
     ) {
         BackHeader(title = state.title.ifBlank { "Entry" }, onBack = onNavigateBack)
 
-        Box(Modifier.weight(1f)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.screenH,
-                    end = Spacing.screenH,
-                    top = Spacing.listTop,
-                    bottom = Spacing.formSaveBarClearance
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
-            ) {
-                itemsIndexed(state.messages) { _, message ->
-                    when (message) {
-                        is ChatMessage.Question -> QuestionBubble(message.text)
-                        is ChatMessage.Answer -> AnswerBubble(message.text)
-                    }
-                }
-                // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 9 (C-4): this used to unconditionally show
-                // "✓ Entry saved" the moment every question was answered, before the save had
-                // actually been confirmed — a rejection (canBackfill/month-residency/missing-row)
-                // left that optimistic bubble as the only feedback the user ever saw.
-                if (state.allAnswered && !state.saved && state.rejectedMessage == null) {
-                    item { SavedBubble() }
-                }
-                state.rejectedMessage?.let { reason ->
-                    item { RejectedBubble(reason) }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = Spacing.screenH,
+                end = Spacing.screenH,
+                top = Spacing.listTop,
+                bottom = Spacing.listGap
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
+        ) {
+            itemsIndexed(state.messages) { _, message ->
+                when (message) {
+                    is ChatMessage.Question -> QuestionBubble(message.text)
+                    is ChatMessage.Answer -> AnswerBubble(message.text)
                 }
             }
+            // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 9 (C-4): this used to unconditionally show
+            // "✓ Entry saved" the moment every question was answered, before the save had
+            // actually been confirmed — a rejection (canBackfill/month-residency/missing-row)
+            // left that optimistic bubble as the only feedback the user ever saw.
+            if (state.allAnswered && !state.saved && state.rejectedMessage == null) {
+                item { SavedBubble() }
+            }
+            state.rejectedMessage?.let { reason ->
+                item { RejectedBubble(reason) }
+            }
+        }
 
-            StickySaveBar(modifier = Modifier.align(Alignment.BottomCenter)) {
-                if (!state.allAnswered) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.listGap),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        DaybookTextField(
-                            value = state.draftAnswer,
-                            onValueChange = vm::onDraftChange,
-                            label = null,
-                            placeholder = "Type your answer…",
-                            singleLine = false,
-                            minLines = 1,
-                            modifier = Modifier.weight(1f)
-                        )
-                        CircleIconButton(
-                            icon = DaybookIcons.Send,
-                            contentDescription = "Send",
-                            onClick = vm::sendAnswer,
-                            style = CircleStyle.Tonal,
-                            enabled = state.draftAnswer.isNotBlank() && !state.busy
-                        )
-                    }
+        StickySaveBar {
+            if (!state.allAnswered) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.listGap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DaybookTextField(
+                        value = state.draftAnswer,
+                        onValueChange = vm::onDraftChange,
+                        label = null,
+                        placeholder = "Type your answer…",
+                        singleLine = false,
+                        minLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    CircleIconButton(
+                        icon = DaybookIcons.Send,
+                        contentDescription = "Send",
+                        onClick = vm::sendAnswer,
+                        style = CircleStyle.Tonal,
+                        enabled = state.draftAnswer.isNotBlank() && !state.busy
+                    )
                 }
             }
         }

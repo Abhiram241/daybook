@@ -70,6 +70,7 @@ class FoodMedFormState {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FoodMedFormScaffold(
     headline: String,
@@ -111,294 +112,297 @@ fun FoodMedFormScaffold(
             }
         )
 
-        Box(Modifier.weight(1f)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Spacing.screenH,
-                    end = Spacing.screenH,
-                    top = Spacing.listTop,
-                    bottom = Spacing.formSaveBarClearance
-                ),
-                verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
-            ) {
-                // v0.5.3 Phase 4 (§4.9) — canonical order shared with HabitForm: name (+ helper)
-                // → Type → times → type-specific sections → Advanced.
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        DaybookTextField(
-                            value = state.label,
-                            onValueChange = { state.label = it },
-                            label = "Reminder name",
-                            placeholder = "Lunch, Blood pressure med"
-                        )
-                        Text(
-                            "You'll be asked what you had at each of these times.",
-                            style = DaybookText.Caption,
-                            color = DaybookColors.TextMuted
-                        )
-                    }
-                }
-                item {
-                    // v0.5.3 Phase 4 (§4.9) — Type now sits above times to match HabitForm.
-                    FormGroup("Type") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Journal-as-habit round (B3): JOURNAL is retired as an Intake concept —
-                            // kept in the enum only so an old backup's TaskType.valueOf("JOURNAL")
-                            // still decodes losslessly, but never offered here again.
-                            TaskType.entries.filter { it != TaskType.JOURNAL }.forEach { t ->
-                                DaybookChip(
-                                    label = t.name.lowercase().replaceFirstChar { it.uppercase() },
-                                    selected = state.type == t,
-                                    onClick = {
-                                        state.type = t
-                                        if (!state.iconTouched) state.iconKey = state.defaultIconFor(t)
-                                    }
-                                )
-                            }
-                        }
-                        // v0.5.3 Phase 5 (§5.11) — make the silent icon-follows-type behaviour explicit.
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Icon follows the type until you pick one.",
-                            style = DaybookText.Caption,
-                            color = DaybookColors.TextMuted
-                        )
-                    }
-                }
-                item {
-                    ReminderTimesEditor(
-                        times = state.times,
-                        onAdd = { if (state.times.none { x -> x == it }) { state.times.add(it); state.times.sort() } },
-                        onUpdate = { i, t -> state.times[i] = t; state.times.sort() },
-                        onRemove = { state.times.removeAt(it) }
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(
+                start = Spacing.screenH,
+                end = Spacing.screenH,
+                top = Spacing.listTop,
+                bottom = Spacing.listGap
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
+        ) {
+            // v0.5.3 Phase 4 (§4.9) — canonical order shared with HabitForm: name (+ helper)
+            // → Type → times → type-specific sections → Advanced.
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DaybookTextField(
+                        value = state.label,
+                        onValueChange = { state.label = it },
+                        label = "Reminder name",
+                        placeholder = "Lunch, Blood pressure med"
+                    )
+                    Text(
+                        "You'll be asked what you had at each of these times.",
+                        style = DaybookText.Caption,
+                        color = DaybookColors.TextMuted
                     )
                 }
-                // v0.5.3 Phase 4 (§4.9) — FOOD-specific sections are progressively disclosed
-                // behind reminder type = FOOD.
-                if (state.type == TaskType.FOOD) {
-                    item {
-                        // v0.5.4: Crohn's food-diary trigger flag. These are DEFAULTS — every log of
-                        // this reminder pre-fills with them, and you adjust per entry when logging.
-                        FormGroup("Red-flag tracking") {
-                            Text(
-                                "Pre-fills each time you log this reminder. Change it per entry when " +
-                                    "you answer “what did you have?”.",
-                                style = DaybookText.Caption,
-                                color = DaybookColors.TextMuted
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            RedFlagPicker(
-                                selected = state.defaultRedFlag,
-                                onSelect = { state.defaultRedFlag = it }
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            DaybookTextField(
-                                value = state.defaultSuspectedFood,
-                                onValueChange = { state.defaultSuspectedFood = it },
-                                label = "Default suspected trigger food",
-                                placeholder = "e.g. dairy, gluten, spicy food"
-                            )
-                        }
-                    }
-                    item {
-                        // v0.5.2 build 8: "outside food" default marker. Pre-fills each log; adjust per entry.
-                        FormGroup("Outside food") {
-                            Text(
-                                "Pre-fills each time you log this reminder. Change it per entry when you answer.",
-                                style = DaybookText.Caption,
-                                color = DaybookColors.TextMuted
-                            )
-                            Spacer(Modifier.height(10.dp))
+            }
+            item {
+                // v0.5.3 Phase 4 (§4.9) — Type now sits above times to match HabitForm.
+                FormGroup("Type") {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Journal-as-habit round (B3): JOURNAL is retired as an Intake concept —
+                        // kept in the enum only so an old backup's TaskType.valueOf("JOURNAL")
+                        // still decodes losslessly, but never offered here again.
+                        TaskType.entries.filter { it != TaskType.JOURNAL }.forEach { t ->
                             DaybookChip(
-                                label = "Outside food",
-                                selected = state.defaultOutsideFood,
-                                onClick = { state.defaultOutsideFood = !state.defaultOutsideFood }
+                                label = t.name.lowercase().replaceFirstChar { it.uppercase() },
+                                selected = state.type == t,
+                                onClick = {
+                                    state.type = t
+                                    if (!state.iconTouched) state.iconKey = state.defaultIconFor(t)
+                                }
                             )
                         }
                     }
+                    // v0.5.3 Phase 5 (§5.11) — make the silent icon-follows-type behaviour explicit.
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Icon follows the type until you pick one.",
+                        style = DaybookText.Caption,
+                        color = DaybookColors.TextMuted
+                    )
                 }
-                if (state.type == TaskType.CUSTOM || state.type == TaskType.JOURNAL) {
-                    item {
-                        // v0.5.3 item 3: inline Category picker for CUSTOM *and* JOURNAL, on the main form.
-                        FormGroup("Category") {
-                            if (categories.isNotEmpty()) {
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(categories) { name ->
-                                        DaybookChip(
-                                            label = name,
-                                            selected = state.customCategory == name,
-                                            onClick = {
-                                                state.customCategory =
-                                                    if (state.customCategory == name) null else name
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            // v0.5.3 Phase 5 (§5.11 / backlog #33) — GhostButton no longer bakes
-                            // fillMaxWidth, so it sizes to content; Alignment.Bottom lands it on the
-                            // input box baseline (the field's label row sits above the box).
-                            Row(
-                                verticalAlignment = Alignment.Bottom,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                DaybookTextField(
-                                    value = state.newCategoryDraft,
-                                    onValueChange = { state.newCategoryDraft = it },
-                                    label = "New category",
-                                    placeholder = "Snacks",
-                                    modifier = Modifier.weight(1f)
-                                )
-                                GhostButton(
-                                    text = "Add",
-                                    onClick = {
-                                        val raw = state.newCategoryDraft.trim()
-                                        if (raw.isNotEmpty()) {
-                                            onAddCategory(raw)
-                                            state.customCategory = raw
-                                            state.newCategoryDraft = ""
-                                        }
-                                    }
-                                )
-                            }
-                            state.customCategory?.let { sel ->
-                                if (sel in categories) {
-                                    // v0.5.3 Phase 4 (§4.3) — TextLink primitive (44dp tap target).
-                                    TextLink(
-                                        "Remove \"$sel\"",
-                                        onClick = {
-                                            onRemoveCategory(sel)
-                                            state.customCategory = null
-                                        },
-                                        color = DaybookColors.Danger
-                                    )
-                                }
-                            }
-                        }
+            }
+            item {
+                ReminderTimesEditor(
+                    times = state.times,
+                    onAdd = { if (state.times.none { x -> x == it }) { state.times.add(it); state.times.sort() } },
+                    onUpdate = { i, t -> state.times[i] = t; state.times.sort() },
+                    onRemove = { state.times.removeAt(it) }
+                )
+            }
+            // v0.5.3 Phase 4 (§4.9) — FOOD-specific sections are progressively disclosed
+            // behind reminder type = FOOD.
+            if (state.type == TaskType.FOOD) {
+                item {
+                    // v0.5.4: Crohn's food-diary trigger flag. These are DEFAULTS — every log of
+                    // this reminder pre-fills with them, and you adjust per entry when logging.
+                    FormGroup("Red-flag tracking") {
+                        Text(
+                            "Pre-fills each time you log this reminder. Change it per entry when " +
+                                "you answer “what did you have?”.",
+                            style = DaybookText.Caption,
+                            color = DaybookColors.TextMuted
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        RedFlagPicker(
+                            selected = state.defaultRedFlag,
+                            onSelect = { state.defaultRedFlag = it }
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        DaybookTextField(
+                            value = state.defaultSuspectedFood,
+                            onValueChange = { state.defaultSuspectedFood = it },
+                            label = "Default suspected trigger food",
+                            placeholder = "e.g. dairy, gluten, spicy food"
+                        )
                     }
                 }
                 item {
-                    AdvancedSection(expandedInitially = advancedExpanded) {
-                        FormGroup("Prompt message") {
-                            Text(
-                                "Shown instead of “What did you have?” in the reminder and its notification.",
-                                style = DaybookText.Caption, color = DaybookColors.TextMuted
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            if (prompts.isNotEmpty()) {
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(prompts) { msg ->
-                                        DaybookChip(
-                                            label = msg,
-                                            selected = state.promptMessage == msg,
-                                            onClick = { state.promptMessage = if (state.promptMessage == msg) null else msg }
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            // v0.5.3 Phase 5 (§5.11 / backlog #33) — see the Category row.
-                            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                DaybookTextField(
-                                    value = state.newPromptDraft,
-                                    onValueChange = { state.newPromptDraft = it },
-                                    label = "New prompt",
-                                    placeholder = "What did you take?",
-                                    modifier = Modifier.weight(1f)
-                                )
-                                GhostButton(text = "Add", onClick = {
-                                    val raw = state.newPromptDraft.trim()
-                                    if (raw.isNotEmpty()) { onAddPrompt(raw); state.promptMessage = raw; state.newPromptDraft = "" }
-                                })
-                            }
-                            state.promptMessage?.let { sel ->
-                                if (sel in prompts) {
-                                    // v0.5.3 Phase 4 (§4.3) — TextLink primitive.
-                                    TextLink(
-                                        "Remove \"$sel\"",
-                                        onClick = { onRemovePrompt(sel); state.promptMessage = null },
-                                        color = DaybookColors.Danger
+                    // v0.5.2 build 8: "outside food" default marker. Pre-fills each log; adjust per entry.
+                    FormGroup("Outside food") {
+                        Text(
+                            "Pre-fills each time you log this reminder. Change it per entry when you answer.",
+                            style = DaybookText.Caption,
+                            color = DaybookColors.TextMuted
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        DaybookChip(
+                            label = "Outside food",
+                            selected = state.defaultOutsideFood,
+                            onClick = { state.defaultOutsideFood = !state.defaultOutsideFood }
+                        )
+                    }
+                }
+            }
+            if (state.type == TaskType.CUSTOM || state.type == TaskType.JOURNAL) {
+                item {
+                    // v0.5.3 item 3: inline Category picker for CUSTOM *and* JOURNAL, on the main form.
+                    FormGroup("Category") {
+                        if (categories.isNotEmpty()) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(categories) { name ->
+                                    DaybookChip(
+                                        label = name,
+                                        selected = state.customCategory == name,
+                                        onClick = {
+                                            state.customCategory =
+                                                if (state.customCategory == name) null else name
+                                        }
                                     )
                                 }
                             }
                         }
-                        FormGroup("Icon") {
-                            // v0.5.3 Phase 5 (§5.11, aligning with §5.10) — IconTile + selected accent
-                            // ring, matching the card's rounded-square tile (was a circular button).
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(Icons.getCuratedIconSet()) { ic ->
-                                    val selected = state.iconKey == ic
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(AppShapes.tile)
-                                            .then(
-                                                if (selected)
-                                                    Modifier.border(2.dp, LocalAccent.current, AppShapes.tile)
-                                                else Modifier
-                                            )
-                                            .clickableImpl(remember { MutableInteractionSource() }) {
-                                                state.iconKey = ic; state.iconTouched = true
-                                            }
-                                    ) {
-                                        IconTile(icon = Icons.getIcon(ic), tint = CardTints.Neutral, size = IconButtonSize.Lg.dp)
+                        // v0.5.3 Phase 5 (§5.11 / backlog #33) — GhostButton no longer bakes
+                        // fillMaxWidth, so it sizes to content; Alignment.Bottom lands it on the
+                        // input box baseline (the field's label row sits above the box).
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            DaybookTextField(
+                                value = state.newCategoryDraft,
+                                onValueChange = { state.newCategoryDraft = it },
+                                label = "New category",
+                                placeholder = "Snacks",
+                                modifier = Modifier.weight(1f)
+                            )
+                            GhostButton(
+                                text = "Add",
+                                onClick = {
+                                    val raw = state.newCategoryDraft.trim()
+                                    if (raw.isNotEmpty()) {
+                                        onAddCategory(raw)
+                                        state.customCategory = raw
+                                        state.newCategoryDraft = ""
                                     }
+                                }
+                            )
+                        }
+                        state.customCategory?.let { sel ->
+                            if (sel in categories) {
+                                // v0.5.3 Phase 4 (§4.3) — TextLink primitive (44dp tap target).
+                                TextLink(
+                                    "Remove \"$sel\"",
+                                    onClick = {
+                                        onRemoveCategory(sel)
+                                        state.customCategory = null
+                                    },
+                                    color = DaybookColors.Danger
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                AdvancedSection(expandedInitially = advancedExpanded) {
+                    FormGroup("Prompt message") {
+                        Text(
+                            "Shown instead of “What did you have?” in the reminder and its notification.",
+                            style = DaybookText.Caption, color = DaybookColors.TextMuted
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        if (prompts.isNotEmpty()) {
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(prompts) { msg ->
+                                    DaybookChip(
+                                        label = msg,
+                                        selected = state.promptMessage == msg,
+                                        onClick = { state.promptMessage = if (state.promptMessage == msg) null else msg }
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        // v0.5.3 Phase 5 (§5.11 / backlog #33) — see the Category row.
+                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            DaybookTextField(
+                                value = state.newPromptDraft,
+                                onValueChange = { state.newPromptDraft = it },
+                                label = "New prompt",
+                                placeholder = "What did you take?",
+                                modifier = Modifier.weight(1f)
+                            )
+                            GhostButton(text = "Add", onClick = {
+                                val raw = state.newPromptDraft.trim()
+                                if (raw.isNotEmpty()) { onAddPrompt(raw); state.promptMessage = raw; state.newPromptDraft = "" }
+                            })
+                        }
+                        state.promptMessage?.let { sel ->
+                            if (sel in prompts) {
+                                // v0.5.3 Phase 4 (§4.3) — TextLink primitive.
+                                TextLink(
+                                    "Remove \"$sel\"",
+                                    onClick = { onRemovePrompt(sel); state.promptMessage = null },
+                                    color = DaybookColors.Danger
+                                )
+                            }
+                        }
+                    }
+                    FormGroup("Icon") {
+                        // v0.5.3 Phase 5 (§5.11, aligning with §5.10) — IconTile + selected accent
+                        // ring, matching the card's rounded-square tile (was a circular button).
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(Icons.getCuratedIconSet()) { ic ->
+                                val selected = state.iconKey == ic
+                                Box(
+                                    modifier = Modifier
+                                        .clip(AppShapes.tile)
+                                        .then(
+                                            if (selected)
+                                                Modifier.border(2.dp, LocalAccent.current, AppShapes.tile)
+                                            else Modifier
+                                        )
+                                        .clickableImpl(remember { MutableInteractionSource() }) {
+                                            state.iconKey = ic; state.iconTouched = true
+                                        }
+                                ) {
+                                    IconTile(icon = Icons.getIcon(ic), tint = CardTints.Neutral, size = IconButtonSize.Lg.dp)
                                 }
                             }
                         }
-                        // Customization round (SD-6): per-intake "why this matters" note.
-                        FormGroup("Why this matters") {
-                            DaybookTextField(
-                                value = state.motivation,
-                                onValueChange = { state.motivation = it },
-                                label = "A note to your future self (optional)",
-                                singleLine = false
-                            )
-                        }
-                        FormGroup("Card color") {
-                            TintPicker(selectedName = state.tintName, onSelect = { state.tintName = it })
-                        }
-                        FormGroup("Active days (all = every day)") {
-                            DayOfWeekSelector(
-                                selected = state.activeDays,
-                                showAllWhenEmpty = true,
-                                onToggle = { day ->
-                                    when {
-                                        state.activeDays.isEmpty() -> {
-                                            state.activeDays.addAll(DayOfWeek.entries); state.activeDays.remove(day)
-                                        }
-                                        state.activeDays.contains(day) -> state.activeDays.remove(day)
-                                        else -> state.activeDays.add(day)
+                    }
+                    // Customization round (SD-6): per-intake "why this matters" note.
+                    FormGroup("Why this matters") {
+                        DaybookTextField(
+                            value = state.motivation,
+                            onValueChange = { state.motivation = it },
+                            label = "A note to your future self (optional)",
+                            singleLine = false
+                        )
+                    }
+                    FormGroup("Card color") {
+                        TintPicker(selectedName = state.tintName, onSelect = { state.tintName = it })
+                    }
+                    FormGroup("Active days (all = every day)") {
+                        DayOfWeekSelector(
+                            selected = state.activeDays,
+                            showAllWhenEmpty = true,
+                            onToggle = { day ->
+                                when {
+                                    state.activeDays.isEmpty() -> {
+                                        state.activeDays.addAll(DayOfWeek.entries); state.activeDays.remove(day)
                                     }
-                                    if (state.activeDays.size == 7) state.activeDays.clear()
+                                    state.activeDays.contains(day) -> state.activeDays.remove(day)
+                                    else -> state.activeDays.add(day)
                                 }
-                            )
-                        }
-                        FormGroup("Snooze") {
-                            SnoozeStepper(minutes = state.snooze, onChange = { state.snooze = it })
-                        }
+                                if (state.activeDays.size == 7) state.activeDays.clear()
+                            }
+                        )
                     }
-                }
-                if (!nextReminderPreview.isNullOrBlank()) {
-                    item {
-                        Text("Next reminder: $nextReminderPreview", style = DaybookText.CardSubtitle, color = DaybookColors.TextMuted)
+                    FormGroup("Snooze") {
+                        SnoozeStepper(minutes = state.snooze, onChange = { state.snooze = it })
                     }
                 }
             }
+            if (!nextReminderPreview.isNullOrBlank()) {
+                item {
+                    Text("Next reminder: $nextReminderPreview", style = DaybookText.CardSubtitle, color = DaybookColors.TextMuted)
+                }
+            }
+        }
 
-            // v0.5.3 Phase 4 (§4.2 / §4.9) — shared sticky save bar; the validation error now
-            // renders inside the bar's column, above the button.
-            StickySaveBar(modifier = Modifier.align(Alignment.BottomCenter)) {
-                if (!errorMessage.isNullOrBlank()) {
-                    Text(errorMessage, style = DaybookText.CardSubtitle, color = DaybookColors.Danger)
-                    Spacer(Modifier.height(8.dp))
-                }
-                PrimaryButton(
-                    text = saveLabel,
-                    onClick = onSave,
-                    enabled = state.label.isNotBlank() && state.times.isNotEmpty()
-                )
+        // v0.5.3 Phase 4 (§4.2 / §4.9) — shared sticky save bar; the validation error now
+        // renders inside the bar's column, above the button.
+        StickySaveBar {
+            if (!errorMessage.isNullOrBlank()) {
+                Text(errorMessage, style = DaybookText.CardSubtitle, color = DaybookColors.Danger)
+                Spacer(Modifier.height(8.dp))
             }
+            PrimaryButton(
+                text = saveLabel,
+                onClick = onSave,
+                enabled = state.label.isNotBlank() && state.times.isNotEmpty()
+            )
         }
     }
 }

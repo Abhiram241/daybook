@@ -136,7 +136,7 @@ fun HomeScreen(
         )
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().imePadding(),
             // v0.5.3 Phase 4 (§4.8) — the scaffold PaddingValues straight through.
             contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(Spacing.listGap)
@@ -177,11 +177,11 @@ fun HomeScreen(
                 Spacer(Modifier.height(4.dp))
                 SectionHeader("Your progress")
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.listGap)
                 ) {
-                    ProgressCard("Habits", Icons.RUN, habitRatio, habitStreak, showStreaks, CardTints.Mint, Modifier.weight(1f))
-                    ProgressCard("Intake", Icons.MEDICATION, foodRatio, foodMedStreak, showStreaks, CardTints.Peach, Modifier.weight(1f))
+                    ProgressCard("Habits", Icons.RUN, habitRatio, habitStreak, showStreaks, CardTints.Mint, Modifier.weight(1f).fillMaxHeight())
+                    ProgressCard("Intake", Icons.MEDICATION, foodRatio, foodMedStreak, showStreaks, CardTints.Peach, Modifier.weight(1f).fillMaxHeight())
                 }
             }
             item {
@@ -433,7 +433,7 @@ private fun ProgressCard(
     SoftCard(
         tint = tint,
         modifier = modifier
-            .height(ProgressCardHeight)
+            .heightIn(min = ProgressCardHeight)
             .semantics {
                 contentDescription = "$title ${(progress * 100).toInt()} percent complete" +
                     (if (streak > 0 && showStreak) ", $streak day streak" else "")
@@ -458,7 +458,7 @@ private fun ProgressCard(
             Spacer(Modifier.weight(1f))
             // Value + streak row: fixed height so it never changes when the pill is absent.
             Row(
-                modifier = Modifier.height(StreakSlotHeight),
+                modifier = Modifier.heightIn(min = StreakSlotHeight),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("${(progress * 100).toInt()}%", style = DaybookText.CardTitle, color = tint.onFill)
@@ -583,7 +583,14 @@ private fun ReminderCard(
             Spacer(Modifier.width(8.dp))
             when {
                 backfillBlocked -> {
-                    Text("Loading this month…", style = DaybookText.Metadata, color = tint.onFillMuted)
+                    Text(
+                        "Loading this month…",
+                        style = DaybookText.Metadata,
+                        color = tint.onFillMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp)
+                    )
                 }
                 item.statusLabel != null -> {
                     // Journal Mode: a Logged text reply is editable (tap → entry editor); habits
@@ -643,7 +650,14 @@ private fun ReminderCard(
                     CircleIconButton(icon = MI.Filled.MoreVert, contentDescription = "More", onClick = { sheetOpen = true }, size = IconButtonSize.Sm.dp)
                 }
                 item.isFuture -> {
-                    Text("Upcoming", style = DaybookText.Metadata, color = tint.onFillMuted)
+                    Text(
+                        "Upcoming",
+                        style = DaybookText.Metadata,
+                        color = tint.onFillMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 110.dp)
+                    )
                 }
             }
         }

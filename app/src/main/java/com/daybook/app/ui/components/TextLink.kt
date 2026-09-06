@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookText
@@ -52,6 +53,6 @@ fun TextLink(
             Icon(leadingIcon, contentDescription = null, tint = color, modifier = Modifier.size(IconSize.Sm))
             Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = DaybookText.ButtonLabel, color = color, maxLines = 1)
+        Text(text, style = DaybookText.ButtonLabel, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
