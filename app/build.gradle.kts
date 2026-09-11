@@ -31,7 +31,7 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 23          // v0.5.6 build 23 — checkpoint push: keyboard/IME + font-width clipping fixes (build 22), battery/heat fixes (lifecycle-aware collectors, soft refresh-rate hint), and the UX overhaul (light/dark theme, DB v19->v20, rebuilt onboarding, settings reorg, batch-notification fix, Today grouping, bloat cleanup). Bumped per HOW_TO_PUSH_UPDATES.md so testers' installed apps detect this as newer.
+        versionCode = 24          // v0.5.6 build 24 — UX refinement: fixed the invisible/collapsed segmented-control selected state + 13 more app-wide contrast findings; onAccentInk() for correct accent-on-text contrast; onboarding expanded to 7 teaching steps + no-flash "create your first habit" fix for returning users; Dark style / Light style pickers (4+4, DB v20->v21 MIGRATION_20_21); corner-roundness slider. Bumped per HOW_TO_PUSH_UPDATES.md so testers' installed apps detect this as newer.
         versionName = "0.5.6"     // v0.5.6 — fresh-install lavender+Literata defaults, Ongoing-habit-card alignment fix, Firebase App Distribution in-app updates, single global accent
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
