@@ -68,12 +68,35 @@ class AppSettingsRepository @Inject constructor(
     suspend fun setThemeMode(v: String) {
         ensureRow()
         database.appSettingsDao().updateThemeMode(v)
-        ThemeModePrefs.write(context, v)
+        ThemePrefs.write(context, v)
     }
 
     /** Synchronous, non-suspending read of the theme-mode SharedPreferences mirror. Used as the
      *  StateFlow initial value so the very first composition is already the right theme. */
-    fun readThemeModeMirror(): String = ThemeModePrefs.read(context)
+    fun readThemeModeMirror(): String = ThemePrefs.read(context)
+
+    // DB v21 (UX refinement round). Same Room-then-mirror pattern as setThemeMode.
+    suspend fun setDarkStyle(v: String) {
+        ensureRow()
+        database.appSettingsDao().updateDarkStyle(v)
+        ThemePrefs.writeDarkStyle(context, v)
+    }
+
+    suspend fun setLightStyle(v: String) {
+        ensureRow()
+        database.appSettingsDao().updateLightStyle(v)
+        ThemePrefs.writeLightStyle(context, v)
+    }
+
+    suspend fun setCornerScale(v: Float) {
+        ensureRow()
+        database.appSettingsDao().updateCornerScale(v)
+        ThemePrefs.writeCornerScale(context, v)
+    }
+
+    fun readDarkStyleMirror(): String = ThemePrefs.readDarkStyle(context)
+    fun readLightStyleMirror(): String = ThemePrefs.readLightStyle(context)
+    fun readCornerScaleMirror(): Float = ThemePrefs.readCornerScale(context)
 
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =

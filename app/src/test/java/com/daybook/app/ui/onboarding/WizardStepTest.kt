@@ -25,22 +25,35 @@ class WizardStepTest {
         assertEquals(OnboardingTourSteps, steps)
     }
 
-    @Test fun `the tour is five Teach steps then PermissionPrimer then Ready`() {
-        assertEquals(5, OnboardingTeachSteps.size)
+    // UX refinement round (LD7) — was five Teach steps, now seven (streaks and Journal each
+    // get their own step).
+    @Test fun `the tour is seven Teach steps then PermissionPrimer then Ready`() {
+        assertEquals(7, OnboardingTeachSteps.size)
         assertEquals(OnboardingTeachSteps.size + 2, OnboardingTourSteps.size)
-        assertTrue(OnboardingTourSteps.take(5).all { it is WizardStep.Teach })
-        assertSame(WizardStep.PermissionPrimer, OnboardingTourSteps[5])
-        assertSame(WizardStep.Ready, OnboardingTourSteps[6])
+        assertTrue(OnboardingTourSteps.take(7).all { it is WizardStep.Teach })
+        assertSame(WizardStep.PermissionPrimer, OnboardingTourSteps[7])
+        assertSame(WizardStep.Ready, OnboardingTourSteps[8])
     }
 
-    @Test fun `every Teach step has a distinct illustration and non-blank copy`() {
+    // LD8 — Journalling (step 4) deliberately reuses TeachIllustration.INTAKE (no new JOURNAL
+    // mock), so illustrations are no longer required to be pairwise distinct; every OTHER step
+    // still gets its own illustration.
+    @Test fun `every Teach step has non-blank copy, and only the Journalling step reuses an illustration`() {
         val illustrations = OnboardingTeachSteps.map { it.illustration }
-        assertEquals(illustrations.toSet().size, illustrations.size)
-        assertEquals(TeachIllustration.entries.toSet(), illustrations.toSet())
+        assertEquals(7, illustrations.size)
+        assertEquals(6, illustrations.toSet().size)
+        val duplicated = illustrations.groupBy { it }.filterValues { it.size > 1 }
+        assertEquals(mapOf(TeachIllustration.INTAKE to listOf(TeachIllustration.INTAKE, TeachIllustration.INTAKE)), duplicated)
         OnboardingTeachSteps.forEach {
             assertTrue(it.title.isNotBlank())
             assertTrue(it.body.length > 20)
         }
+    }
+
+    @Test fun `STREAKS and PRIVACY illustrations are used exactly once each`() {
+        val illustrations = OnboardingTeachSteps.map { it.illustration }
+        assertEquals(1, illustrations.count { it == TeachIllustration.STREAKS })
+        assertEquals(1, illustrations.count { it == TeachIllustration.PRIVACY })
     }
 
     /** Review mode ("Replay the tour") uses exactly the tour list — no NameAsk. */

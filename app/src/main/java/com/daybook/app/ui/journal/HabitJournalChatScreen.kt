@@ -155,7 +155,7 @@ private fun AnswerBubble(text: String) {
             androidx.compose.material3.Text(
                 text,
                 style = DaybookText.CardTitle,
-                color = DaybookColors.OnSolid,
+                color = DaybookColors.OnAccent,
                 modifier = Modifier.padding(14.dp)
             )
         }

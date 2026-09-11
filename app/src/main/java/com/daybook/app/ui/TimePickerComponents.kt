@@ -89,7 +89,7 @@ fun ReminderTimesEditor(
             Text(
                 "Add at least one time",
                 style = MaterialTheme.typography.bodySmall,
-                color = DaybookColors.TextFaint
+                color = DaybookColors.TextMuted // finding 9 — real information, not decoration
             )
         }
 

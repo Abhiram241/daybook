@@ -24,7 +24,7 @@ import com.daybook.app.util.enums.Converters
     AppSettings::class,
     CustomCategory::class,
     CustomPrompt::class
-], version = 20, exportSchema = true)
+], version = 21, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun habitDao(): HabitDao

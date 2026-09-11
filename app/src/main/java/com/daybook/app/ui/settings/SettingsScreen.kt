@@ -41,6 +41,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -52,6 +53,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -65,9 +68,14 @@ import com.daybook.app.ui.icons.DaybookIcons
 import com.daybook.app.ui.theme.AccentColor
 import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.AppShapes
+import com.daybook.app.ui.theme.CORNER_SCALE_SLIDER_STEPS
+import com.daybook.app.ui.theme.DarkStyle
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.FontChoice
+import com.daybook.app.ui.theme.LightStyle
 import com.daybook.app.ui.theme.LocalAccent
+import com.daybook.app.ui.theme.MAX_CORNER_SCALE
+import com.daybook.app.ui.theme.MIN_CORNER_SCALE
 import com.daybook.app.ui.theme.ThemeMode
 import com.daybook.app.ui.theme.Spacing
 import com.daybook.app.ui.theme.fontChoiceFamily
@@ -321,7 +329,7 @@ fun SettingsScreen(
                     Text(
                         "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         style = DaybookText.Metadata,
-                        color = DaybookColors.TextFaint
+                        color = DaybookColors.TextMuted // finding 10
                     )
                 }
             }
@@ -373,6 +381,9 @@ fun AppearanceSettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val fontChoice by viewModel.fontChoice.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val darkStyle by viewModel.darkStyle.collectAsStateWithLifecycle()
+    val lightStyle by viewModel.lightStyle.collectAsStateWithLifecycle()
+    val cornerScale by viewModel.cornerScale.collectAsStateWithLifecycle()
     SettingsSubScreen("Appearance", onNavigateBack) {
         // UX overhaul item 4 — app theme. Dark is the default for every install.
         SectionHeader("Theme", subtitle = "Choose a dark or light look, or follow your system setting.")
@@ -386,6 +397,57 @@ fun AppearanceSettingsScreen(
                     ),
                     selectedKey = themeMode.storageKey,
                     onSelect = { viewModel.setThemeMode(ThemeMode.fromKeyOrDefault(it)) }
+                )
+            }
+        }
+
+        // UX refinement round — Item 3 (D1): a Dark-style and a Light-style picker, both always
+        // shown so the user can configure the mode they're not currently in. Live preview: both
+        // feed DaybookTheme at the Activity root, so picking one restyles the whole app — and
+        // this very screen — instantly.
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Dark style", subtitle = "Background palette used in dark mode.")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                StyleSwatchRow(DarkStyle.entries, current = darkStyle, onPick = viewModel::setDarkStyle)
+            }
+        }
+
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Light style", subtitle = "Background palette used in light mode.")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                StyleSwatchRow(LightStyle.entries, current = lightStyle, onPick = viewModel::setLightStyle)
+            }
+        }
+
+        // UX refinement round — Item 4 (LD10/LD11/LD12): the global corner-radius slider.
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Corners", subtitle = "How rounded cards, buttons and fields look.")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                val valueCaption = when {
+                    cornerScale <= 0f -> "Square"
+                    cornerScale == 1f -> "1.0× · Default"
+                    else -> "${cornerScale}×"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Square", style = DaybookText.Caption, color = DaybookColors.TextMuted)
+                    Text(valueCaption, style = DaybookText.Caption, color = DaybookColors.TextMuted)
+                    Text("Round", style = DaybookText.Caption, color = DaybookColors.TextMuted)
+                }
+                Slider(
+                    value = cornerScale,
+                    onValueChange = viewModel::setCornerScale,
+                    valueRange = MIN_CORNER_SCALE..MAX_CORNER_SCALE,
+                    steps = CORNER_SCALE_SLIDER_STEPS,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { stateDescription = valueCaption }
                 )
             }
         }
@@ -407,7 +469,7 @@ fun AppearanceSettingsScreen(
                             color = a.colorFor(darkTheme),
                             selected = a == current,
                             onClick = { if (settings != null) viewModel.setAccentColor(a.storageKey) },
-                            checkColor = DaybookColors.OnSolid,
+                            checkColor = DaybookColors.OnAccent,
                             contentDescription = a.name.lowercase().replaceFirstChar { it.uppercase() }
                         )
                     }
@@ -504,7 +566,7 @@ internal fun SettingsToggleRow(
             enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = LocalAccent.current,
-                checkedThumbColor = DaybookColors.OnSolid
+                checkedThumbColor = DaybookColors.OnAccent
             )
         )
     }
@@ -579,7 +641,9 @@ fun TodayCalendarSettingsScreen(
         Spacer(Modifier.height(Spacing.listGap))
 
         // ---- Greeting (rec 2) — UX overhaul item 8.1: 3 controls collapsed to one. ------
-        SectionHeader("Greeting")
+        // L2 — the Full/Simple/Off segmented control had no indication of what each does;
+        // ships per LD14 as a label subtitle, not help text (D2).
+        SectionHeader("Greeting", subtitle = "How much the Today greeting says.")
         SettingsGroup {
             Column(Modifier.padding(Spacing.cardInner)) {
                 // Full = WARM + time-of-day word; Simple = PLAIN; Off = MINIMAL. Also pins
@@ -634,7 +698,9 @@ fun TodayCalendarSettingsScreen(
             Column(Modifier.padding(Spacing.cardInner)) {
                 SettingsToggleRow(
                     label = "Show streak flames",
-                    subtitle = "Hides the flame pill on Today and the streak figure on Detail stats.",
+                    // L1 — the old subtitle said "Hides…" while the label says "Show…", a direct
+                    // contradiction. Rewritten to describe what the toggle covers instead.
+                    subtitle = "The streak flame on Today and the streak figure on Detail stats. Turn this off to hide them.",
                     checked = showStreaks,
                     onCheckedChange = viewModel::setShowStreaks
                 )

@@ -29,6 +29,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import androidx.core.content.ContextCompat
@@ -277,10 +278,16 @@ class MainActivity : FragmentActivity() {
             val fontChoice by onboardingViewModel.fontChoice.collectAsStateWithLifecycle()
             val reduceMotion by onboardingViewModel.reduceMotion.collectAsStateWithLifecycle()
             val themeMode by onboardingViewModel.themeMode.collectAsStateWithLifecycle()
+            val darkStyle by onboardingViewModel.darkStyle.collectAsStateWithLifecycle()
+            val lightStyle by onboardingViewModel.lightStyle.collectAsStateWithLifecycle()
+            val cornerScale by onboardingViewModel.cornerScale.collectAsStateWithLifecycle()
             DaybookTheme(
                 accent = accent,
                 fontChoice = fontChoice,
                 themeMode = themeMode,
+                darkStyle = darkStyle,
+                lightStyle = lightStyle,
+                cornerScale = cornerScale,
                 reduceMotion = reduceMotion
             ) {
                 val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsStateWithLifecycle()
@@ -413,15 +420,35 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** UX overhaul item 4 — sync theme pick from the SharedPreferences mirror. */
+    /**
+     * UX overhaul item 4 — sync theme pick from the SharedPreferences mirror. UX refinement
+     * round — the pre-inflate splash background must match the chosen *style*, not just
+     * dark/light: resolve the style ground colour from the same mirror and paint the window
+     * background with it (no per-style `windowBackground` resources — that would be
+     * combinatorial). `setTheme` still picks the Dark/Light base theme so the status-bar icon
+     * polarity stays correct.
+     */
     private fun applyWindowTheme() {
-        val dark = when (com.daybook.app.data.ThemeModePrefs.read(this)) {
+        val dark = when (com.daybook.app.data.ThemePrefs.read(this)) {
             "LIGHT" -> false
             "SYSTEM" -> (resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
                 android.content.res.Configuration.UI_MODE_NIGHT_YES
             else -> true
         }
+        val groundBg =
+            if (dark) {
+                com.daybook.app.ui.theme.DarkStyle.fromKeyOrDefault(
+                    com.daybook.app.data.ThemePrefs.readDarkStyle(this)
+                ).ground.bg
+            } else {
+                com.daybook.app.ui.theme.LightStyle.fromKeyOrDefault(
+                    com.daybook.app.data.ThemePrefs.readLightStyle(this)
+                ).ground.bg
+            }
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(groundBg.toArgb())
+        )
         setTheme(if (dark) R.style.Theme_Daybook_Dark else R.style.Theme_Daybook_Light)
     }
 

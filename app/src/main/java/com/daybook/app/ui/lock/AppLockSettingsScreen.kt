@@ -135,7 +135,7 @@ fun AppLockSettingsScreen(
                         },
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = LocalAccent.current,
-                            checkedThumbColor = DaybookColors.OnSolid
+                            checkedThumbColor = DaybookColors.OnAccent
                         )
                     )
                 }

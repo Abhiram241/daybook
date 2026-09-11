@@ -5,14 +5,21 @@ import com.daybook.app.util.safeLaunch
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
+import com.daybook.app.data.FoodMedRepository
+import com.daybook.app.data.HabitRepository
 import com.daybook.app.ui.theme.AccentColor
+import com.daybook.app.ui.theme.DarkStyle
+import com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE
 import com.daybook.app.ui.theme.FontChoice
+import com.daybook.app.ui.theme.LightStyle
 import com.daybook.app.ui.theme.ThemeMode
+import com.daybook.app.ui.theme.clampCornerScale
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -38,41 +45,64 @@ sealed class WizardStep {
 }
 
 /** The screen maps each of these to a cheap static mock built from real primitives. */
-enum class TeachIllustration { TODAY, MAKE_HABIT, INTAKE, SHADE, YOURS }
+enum class TeachIllustration { TODAY, MAKE_HABIT, INTAKE, SHADE, YOURS, STREAKS, PRIVACY }
 
-/** UX overhaul item 1 — the five teaching cards, in order. */
+/**
+ * UX refinement round (LD7) — 7 teaching cards, in order, copy shipped verbatim from
+ * UX_REFINEMENT_PLAN.md §2.2. Was 5 steps; streaks and Journal now each get their own step.
+ */
 val OnboardingTeachSteps: List<WizardStep.Teach> = listOf(
     WizardStep.Teach(
-        "Today is your home base",
-        "Today shows a greeting, how much is left, a week strip, and two progress cards. " +
-            "Tap a past day to log something you missed. The month chevron opens the full calendar.",
+        "Today is home base",
+        "Today opens on a greeting and how many reminders are still open. The strip along the top " +
+            "switches days — tap any past day to log something you missed. Tap the month name for the " +
+            "full calendar. Two cards track today's habit and intake progress.",
         TeachIllustration.TODAY
     ),
     WizardStep.Teach(
-        "Make a habit",
-        "Individual fires a reminder at each time you set. Batch rolls a group of small habits " +
-            "into one daily check-in. Ongoing just counts days, with no reminders. Journal asks " +
-            "you a few questions each time. You pick the days, times, and snooze length.",
+        "Habits, four ways",
+        "Add a habit from the Habits tab. Individual reminds you at each time you set. " +
+            "Batch rolls several small habits into one evening check-in. Ongoing just counts " +
+            "the days since you started, with no reminders. Journal asks you a short set of " +
+            "questions each time. You pick the days, the times, and how long a snooze lasts.",
         TeachIllustration.MAKE_HABIT
     ),
     WizardStep.Teach(
-        "Food, meds, anything else",
-        "Intake reminders ask \"what did you have?\" and save your reply — from the card or " +
-            "straight from the notification. Flag a food as a red flag to build a diary of triggers.",
+        "Intake: what you actually had",
+        "Intake reminders ask \"what did you have?\" and save your reply as the log — type it on the " +
+            "card or straight from the notification. Use it for meals, medication, water, anything you " +
+            "want a record of. Mark a food as a red flag and Daybook builds a diary of possible triggers.",
         TeachIllustration.INTAKE
     ),
     WizardStep.Teach(
-        "Reminders work from the shade",
-        "Skip, snooze, complete, or reply without opening the app. Anything you don't answer " +
-            "keeps nudging until you do. Quiet hours hold reminders back — nothing is dropped.",
+        "Journalling",
+        "A Journal habit turns a check-in into a few written prompts — \"How did you sleep?\", " +
+            "\"What's on your mind?\". Answers are saved per day, and you can read the whole thread back " +
+            "from the habit's detail screen. Edit the questions whenever you like.",
+        TeachIllustration.INTAKE // LD8 — reused, no new JOURNAL mock
+    ),
+    WizardStep.Teach(
+        "Reminders that follow up",
+        "Every reminder lands as a notification with buttons: Complete or Skip for habits; " +
+            "Reply, Skip or Snooze for intake. Anything you don't answer keeps nudging on " +
+            "the snooze interval until you do. Quiet hours hold reminders back and release them " +
+            "later — nothing is dropped.",
         TeachIllustration.SHADE
     ),
     WizardStep.Teach(
-        "Yours, and private",
-        "Pick an accent, a font, and a light or dark theme, and choose which tabs show. " +
-            "Everything lives on your device first and mirrors once you sign in. Add a PIN or " +
-            "biometric lock if you want one.",
-        TeachIllustration.YOURS
+        "Streaks",
+        "Each habit counts consecutive days done. The flame on Today shows your best current run; " +
+            "a habit's detail screen shows its full history. A missed day resets it. Not your thing? " +
+            "Turn the flame off in Settings → Today & calendar.",
+        TeachIllustration.STREAKS
+    ),
+    WizardStep.Teach(
+        "Yours, private, and backed up",
+        "Pick an accent colour, a font, a light or dark look with a background style, and choose " +
+            "which tabs show — all in Settings → Appearance. Everything is stored on your device " +
+            "first. Signing in mirrors an encrypted copy to your account, so a new phone picks up " +
+            "where you left off. Add a PIN or fingerprint lock in Settings → Privacy & lock.",
+        TeachIllustration.PRIVACY
     )
 )
 
@@ -112,9 +142,17 @@ fun deriveOnboardingName(displayName: String?, restoredUserName: String?): Strin
 fun shouldSkipCompleteOnboarding(isLoading: Boolean, completed: Boolean?): Boolean =
     isLoading || completed == true
 
+/**
+ * D4 / LD9 — true when the account already has habit or intake data, in which case the closing
+ * onboarding step must not offer "Create your first habit". Pure — see `HasExistingDataTest`.
+ */
+fun hasExistingData(habitCount: Int, intakeCount: Int): Boolean = habitCount + intakeCount > 0
+
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
-    private val settingsRepository: AppSettingsRepository
+    private val settingsRepository: AppSettingsRepository,
+    private val habitRepository: HabitRepository,
+    private val foodMedRepository: FoodMedRepository
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -231,6 +269,35 @@ class OnboardingViewModel @Inject constructor(
             ThemeMode.fromKeyOrDefault(settingsRepository.readThemeModeMirror())
         )
 
+    /**
+     * UX refinement round — the dark/light background style + corner-radius scale, fed to
+     * [com.daybook.app.ui.theme.DaybookTheme]. Same zero-flash shape as [themeMode]: seeded
+     * `Eagerly` from the SharedPreferences mirror.
+     */
+    val darkStyle: StateFlow<DarkStyle> = settingsRepository.observeSettings()
+        .map { DarkStyle.fromKeyOrDefault(it.darkStyle) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            DarkStyle.fromKeyOrDefault(settingsRepository.readDarkStyleMirror())
+        )
+
+    val lightStyle: StateFlow<LightStyle> = settingsRepository.observeSettings()
+        .map { LightStyle.fromKeyOrDefault(it.lightStyle) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            LightStyle.fromKeyOrDefault(settingsRepository.readLightStyleMirror())
+        )
+
+    val cornerScale: StateFlow<Float> = settingsRepository.observeSettings()
+        .map { clampCornerScale(it.cornerScale) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            clampCornerScale(settingsRepository.readCornerScaleMirror())
+        )
+
     /** rec 7 — the ordered CSV of visible bottom-nav route ids. */
     val navTabs: StateFlow<String> = settingsRepository.observeSettings()
         .map { it.navTabs }
@@ -240,6 +307,20 @@ class OnboardingViewModel @Inject constructor(
     val defaultLandingTab: StateFlow<String> = settingsRepository.observeSettings()
         .map { it.defaultLandingTab }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "home")
+
+    /**
+     * D4 / LD9 — whether the account already has habit or intake data, so the closing
+     * onboarding step can hide "Create your first habit" for a returning user whose cloud
+     * bootstrap has restored their rows. `null` = the two row-count Flows have not emitted yet
+     * — never seeded `false`, so the link can never flash for a returning user while the
+     * bootstrap is still in flight (LD9).
+     */
+    val hasExistingData: StateFlow<Boolean?> =
+        combine(
+            habitRepository.observeAllHabits(),
+            foodMedRepository.observeAllTasks()
+        ) { h, i -> hasExistingData(h.size, i.size) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     init {
         checkOnboardingStatus()

@@ -127,7 +127,9 @@ fun DaybookTextField(
             contentAlignment = Alignment.CenterStart
         ) {
             if (value.isEmpty() && placeholder != null) {
-                Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextFaint)
+                // finding 12 / LD14 — placeholder ships to TextMuted (3.95:1 dark / 3.10:1
+                // light was under AA). Still clearly below TextPrimary so "empty" still reads.
+                Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextMuted)
             }
             BasicTextField(
                 value = value,
@@ -184,7 +186,7 @@ fun DayOfWeekSelector(
                 Text(
                     day.name.take(1),
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (isSel) DaybookColors.OnSolid else DaybookColors.TextMuted
+                    color = if (isSel) DaybookColors.OnAccent else DaybookColors.TextMuted
                 )
             }
         }

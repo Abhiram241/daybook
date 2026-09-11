@@ -106,13 +106,13 @@ fun Avatar(
                     Icon(
                         Icons.Filled.Person,
                         contentDescription = null,
-                        tint = DaybookColors.OnSolid,
+                        tint = DaybookColors.OnAccent,
                         modifier = Modifier.size(size * 0.52f)
                     )
                 } else {
                     Text(
                         initials,
-                        color = DaybookColors.OnSolid,
+                        color = DaybookColors.OnAccent,
                         // v0.5.3 Phase 7 (#39) — the monogram style is a size-parametrised
                         // TextStyle derived straight from the theme's titleLarge slot. The old
                         // `LocalTextStyle.current.merge(...)` added nothing here (no ProvideTextStyle

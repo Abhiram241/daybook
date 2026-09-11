@@ -47,6 +47,8 @@ fun OnboardingIllustration(kind: TeachIllustration) {
         TeachIllustration.INTAKE -> IntakeMock()
         TeachIllustration.SHADE -> ShadeMock()
         TeachIllustration.YOURS -> YoursMock()
+        TeachIllustration.STREAKS -> StreaksMock()
+        TeachIllustration.PRIVACY -> PrivacyMock()
     }
 }
 
@@ -206,6 +208,79 @@ private fun ShadeMock() {
                 ) {
                     Text(label, style = DaybookText.NavLabel, color = DaybookColors.TextMuted)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * LD8 — a flame glyph + a run count, and a faint 7-dot week track (5 filled with the accent,
+ * 2 empty). ~120dp tall.
+ */
+@Composable
+private fun StreaksMock() {
+    MockFrame {
+        val accent = LocalAccent.current
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconTile(icon = DaybookIcons.Flame, tint = CardTints.Butter, size = 40.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("7-day streak", style = DaybookText.CardTitle, color = DaybookColors.TextPrimary)
+                Spacer(Modifier.height(6.dp))
+                Bar(0.4f, 7, DaybookColors.TextMuted)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(7) { i ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(if (i < 5) accent else DaybookColors.TextFaint.copy(alpha = 0.3f))
+                        .border(1.dp, DaybookColors.Hairline, CircleShape)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * LD8 — three stacked mini-rows: an accent swatch strip, an "A" type sample, a lock glyph.
+ */
+@Composable
+private fun PrivacyMock() {
+    MockFrame {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CardTints.ALL.take(5).forEach { t ->
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(t.accent)
+                        .border(1.dp, DaybookColors.Hairline, CircleShape)
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Aa", style = DaybookText.ScreenTitle, color = DaybookColors.TextPrimary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Bar(0.7f, 8, DaybookColors.TextMuted)
+                Spacer(Modifier.height(6.dp))
+                Bar(0.5f, 7, DaybookColors.TextFaint)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(icon = DaybookIcons.Lock, tint = CardTints.SlateBlue, size = 36.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Bar(0.55f, 9, DaybookColors.TextPrimary)
+                Spacer(Modifier.height(6.dp))
+                Bar(0.35f, 7, DaybookColors.TextMuted)
             }
         }
     }

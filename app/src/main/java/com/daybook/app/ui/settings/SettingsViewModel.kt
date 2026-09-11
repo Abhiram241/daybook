@@ -12,8 +12,11 @@ import com.daybook.app.data.ProfilePhotoStore
 import com.daybook.app.data.model.AppSettings
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.data.sync.HydrateResult
+import com.daybook.app.ui.theme.DarkStyle
 import com.daybook.app.ui.theme.FontChoice
+import com.daybook.app.ui.theme.LightStyle
 import com.daybook.app.ui.theme.ThemeMode
+import com.daybook.app.ui.theme.clampCornerScale
 import com.daybook.app.util.CrashHandler
 import com.daybook.app.util.JsonUtils
 import com.daybook.app.util.StorageUtils
@@ -194,6 +197,36 @@ class SettingsViewModel @Inject constructor(
 
     fun setThemeMode(mode: ThemeMode) {
         safeLaunch { settingsRepository.setThemeMode(mode.storageKey) }
+    }
+
+    // UX refinement round — Item 3 (dark/light style pickers) + Item 4 (corner-scale slider).
+    // Same reactive shape as themeMode: the whole app restyles at once because MainActivity
+    // observes the same underlying settings stream (via OnboardingViewModel).
+    val darkStyle: StateFlow<DarkStyle> = settingsRepository.observeSettings()
+        .map { DarkStyle.fromKeyOrDefault(it.darkStyle) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DarkStyle.DEFAULT)
+
+    val lightStyle: StateFlow<LightStyle> = settingsRepository.observeSettings()
+        .map { LightStyle.fromKeyOrDefault(it.lightStyle) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LightStyle.DEFAULT)
+
+    val cornerScale: StateFlow<Float> = settingsRepository.observeSettings()
+        .map { clampCornerScale(it.cornerScale) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE)
+
+    fun setDarkStyle(style: DarkStyle) {
+        safeLaunch { settingsRepository.setDarkStyle(style.storageKey) }
+    }
+
+    fun setLightStyle(style: LightStyle) {
+        safeLaunch { settingsRepository.setLightStyle(style.storageKey) }
+    }
+
+    /** LD12 — drops a write whose clamped value already matches the current one (no-op detent). */
+    fun setCornerScale(v: Float) {
+        val c = clampCornerScale(v)
+        if (c == cornerScale.value) return
+        safeLaunch { settingsRepository.setCornerScale(c) }
     }
 
     // ---------------------------------------------------------------- Customization round (DB v16)

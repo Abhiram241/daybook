@@ -116,4 +116,14 @@ interface AppSettingsDao {
     // DB v20 (UX overhaul item 4) — app theme mode ("DARK"/"LIGHT"/"SYSTEM").
     @Query("UPDATE app_settings SET theme_mode = :v WHERE id = 1")
     suspend fun updateThemeMode(v: String)
+
+    // DB v21 (UX refinement round) — dark/light background style + corner-radius scale.
+    @Query("UPDATE app_settings SET dark_style = :v WHERE id = 1")
+    suspend fun updateDarkStyle(v: String)
+
+    @Query("UPDATE app_settings SET light_style = :v WHERE id = 1")
+    suspend fun updateLightStyle(v: String)
+
+    @Query("UPDATE app_settings SET corner_scale = :v WHERE id = 1")
+    suspend fun updateCornerScale(v: Float)
 }

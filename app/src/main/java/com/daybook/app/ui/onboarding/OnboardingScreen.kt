@@ -42,6 +42,7 @@ fun OnboardingScreen(
     val currentStep by viewModel.currentStep.collectAsStateWithLifecycle()
     val nameInput by viewModel.nameInput.collectAsStateWithLifecycle()
     val reviewMode by viewModel.reviewMode.collectAsStateWithLifecycle()
+    val hasExistingData by viewModel.hasExistingData.collectAsStateWithLifecycle()
 
     val step = steps.getOrNull(currentStep) ?: return
     val isLast = isLastWizardStep(currentStep, steps.size)
@@ -83,6 +84,7 @@ fun OnboardingScreen(
                 )
                 WizardStep.Ready -> ReadyStep(
                     reviewMode = reviewMode,
+                    hasExistingData = hasExistingData,
                     onCreateFirstHabit = {
                         viewModel.next()          // completes onboarding (no-op in review mode)
                         onOpenAddHabit()
@@ -147,6 +149,11 @@ private fun NameAskStep(name: String, onNameChange: (String) -> Unit) {
             label = "Your name",
             placeholder = "e.g. Alex"
         )
+        Text(
+            "Used in the Today greeting. Change it any time in Settings.",
+            style = DaybookText.CardSubtitle,
+            color = DaybookColors.TextMuted
+        )
     }
 }
 
@@ -181,23 +188,23 @@ private fun PermissionPrimerStep(
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.lg)) {
         Text("A few permissions", style = DaybookText.ScreenTitle, color = DaybookColors.TextPrimary)
         Text(
-            "You can allow these now or later — Daybook will ask again if it needs to.",
+            "Allow these now or later — Daybook asks again if it needs to.",
             style = MaterialTheme.typography.bodyLarge,
             color = DaybookColors.TextMuted
         )
         PermissionPrimerRow(
             title = "Notifications",
-            body = "So reminders can actually alert you.",
+            body = "Without this, reminders are silent. They still appear in the app, but nothing pops up on your phone.",
             onAllow = onAllowNotifications
         )
         PermissionPrimerRow(
             title = "Exact alarms",
-            body = "So a reminder fires at the minute you set, not whenever the system batches it.",
+            body = "Lets a reminder fire at the exact minute you set. Without it, Android can delay it by up to about 15 minutes to save power.",
             onAllow = onAllowExactAlarms
         )
         PermissionPrimerRow(
             title = "Unrestricted battery",
-            body = "So the phone doesn't kill Daybook's 7-day reminder window in the background.",
+            body = "Stops the system freezing Daybook in the background, which would silence reminders after a few days. One-time setting.",
             onAllow = onAllowBattery
         )
     }
@@ -214,21 +221,38 @@ private fun PermissionPrimerRow(title: String, body: String, onAllow: () -> Unit
     }
 }
 
+/**
+ * D4 / LD9 — three copy variants driven by [reviewMode] / [hasExistingData]:
+ *  - `reviewMode` — "That's the tour" (unchanged).
+ *  - `hasExistingData == true` — "Welcome back", no link (an account with restored data).
+ *  - `hasExistingData == false` or still `null` — the fresh-install "You're set" copy; the link
+ *    itself only renders once `hasExistingData == false` is confirmed. While `null` the link's
+ *    height is still reserved (a fixed-height Box) so nothing shifts when it resolves.
+ */
 @Composable
-private fun ReadyStep(reviewMode: Boolean, onCreateFirstHabit: () -> Unit) {
+private fun ReadyStep(reviewMode: Boolean, hasExistingData: Boolean?, onCreateFirstHabit: () -> Unit) {
+    val headline = when {
+        reviewMode -> "That's the tour"
+        hasExistingData == true -> "Welcome back"
+        else -> "You're set"
+    }
+    val body = when {
+        reviewMode -> "Tap Done to head back to settings."
+        hasExistingData == true -> "Your habits and reminders are already here — Today has the details."
+        else -> "Make your first habit now, or look around first."
+    }
+    val showLink = !reviewMode && hasExistingData == false
+
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
-        BigHeadline(if (reviewMode) "That's the tour" else "You're all set", style = DaybookText.Hero)
-        Text(
-            if (reviewMode)
-                "Tap Done to head back to settings."
-            else
-                "Add your first habit or reminder whenever you're ready — or just look around first.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = DaybookColors.TextMuted
-        )
+        BigHeadline(headline, style = DaybookText.Hero)
+        Text(body, style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextMuted)
         if (!reviewMode) {
             Spacer(Modifier.height(Spacing.sm))
-            TextLink("Create your first habit", onClick = onCreateFirstHabit)
+            // Fixed-height container so the link's arrival (once hasExistingData resolves to
+            // false) never shifts the layout — LD9.
+            Box(Modifier.heightIn(min = 44.dp)) {
+                if (showLink) TextLink("Create your first habit", onClick = onCreateFirstHabit)
+            }
         }
     }
 }

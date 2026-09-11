@@ -46,46 +46,28 @@ data class DaybookColorScheme(
     val onSolid: Color
 )
 
-/** The exact pre-overhaul dark constants — byte-identical. */
-val DaybookColorsDark = DaybookColorScheme(
-    bg = Color(0xFF0B0D0F),
-    surface = Color(0xFF16181B),
-    surfaceElevated = Color(0xFF1E2124),
-    outline = Color(0xFF2A2D31),
-    hairline = Color(0x14FFFFFF), // white 8%
-    border = Color(0x14FFFFFF),
-    textPrimary = Color(0xFFF2F3F5),
-    textMuted = Color(0xFF9AA0A6),
-    textFaint = Color(0xFF6B7178),
-    success = Color(0xFF4ADE80),
-    warning = Color(0xFFFACC15),
-    danger = Color(0xFFF87171),
-    onSolid = Color(0xFF0B0D0F) // text/icon on a light (#F2F3F5) solid control
-)
-
-/** Calm "paper" light palette — new in the UX overhaul. Tuned on device by the user. */
-val DaybookColorsLight = DaybookColorScheme(
-    bg = Color(0xFFFBFBF9),
-    surface = Color(0xFFFFFFFF),
-    surfaceElevated = Color(0xFFF2F2EF),
-    outline = Color(0xFFE2E2DE),
-    hairline = Color(0x14000000), // black 8%
-    border = Color(0x14000000),
-    textPrimary = Color(0xFF1B1D20),
-    textMuted = Color(0xFF5B6068),
-    textFaint = Color(0xFF8A9099),
-    success = Color(0xFF15803D),
-    warning = Color(0xFFB45309),
-    danger = Color(0xFFDC2626),
-    onSolid = Color(0xFFFFFFFF) // text/icon on a filled accent control
-)
+/**
+ * The app-wide default schemes — now DERIVED from the default style ([DarkStyle.CHARCOAL] /
+ * [LightStyle.PAPER]) so there is exactly one source of truth for "today's look" (UX
+ * refinement round, Item 3). Byte-identical to the pre-refinement literal constants — guarded
+ * by `DarkStyleTest` / `LightStyleTest` (D8).
+ */
+val DaybookColorsDark = darkSchemeFor(DarkStyle.CHARCOAL)
+val DaybookColorsLight = lightSchemeFor(LightStyle.PAPER)
 
 /** Provided by [DaybookTheme]; defaults to dark so previews / tests keep today's look. */
 val LocalDaybookColors = staticCompositionLocalOf { DaybookColorsDark }
 
-/** True when the active [DaybookColorScheme] is the dark one. */
+/**
+ * Whether the active theme is dark. Provided by [DaybookTheme]. UX refinement round: a
+ * non-Charcoal dark style is a *different* [DaybookColorScheme] object, so this can no longer be
+ * a referential-equality check against [DaybookColorsDark] — that only ever matched Charcoal.
+ */
+val LocalIsDark = staticCompositionLocalOf { true }
+
+/** True when the active [DaybookColorScheme] is a dark style. */
 val isDaybookDarkThemeActive: Boolean
-    @Composable get() = LocalDaybookColors.current === DaybookColorsDark
+    @Composable get() = LocalIsDark.current
 
 /**
  * `@Composable`-getter shim over [LocalDaybookColors]. Every member resolves per theme at read
@@ -106,6 +88,15 @@ object DaybookColors {
     val Warning: Color @Composable get() = LocalDaybookColors.current.warning
     val Danger: Color @Composable get() = LocalDaybookColors.current.danger
     val OnSolid: Color @Composable get() = LocalDaybookColors.current.onSolid
+
+    /**
+     * LD13 — the higher-contrast ink for content sitting ON the current accent fill (selected
+     * segmented label, chip label, primary-button label, etc). Computed per-accent by
+     * [onAccentInk] and provided by [DaybookTheme] via [LocalOnAccent]. Dark mode resolves to
+     * the same near-black as [OnSolid] for every accent (byte-identical to today); in light mode
+     * this fixes the 3 accents (Mint / Amber / Coral) that fail AA against [OnSolid]'s fixed white.
+     */
+    val OnAccent: Color @Composable get() = LocalOnAccent.current
 }
 
 @Immutable
@@ -193,7 +184,7 @@ object CardTintsLight {
  */
 object CardTints {
     private val light: Boolean
-        @Composable get() = LocalDaybookColors.current !== DaybookColorsDark
+        @Composable get() = !LocalIsDark.current
 
     val Lavender: CardTint @Composable get() = if (light) CardTintsLight.Lavender else CardTintsDark.Lavender
     val Peach: CardTint @Composable get() = if (light) CardTintsLight.Peach else CardTintsDark.Peach
@@ -256,19 +247,22 @@ object Spacing {
  * distinct surface (cards, fields, sheets) and dropped for decoration. Circles stay
  * circular for genuinely round elements (icon buttons, avatars, dots, count badges).
  */
+// UX refinement round — Item 4: `AppShapes` becomes a `@Composable`-getter shim over
+// [LocalDaybookShapes] (identical trick to `DaybookColors`), so the ~76 existing call sites
+// compile unchanged. The default scale (1.0) reproduces every dp value below exactly (D5).
 object AppShapes {
-    val card = RoundedCornerShape(14.dp)      // SoftCard / FormGroup / SettingsGroup / progress cards
-    val button = RoundedCornerShape(12.dp)    // PrimaryButton / GhostButton — no longer pills
-    val field = RoundedCornerShape(10.dp)     // text fields
-    val pill = RoundedCornerShape(10.dp)      // chips, stat pills, small inline actions
-    val tile = RoundedCornerShape(12.dp)      // small icon tiles / menu-row icon squares
-    val sheet = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-    val nav = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
-    val dialog = RoundedCornerShape(16.dp)
+    val card: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.card
+    val button: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.button
+    val field: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.field
+    val pill: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.pill
+    val tile: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.tile
+    val sheet: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.sheet
+    val nav: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.nav
+    val dialog: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.dialog
 
-    // v0.5.3 Phase 0 (§3.4).
-    val segmented = RoundedCornerShape(50)                 // SegmentedControl track/pill
-    val navPill = RoundedCornerShape(28.dp)                // Detail floating nav footprint
+    // v0.5.3 Phase 0 (§3.4). Fixed at every corner scale (LD11).
+    val segmented: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.segmented
+    val navPill: RoundedCornerShape @Composable get() = LocalDaybookShapes.current.navPill
 }
 
 object Motion {

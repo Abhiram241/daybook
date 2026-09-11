@@ -929,6 +929,63 @@ class MigrationTest {
         )
     }
 
+    // ------------------------------------------------------------- v20 -> v21 (UX refinement round)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate20To21_addsDarkLightStyleAndCornerScaleColumns() {
+        helper.createDatabase(TEST_DB, 20).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 21, true, MIGRATION_20_21)
+        db.query("SELECT * FROM app_settings").use {
+            assertTrue(it.columnNames.contains("dark_style"))
+            assertTrue(it.columnNames.contains("light_style"))
+            assertTrue(it.columnNames.contains("corner_scale"))
+        }
+    }
+
+    /** The load-bearing one: a pre-existing app_settings row must come out of the migration with
+     *  dark_style = 'CHARCOAL', light_style = 'PAPER', corner_scale = 1.0, and every other
+     *  column byte-for-byte intact. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate20To21_preservesRowsAndDefaultsToTodaysLook() {
+        helper.createDatabase(TEST_DB, 20).apply {
+            execSQL(
+                "INSERT INTO app_settings (id,default_snooze_minutes,onboarding_completed,user_name," +
+                    "accent_color,notif_permission_asked,profile_photo_path,font_choice,habit_checkin_time," +
+                    "habits_accent_color,intake_accent_color,check_for_updates_enabled,theme_mode) " +
+                    "VALUES (1,15,1,'Alex','CORAL',1,'/tmp/p.jpg','LITERATA','08:30','CORAL','CORAL',0,'LIGHT')"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 21, true, MIGRATION_20_21)
+        db.query(
+            "SELECT dark_style, light_style, corner_scale, theme_mode, user_name, accent_color " +
+                "FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("CHARCOAL", c.getString(0))
+            assertEquals("PAPER", c.getString(1))
+            assertEquals(1.0, c.getDouble(2), 0.0001)
+            assertEquals("LIGHT", c.getString(3))
+            assertEquals("Alex", c.getString(4))
+            assertEquals("CORAL", c.getString(5))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To21() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 21, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21
+        )
+    }
+
     @Test
     @Throws(IOException::class)
     fun migrateAll_3To8() {
@@ -957,7 +1014,7 @@ class MigrationTest {
                 MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                 MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
                 MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20
+                MIGRATION_19_20, MIGRATION_20_21
             )
             .fallbackToDestructiveMigrationFrom(1)
             .build()

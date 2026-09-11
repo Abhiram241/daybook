@@ -255,7 +255,9 @@ private fun RadioDot(selected: Boolean, accent: Color) {
         Modifier
             .size(20.dp)
             .clip(CircleShape)
-            .border(2.dp, if (selected) accent else DaybookColors.TextFaint, CircleShape),
+            // finding 8 — unchecked ring was TextFaint (a text-contrast token on a non-text
+            // control); Outline clears the >=3:1 floor a control needs on both grounds.
+            .border(2.dp, if (selected) accent else DaybookColors.Outline, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         if (selected) {
@@ -270,7 +272,8 @@ private fun FacetRow(label: String, count: Int?, checked: Boolean, accent: Color
         Icon(
             imageVector = if (checked) DaybookIcons.CheckBox else DaybookIcons.CheckBoxBlank,
             contentDescription = null,
-            tint = if (checked) accent else DaybookColors.TextFaint,
+            // finding 8 — unchecked facet tick was TextFaint, almost invisible against the sheet.
+            tint = if (checked) accent else DaybookColors.TextMuted,
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(12.dp))
@@ -316,7 +319,7 @@ private fun ArchivedRow(label: String, checked: Boolean, accent: Color, onToggle
             onCheckedChange = { onToggle() },
             colors = SwitchDefaults.colors(
                 checkedTrackColor = accent,
-                checkedThumbColor = DaybookColors.OnSolid,
+                checkedThumbColor = DaybookColors.OnAccent,
                 uncheckedTrackColor = DaybookColors.SurfaceElevated,
                 uncheckedBorderColor = DaybookColors.Hairline,
                 uncheckedThumbColor = DaybookColors.TextMuted

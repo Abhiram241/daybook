@@ -63,7 +63,7 @@ fun AboutSettingsScreen(
             Text(
                 "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                 style = DaybookText.Metadata,
-                color = DaybookColors.TextFaint
+                color = DaybookColors.TextMuted // finding 11
             )
         }
 

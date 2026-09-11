@@ -36,7 +36,6 @@ import com.daybook.app.ui.theme.Spacing
 @Immutable
 data class NavItemSpec(val route: String, val icon: ImageVector, val label: String)
 
-private val NavShape = AppShapes.nav
 internal val NavContentHeight = 62.dp
 
 @Composable
@@ -46,6 +45,7 @@ fun FloatingPillNav(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val NavShape = AppShapes.nav
     val accent = LocalAccent.current
     // Hoisted: DaybookColors.* are @Composable getters and can't be read inside drawBehind's
     // DrawScope lambda.

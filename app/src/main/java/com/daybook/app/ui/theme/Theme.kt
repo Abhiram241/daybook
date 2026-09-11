@@ -1,16 +1,13 @@
 package com.daybook.app.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 
 /**
  * UX overhaul item 4 — where the app's theme comes from. `DARK` is the default for every
@@ -82,27 +79,21 @@ private val LightScheme = lightColorScheme(
     surfaceTint = Color.Transparent
 )
 
-// v0.5.3 Phase 7 (#36) — one shape system. extraSmall/small/medium/large map 1:1 onto
-// AppShapes.field / button / card / dialog. extraLarge stays an all-corners RoundedCornerShape(20.dp)
-// for full-bleed M3 dialogs (DatePicker / TimePicker).
-private val DaybookShapes = Shapes(
-    extraSmall = AppShapes.field,
-    small = AppShapes.button,
-    medium = AppShapes.card,
-    large = AppShapes.dialog,
-    extraLarge = RoundedCornerShape(20.dp)
-)
-
 /**
  * [accent] is the user-selectable highlight colour (see [AccentColor]); [fontChoice] swaps the
  * app-wide typeface (see [FontChoice] / [daybookTypography]); [themeMode] picks dark / light /
- * follow-system (UX overhaul item 4).
+ * follow-system (UX overhaul item 4). [darkStyle] / [lightStyle] pick the background style within
+ * that mode, and [cornerScale] is the global corner-radius multiplier (UX refinement round,
+ * Items 3 & 4).
  */
 @Composable
 fun DaybookTheme(
     accent: AccentColor = AccentColor.DEFAULT,
     fontChoice: FontChoice = FontChoice.DEFAULT,
     themeMode: ThemeMode = ThemeMode.DEFAULT,
+    darkStyle: DarkStyle = DarkStyle.DEFAULT,
+    lightStyle: LightStyle = LightStyle.DEFAULT,
+    cornerScale: Float = DEFAULT_CORNER_SCALE,
     // rec 4 — the user preference; OR-ed here with the OS ANIMATOR_DURATION_SCALE == 0 setting.
     reduceMotion: Boolean = false,
     content: @Composable () -> Unit
@@ -125,28 +116,49 @@ fun DaybookTheme(
         ThemeMode.LIGHT -> false
         ThemeMode.SYSTEM -> systemDark
     }
-    val colors = if (dark) DaybookColorsDark else DaybookColorsLight
+    val colors = remember(dark, darkStyle, lightStyle) {
+        if (dark) darkSchemeFor(darkStyle) else lightSchemeFor(lightStyle)
+    }
     val accentColor = accent.colorFor(dark)
+    val onAccent = remember(accentColor) { onAccentInk(accentColor) } // LD13
+
     // v0.5.3 Phase 0 (§3.12 / backlog #16) — key the scheme on theme + accent so every default M3
     // control (Switch/RadioButton/Checkbox/CircularProgressIndicator/text-selection handles)
-    // picks up the user accent instead of near-white `TextPrimary`.
-    val scheme = remember(themeMode, accent, dark) {
+    // picks up the user accent instead of near-white `TextPrimary`. UX refinement round: also
+    // re-key on darkStyle/lightStyle and copy the resolved ground roles across, so a non-default
+    // style is fully applied to M3 too (not just the fixed Charcoal/Paper constants).
+    val scheme = remember(dark, accent, darkStyle, lightStyle) {
         (if (dark) DarkScheme else LightScheme).copy(
             primary = accentColor,
-            onPrimary = colors.onSolid,
+            onPrimary = onAccent,
             secondary = accentColor,
-            tertiary = accentColor
+            tertiary = accentColor,
+            background = colors.bg,
+            onBackground = colors.textPrimary,
+            surface = colors.surface,
+            onSurface = colors.textPrimary,
+            surfaceVariant = colors.surfaceElevated,
+            onSurfaceVariant = colors.textMuted,
+            outline = colors.outline,
+            outlineVariant = colors.outline,
+            scrim = colors.bg
         )
     }
+    val appShapes = remember(cornerScale) { scaledAppShapes(cornerScale) }
+    val m3Shapes = remember(cornerScale) { scaledM3Shapes(cornerScale) }
+
     CompositionLocalProvider(
         LocalDaybookColors provides colors,
+        LocalIsDark provides dark,
         LocalAccent provides accentColor,
+        LocalOnAccent provides onAccent,
+        LocalDaybookShapes provides appShapes,
         LocalReduceMotion provides reduce
     ) {
         MaterialTheme(
             colorScheme = scheme,
             typography = typography,
-            shapes = DaybookShapes,
+            shapes = m3Shapes,
             content = content
         )
     }

@@ -265,7 +265,19 @@ data class AppSettings(
     // column since v16. Default 'DARK' byte-matches MIGRATION_19_20's SQL DEFAULT so every
     // existing and fresh install stays dark until the user opts in. Plain String, no converter
     // (mirrors font_choice). Appended last, never reordered.
-    @ColumnInfo(name = "theme_mode", defaultValue = "DARK") val themeMode: String = com.daybook.app.ui.theme.ThemeMode.DEFAULT.storageKey
+    @ColumnInfo(name = "theme_mode", defaultValue = "DARK") val themeMode: String = com.daybook.app.ui.theme.ThemeMode.DEFAULT.storageKey,
+
+    // DB v21 (UX refinement round). Three additive columns — dark/light background style +
+    // the global corner-radius multiplier. Device-local: NOT synced, NOT in BackupModel, NOT
+    // in ContentHash — same treatment as every app_settings column since v16. Each default
+    // byte-matches MIGRATION_20_21's SQL DEFAULT so every existing row reads today's exact
+    // look until the user opts in. Appended last, never reordered.
+    @ColumnInfo(name = "dark_style", defaultValue = "CHARCOAL")
+    val darkStyle: String = com.daybook.app.ui.theme.DarkStyle.DEFAULT.storageKey,
+    @ColumnInfo(name = "light_style", defaultValue = "PAPER")
+    val lightStyle: String = com.daybook.app.ui.theme.LightStyle.DEFAULT.storageKey,
+    @ColumnInfo(name = "corner_scale", defaultValue = "1.0")
+    val cornerScale: Float = com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE
 )
 
 /**

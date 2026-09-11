@@ -430,9 +430,12 @@ private fun DayCell(
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
                 ),
                 color = when {
-                    selected -> DaybookColors.OnSolid
-                    dimmed -> DaybookColors.TextFaint
-                    isFuture -> DaybookColors.TextFaint
+                    selected -> DaybookColors.OnAccent
+                    // finding 7 — future/dimmed day numbers were TextFaint (3.95:1 dark /
+                    // 3.10:1 light) at titleMedium ~16sp SemiBold, barely legible. TextMuted
+                    // still clearly de-emphasises them vs TextPrimary but stays readable.
+                    dimmed -> DaybookColors.TextMuted
+                    isFuture -> DaybookColors.TextMuted
                     else -> DaybookColors.TextPrimary
                 }
             )

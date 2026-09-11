@@ -48,8 +48,6 @@ import com.daybook.app.ui.theme.LocalReduceMotion
 import com.daybook.app.ui.theme.Motion
 import com.daybook.app.ui.theme.Spacing
 
-private val CardShape = AppShapes.card
-
 /** The one card primitive. */
 @Composable
 fun SoftCard(
@@ -63,6 +61,7 @@ fun SoftCard(
     borderColor: Color = DaybookColors.Border,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val CardShape = AppShapes.card
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     // rec 4 — swap the spec feeding the scale for snap() (the graphicsLayer itself is untouched;
@@ -137,7 +136,7 @@ fun CircleIconButton(
         // buttons on a card) reads as a glaring, "neon" full-accent circle at that smaller size —
         // Tonal gives the same accent identity as a soft accent-tinted fill instead, matching the
         // Success/Warn/Danger pattern already used everywhere else in this file.
-        CircleStyle.Solid -> Triple(accent, DaybookColors.OnSolid, Color.Transparent)
+        CircleStyle.Solid -> Triple(accent, DaybookColors.OnAccent, Color.Transparent)
         CircleStyle.Tonal -> Triple(accent.copy(alpha = 0.16f), accent, Color.Transparent)
         CircleStyle.Success -> Triple(DaybookColors.Success.copy(alpha = 0.16f), DaybookColors.Success, Color.Transparent)
         CircleStyle.Warn -> Triple(DaybookColors.Warning.copy(alpha = 0.16f), DaybookColors.Warning, Color.Transparent)
@@ -149,8 +148,11 @@ fun CircleIconButton(
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .size(size)
             .clip(CircleShape)
-            .background(if (enabled) bg else DaybookColors.SurfaceElevated)
-            .border(1.dp, border, CircleShape)
+            // finding 5 — disabled bg used to be forced to the same SurfaceElevated fill as the
+            // enabled Ghost style; only the icon tint distinguished "off" from "ghost". A dimmer
+            // fill + an Outline border (>=3:1, a non-text control) makes "off" read as off.
+            .background(if (enabled) bg else DaybookColors.SurfaceElevated.copy(alpha = 0.5f))
+            .border(1.dp, if (enabled) border else DaybookColors.Outline, CircleShape)
             .clickableImpl(interaction) { if (enabled) onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -206,7 +208,9 @@ fun DaybookChip(
     val bg by animateColorAsState(
         if (selected) accent else DaybookColors.SurfaceElevated, label = "chipBg"
     )
-    val fg = if (selected) DaybookColors.OnSolid else DaybookColors.TextMuted
+    // finding 6 — unselected label was TextMuted (6.13:1 on SurfaceElevated, reads as
+    // disabled with thin Literata); selected label uses OnAccent (LD13) not the fixed OnSolid.
+    val fg = if (selected) DaybookColors.OnAccent else DaybookColors.TextPrimary
     Row(
         modifier = modifier
             .heightIn(min = height)
@@ -248,7 +252,7 @@ fun DaybookChip(
                 modifier = Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(if (selected) DaybookColors.OnSolid.copy(alpha = 0.12f) else DaybookColors.TextMuted.copy(alpha = 0.18f)),
+                    .background(if (selected) DaybookColors.OnAccent.copy(alpha = 0.12f) else DaybookColors.TextMuted.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center
             ) {
                 Text("$count", style = MaterialTheme.typography.labelSmall, color = fg)
@@ -455,7 +459,7 @@ fun Swatch(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     label: String? = null,
-    checkColor: Color = DaybookColors.OnSolid,
+    checkColor: Color = DaybookColors.OnAccent,
     // rec 4 (X5) — the colour's name, so TalkBack doesn't announce an unlabeled square.
     contentDescription: String? = null
 ) {
@@ -548,7 +552,7 @@ fun PrimaryButton(
         contentAlignment = Alignment.Center
     ) {
         if (loading) {
-            CircularProgressIndicator(strokeWidth = 2.dp, color = DaybookColors.OnSolid, modifier = Modifier.size(18.dp))
+            CircularProgressIndicator(strokeWidth = 2.dp, color = DaybookColors.OnAccent, modifier = Modifier.size(18.dp))
         } else {
             Row(
                 modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
@@ -562,7 +566,7 @@ fun PrimaryButton(
                 Text(
                     text,
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (enabled) DaybookColors.OnSolid else DaybookColors.TextFaint,
+                    color = if (enabled) DaybookColors.OnAccent else DaybookColors.TextFaint,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
@@ -596,7 +600,18 @@ fun GhostButton(
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .heightIn(min = 50.dp)
             .clip(AppShapes.button)
-            .border(BorderStroke(1.5.dp, DaybookColors.Hairline), AppShapes.button)
+            // finding 4 — disabled used to keep the invisible white-8% Hairline border with no
+            // fill, so a disabled Ghost button was nearly undetectable (e.g. QuietTimeRow in
+            // Settings). Disabled now gets a visible Outline border plus a faint fill so the
+            // shape still reads as a control.
+            .then(
+                if (enabled) Modifier
+                else Modifier.background(DaybookColors.SurfaceElevated.copy(alpha = 0.4f))
+            )
+            .border(
+                BorderStroke(1.5.dp, if (enabled) DaybookColors.Hairline else DaybookColors.Outline),
+                AppShapes.button
+            )
             .clickableImpl(interaction) { if (enabled && !loading) onClick() },
         contentAlignment = Alignment.Center
     ) {

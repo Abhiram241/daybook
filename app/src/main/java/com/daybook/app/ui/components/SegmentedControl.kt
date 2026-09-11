@@ -3,6 +3,7 @@ package com.daybook.app.ui.components
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -70,6 +71,7 @@ fun SegmentedControl(
             .heightIn(min = 40.dp)
             .clip(AppShapes.segmented)
             .background(DaybookColors.SurfaceElevated)
+            .border(1.dp, DaybookColors.Border, AppShapes.segmented)
             .padding(4.dp)
     ) {
         val segWidth = maxWidth / count
@@ -79,22 +81,29 @@ fun SegmentedControl(
             animationSpec = if (rm) snap() else Motion.placementSpring(),
             label = "segPill"
         )
-        Box(
-            Modifier
-                .offset(x = pillX)
-                .width(segWidth)
-                .fillMaxHeight()
-                .clip(AppShapes.segmented)
-                .background(accent)
-        )
-        Row(Modifier.fillMaxSize()) {
+
+        // The pill lives inside a matchParentSize wrapper: that wrapper is measured with the
+        // track's RESOLVED size as fixed constraints, so fillMaxHeight() inside it works —
+        // unlike the bare Box before it, which had nothing finite to fill and collapsed to 0.
+        Box(Modifier.matchParentSize()) {
+            Box(
+                Modifier
+                    .offset(x = pillX)
+                    .width(segWidth)
+                    .fillMaxHeight()
+                    .clip(AppShapes.segmented)
+                    .background(accent)
+            )
+        }
+
+        Row(Modifier.fillMaxWidth()) {
             options.forEach { spec ->
                 val selected = spec.key == selectedKey
-                val contentColor = if (selected) DaybookColors.OnSolid else DaybookColors.TextMuted
+                val contentColor = if (selected) DaybookColors.OnAccent else DaybookColors.TextPrimary
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxHeight()
+                        .heightIn(min = 36.dp)
                         .clip(AppShapes.segmented)
                         .clickableImpl(remember { MutableInteractionSource() }) { onSelect(spec.key) },
                     horizontalArrangement = Arrangement.Center,
@@ -106,7 +115,7 @@ fun SegmentedControl(
                     }
                     Text(
                         spec.label,
-                        style = DaybookText.NavLabel,
+                        style = DaybookText.ButtonLabel,
                         color = contentColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

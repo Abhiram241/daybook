@@ -476,3 +476,21 @@ val MIGRATION_19_20 = object : Migration(19, 20) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN theme_mode TEXT NOT NULL DEFAULT 'DARK'")
     }
 }
+
+/**
+ * v20 -> v21 (UX refinement round). THREE additive columns on app_settings, no table
+ * rebuild, no row rewrite. All device-local — NOT in BackupModel, NOT in any export, NOT
+ * in ContentHash / the sync loop — same as every app_settings column since v16.
+ *   dark_style   — DarkStyle.storageKey  ("CHARCOAL" default == today's dark palette)
+ *   light_style  — LightStyle.storageKey ("PAPER"    default == today's light palette)
+ *   corner_scale — global corner-radius multiplier, REAL, 1.0 == today's radii
+ * Each DEFAULT byte-matches the @ColumnInfo(defaultValue=…) Kotlin default, so every
+ * existing row reads the current look and nothing changes until the user opts in.
+ */
+val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN dark_style TEXT NOT NULL DEFAULT 'CHARCOAL'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN light_style TEXT NOT NULL DEFAULT 'PAPER'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN corner_scale REAL NOT NULL DEFAULT 1.0")
+    }
+}
