@@ -31,7 +31,7 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22          // v0.5.6 build 22 — HOTFIX for the build-21 nav regression: FloatingPillNav's inner Row (fillMaxSize) and per-item Column (fillMaxHeight) still assumed the pre-B9 fixed-height parent Box; with B9's heightIn(min=) the nav bar expanded to full screen, blanking the pager and stranding the nav items mid-screen. Row -> fillMaxWidth, per-item Column drops fillMaxHeight; B9 heightIn(min=) + label changes kept.
+        versionCode = 23          // v0.5.6 build 23 — checkpoint push: keyboard/IME + font-width clipping fixes (build 22), battery/heat fixes (lifecycle-aware collectors, soft refresh-rate hint), and the UX overhaul (light/dark theme, DB v19->v20, rebuilt onboarding, settings reorg, batch-notification fix, Today grouping, bloat cleanup). Bumped per HOW_TO_PUSH_UPDATES.md so testers' installed apps detect this as newer.
         versionName = "0.5.6"     // v0.5.6 — fresh-install lavender+Literata defaults, Ongoing-habit-card alignment fix, Firebase App Distribution in-app updates, single global accent
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
