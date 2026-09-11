@@ -258,7 +258,14 @@ data class AppSettings(
     // DB v19 — gates whether InAppUpdateChecker is called from MainActivity.onResume() at all.
     // Device-local. Auto-flipped to false the first time a tester explicitly cancels the App
     // Distribution "Enable testing features" sign-in prompt; flippable back on in Settings.
-    @ColumnInfo(name = "check_for_updates_enabled", defaultValue = "1") val checkForUpdatesEnabled: Boolean = true
+    @ColumnInfo(name = "check_for_updates_enabled", defaultValue = "1") val checkForUpdatesEnabled: Boolean = true,
+
+    // DB v20 (UX overhaul item 4) — app theme: "DARK" / "LIGHT" / "SYSTEM". Device-local:
+    // NOT synced, NOT in BackupModel, NOT in ContentHash — same treatment as every app_settings
+    // column since v16. Default 'DARK' byte-matches MIGRATION_19_20's SQL DEFAULT so every
+    // existing and fresh install stays dark until the user opts in. Plain String, no converter
+    // (mirrors font_choice). Appended last, never reordered.
+    @ColumnInfo(name = "theme_mode", defaultValue = "DARK") val themeMode: String = com.daybook.app.ui.theme.ThemeMode.DEFAULT.storageKey
 )
 
 /**

@@ -81,6 +81,12 @@ fun SortSheet(
     showArchived: Boolean? = null,
     onToggleArchived: (() -> Unit)? = null,
     archivedRowLabel: String = "Show archived",
+    // UX overhaul item 7 — optional second toggle for the Home "Reminders" filter: switch the
+    // section axis from time-of-day (Overdue / Now / Later / Done) to domain (Habits / Intake /
+    // Journal). Session/prefs state on the caller side, never an app_settings column.
+    groupByType: Boolean? = null,
+    onToggleGroupByType: (() -> Unit)? = null,
+    groupByTypeRowLabel: String = "Group by type",
     onReset: (() -> Unit)? = null,
     dismissOnSelect: Boolean = false,
     // v0.5.3 Phase 5 (§5.16 / UI Q7) — App-lock's "Lock after" is a plain single choice, not a
@@ -140,6 +146,16 @@ fun SortSheet(
                     checked = showArchived,
                     accent = accent,
                     onToggle = onToggleArchived
+                )
+            }
+
+            if (groupByType != null && onToggleGroupByType != null) {
+                if (showArchived == null) SheetDivider()
+                ArchivedRow(
+                    label = groupByTypeRowLabel,
+                    checked = groupByType,
+                    accent = accent,
+                    onToggle = onToggleGroupByType
                 )
             }
 

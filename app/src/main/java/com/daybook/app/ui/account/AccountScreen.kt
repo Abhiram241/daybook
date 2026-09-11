@@ -13,7 +13,7 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,9 +51,9 @@ fun AccountScreen(
     onNavigateBack: () -> Unit,
     vm: AccountViewModel = hiltViewModel()
 ) {
-    val authState by vm.authState.collectAsState()
-    val form by vm.form.collectAsState()
-    val conflict by vm.conflict.collectAsState()
+    val authState by vm.authState.collectAsStateWithLifecycle()
+    val form by vm.form.collectAsStateWithLifecycle()
+    val conflict by vm.conflict.collectAsStateWithLifecycle()
 
     conflict?.let { info ->
         ConflictDialog(
@@ -97,9 +97,9 @@ private fun SignedInAccount(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val syncStatus by vm.syncStatus.collectAsState()
-    val canUseGooglePhoto by vm.canUseGooglePhoto.collectAsState()
-    val suggestedName by vm.suggestedDisplayName.collectAsState()
+    val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
+    val canUseGooglePhoto by vm.canUseGooglePhoto.collectAsStateWithLifecycle()
+    val suggestedName by vm.suggestedDisplayName.collectAsStateWithLifecycle()
     var showDelete by remember { mutableStateOf(false) }
 
     if (showDelete) {
@@ -148,7 +148,7 @@ private fun SignedInAccount(
                 suggestedName?.let { name ->
                     SettingsRow(
                         icon = MI.Filled.Person,
-                        title = "Use \"$name\" as your name",
+                        title = "Set name to \"$name\"",
                         subtitle = null,
                         onClick = { vm.useDisplayNameAsName() }
                     )

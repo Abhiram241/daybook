@@ -14,6 +14,9 @@ import androidx.compose.material.icons.filled.MoreVert
 import com.daybook.app.ui.icons.DaybookIcons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+// Battery: lifecycle-aware collection so the ViewModel's minute ticker stops while the app is
+// backgrounded instead of running under WhileSubscribed indefinitely.
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,13 +49,13 @@ fun FoodMedScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     viewModel: FoodMedViewModel = hiltViewModel()
 ) {
-    val items by viewModel.items.collectAsState()
-    val counts by viewModel.typeCounts.collectAsState()
-    val selectedTypes by viewModel.typeFilter.collectAsState()
-    val sort by viewModel.sort.collectAsState()
-    val showArchived by viewModel.showArchived.collectAsState()
-    val filterActive by viewModel.filterActive.collectAsState()
-    val profile by viewModel.profile.collectAsState()
+    val items by viewModel.items.collectAsStateWithLifecycle()
+    val counts by viewModel.typeCounts.collectAsStateWithLifecycle()
+    val selectedTypes by viewModel.typeFilter.collectAsStateWithLifecycle()
+    val sort by viewModel.sort.collectAsStateWithLifecycle()
+    val showArchived by viewModel.showArchived.collectAsStateWithLifecycle()
+    val filterActive by viewModel.filterActive.collectAsStateWithLifecycle()
+    val profile by viewModel.profile.collectAsStateWithLifecycle()
     val rmList = LocalReduceMotion.current
 
     Box(Modifier.fillMaxSize()) {

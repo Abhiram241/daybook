@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons as MI
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
@@ -44,6 +45,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +68,7 @@ import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.FontChoice
 import com.daybook.app.ui.theme.LocalAccent
+import com.daybook.app.ui.theme.ThemeMode
 import com.daybook.app.ui.theme.Spacing
 import com.daybook.app.ui.theme.fontChoiceFamily
 import kotlinx.coroutines.delay
@@ -81,22 +84,22 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit = {},
     onOpenAppearance: () -> Unit = {},
     onOpenTodayCalendar: () -> Unit = {},
-    onOpenNavigation: () -> Unit = {},
     onOpenNotifications: () -> Unit = {},
     onOpenData: () -> Unit = {},
     onOpenAccount: () -> Unit = {},
     onOpenAppLock: () -> Unit = {},
+    onOpenAbout: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     accountViewModel: com.daybook.app.ui.account.AccountViewModel = hiltViewModel(),
     lockViewModel: com.daybook.app.ui.lock.LockViewModel = hiltViewModel()
 ) {
-    val accountSubtitle by accountViewModel.accountSubtitle.collectAsState()
-    val appLockEnabled by lockViewModel.isEnabled.collectAsState()
-    val settings by viewModel.settings.collectAsState()
-    val fontChoice by viewModel.fontChoice.collectAsState()
-    val nameDraft by viewModel.nameDraft.collectAsState()
-    val profilePhotoPath by viewModel.profilePhotoPath.collectAsState()
-    val photoError by viewModel.photoError.collectAsState()
+    val accountSubtitle by accountViewModel.accountSubtitle.collectAsStateWithLifecycle()
+    val appLockEnabled by lockViewModel.isEnabled.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val fontChoice by viewModel.fontChoice.collectAsStateWithLifecycle()
+    val nameDraft by viewModel.nameDraft.collectAsStateWithLifecycle()
+    val profilePhotoPath by viewModel.profilePhotoPath.collectAsStateWithLifecycle()
+    val photoError by viewModel.photoError.collectAsStateWithLifecycle()
 
     var editingName by remember { mutableStateOf(false) }
     // v0.5.4 Phase 1 (S1) — confirm dialog visibility for the hub "Sign out" row.
@@ -240,31 +243,31 @@ fun SettingsScreen(
                     )
                     SettingsRowDivider()
                     SettingsRow(
-                        icon = MI.Filled.Menu,
-                        title = "Navigation",
-                        subtitle = "Default tab and which tabs show",
-                        onClick = onOpenNavigation
-                    )
-                    SettingsRowDivider()
-                    SettingsRow(
                         icon = MI.Filled.Notifications,
-                        title = "Notifications & alarms",
+                        title = "Reminders & notifications",
                         subtitle = notifSubtitle,
                         onClick = onOpenNotifications
                     )
                     SettingsRowDivider()
                     SettingsRow(
                         icon = DaybookIcons.Lock,
-                        title = "App lock",
+                        title = "Privacy & lock",
                         subtitle = if (appLockEnabled) "On" else "Off",
                         onClick = onOpenAppLock
                     )
                     SettingsRowDivider()
                     SettingsRow(
                         icon = DaybookIcons.ImportExport,
-                        title = "Export & import",
+                        title = "Backup & data",
                         subtitle = "Back up or restore your data",
                         onClick = onOpenData
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = MI.Filled.Info,
+                        title = "About & help",
+                        subtitle = "Version, replay the tour, diagnostics",
+                        onClick = onOpenAbout
                     )
                 }
             }
@@ -289,15 +292,14 @@ fun SettingsScreen(
             item {
                 // v0.5.3 Phase 5 (§5.12) — the app's one deliberately centred standalone label:
                 // CardTitle "Daybook" over a Metadata version line.
-                // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 0a — "Copy crash log" row, visible only
-                // when util/CrashHandler.kt has ever written a trace to internal storage. Lets a
-                // user retrieve the last crash without a connected device.
-                val clipboard = LocalClipboardManager.current
-                val hasCrashLog = remember { viewModel.hasCrashLog() }
+                // UX overhaul item 5 — the footer now just opens About & help; "Copy crash log"
+                // and everything else moved into that screen.
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 24.dp),
+                        .clip(AppShapes.card)
+                        .clickableImpl(remember { MutableInteractionSource() }, onOpenAbout)
+                        .padding(top = 24.dp, bottom = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 1 — the app's own launcher mark as a
@@ -321,17 +323,6 @@ fun SettingsScreen(
                         style = DaybookText.Metadata,
                         color = DaybookColors.TextFaint
                     )
-                    if (hasCrashLog) {
-                        TextLink(
-                            "Copy crash log",
-                            onClick = {
-                                val text = viewModel.crashLogText()
-                                if (!text.isNullOrEmpty()) {
-                                    clipboard.setText(AnnotatedString(text))
-                                }
-                            }
-                        )
-                    }
                 }
             }
         }
@@ -379,10 +370,27 @@ fun AppearanceSettingsScreen(
     onNavigateBack: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val settings by viewModel.settings.collectAsState()
-    val fontChoice by viewModel.fontChoice.collectAsState()
-    val reduceMotion by viewModel.reduceMotion.collectAsState()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val fontChoice by viewModel.fontChoice.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     SettingsSubScreen("Appearance", onNavigateBack) {
+        // UX overhaul item 4 — app theme. Dark is the default for every install.
+        SectionHeader("Theme", subtitle = "Choose a dark or light look, or follow your system setting.")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                SegmentedControl(
+                    options = listOf(
+                        SegmentSpec("DARK", "Dark"),
+                        SegmentSpec("LIGHT", "Light"),
+                        SegmentSpec("SYSTEM", "System")
+                    ),
+                    selectedKey = themeMode.storageKey,
+                    onSelect = { viewModel.setThemeMode(ThemeMode.fromKeyOrDefault(it)) }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(Spacing.listGap))
         SectionHeader("Accent color", subtitle = "Tints buttons, toggles and highlights across the app.")
         SettingsGroup {
             Column(Modifier.padding(Spacing.cardInner)) {
@@ -391,11 +399,12 @@ fun AppearanceSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    val darkTheme = com.daybook.app.ui.theme.isDaybookDarkThemeActive
                     AccentColor.entries.forEach { a ->
                         // v0.5.3 Phase 5 (§5.13 / backlog #24) — shared Swatch grammar with TintPicker:
                         // rounded-square, 44dp target, selected Check.
                         Swatch(
-                            color = a.color,
+                            color = a.colorFor(darkTheme),
                             selected = a == current,
                             onClick = { if (settings != null) viewModel.setAccentColor(a.storageKey) },
                             checkColor = DaybookColors.OnSolid,
@@ -448,17 +457,12 @@ fun AppearanceSettingsScreen(
         }
 
         Spacer(Modifier.height(Spacing.listGap))
-        SectionHeader("Accessibility")
-        SettingsGroup {
-            Column(Modifier.padding(Spacing.cardInner)) {
-                SettingsToggleRow(
-                    label = "Reduce motion",
-                    subtitle = "Turns off springy animations and page slides.",
-                    checked = reduceMotion,
-                    onCheckedChange = viewModel::setReduceMotion
-                )
-            }
-        }
+        // UX overhaul item 5 / 8.6 — the standalone Navigation sub-screen folded in here.
+        NavigationLayoutSections(viewModel)
+
+        // UX overhaul item 8.3 — the "Reduce motion" (was "Accessibility"/"Motion") toggle is
+        // removed. The reduce_motion column stays live and is still OR-ed with the OS
+        // "Remove animations" setting in effectiveReduceMotion().
     }
 }
 
@@ -536,16 +540,14 @@ fun TodayCalendarSettingsScreen(
     onNavigateBack: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val weekStart by viewModel.weekStart.collectAsState()
-    val clock24h by viewModel.clock24h.collectAsState()
-    val calDefaultExpanded by viewModel.calendarDefaultExpanded.collectAsState()
-    val greetingTone by viewModel.greetingTone.collectAsState()
-    val greetingTimeWord by viewModel.greetingTimeWord.collectAsState()
-    val heroStyle by viewModel.heroStyle.collectAsState()
-    val hideResolved by viewModel.homeHideResolved.collectAsState()
-    val streakMode by viewModel.streakMode.collectAsState()
-    val showStreaks by viewModel.showStreaks.collectAsState()
-    val restDaysCsv by viewModel.streakRestDays.collectAsState()
+    // UX overhaul item 8.1 / 8.2 / 8.11 — the greeting-tone / hero-style / streak-mode / rest-days /
+    // default-calendar-view columns stay live but their tuning UI is hidden, so they are no longer
+    // read here.
+    val weekStart by viewModel.weekStart.collectAsStateWithLifecycle()
+    val clock24h by viewModel.clock24h.collectAsStateWithLifecycle()
+    val greetingTone by viewModel.greetingTone.collectAsStateWithLifecycle()
+    val hideResolved by viewModel.homeHideResolved.collectAsStateWithLifecycle()
+    val showStreaks by viewModel.showStreaks.collectAsStateWithLifecycle()
 
     SettingsSubScreen("Today & calendar", onNavigateBack) {
         // ---- Calendar (rec 1) ------------------------------------------------------------
@@ -569,62 +571,48 @@ fun TodayCalendarSettingsScreen(
                     checked = clock24h,
                     onCheckedChange = viewModel::setClock24h
                 )
-                HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
-                Text("Default calendar view", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
-                SegmentedControl(
-                    options = listOf(
-                        SegmentSpec("false", "Week"),
-                        SegmentSpec("true", "Month")
-                    ),
-                    selectedKey = calDefaultExpanded.toString(),
-                    onSelect = { viewModel.setCalendarDefaultExpanded(it.toBoolean()) }
-                )
+                // UX overhaul item 8.11 — "Default calendar view" UI removed. The
+                // calendar_default_expanded column stays live and is still read by HomeScreen.
             }
         }
 
         Spacer(Modifier.height(Spacing.listGap))
 
-        // ---- Greeting (rec 2) ----------------------------------------------------------
+        // ---- Greeting (rec 2) — UX overhaul item 8.1: 3 controls collapsed to one. ------
         SectionHeader("Greeting")
         SettingsGroup {
-            Column(Modifier.padding(Spacing.cardInner), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Greeting style", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
+            Column(Modifier.padding(Spacing.cardInner)) {
+                // Full = WARM + time-of-day word; Simple = PLAIN; Off = MINIMAL. Also pins
+                // hero_style to COUNT_LEFT (the Hero-line radio is retired). The underlying
+                // greeting_tone / greeting_time_word / hero_style columns stay live.
+                val greetingKey = when (greetingTone) {
+                    "WARM" -> "FULL"
+                    "MINIMAL" -> "OFF"
+                    else -> "SIMPLE"
+                }
                 SegmentedControl(
                     options = listOf(
-                        SegmentSpec("WARM", "Warm"),
-                        SegmentSpec("PLAIN", "Plain"),
-                        SegmentSpec("MINIMAL", "Minimal")
+                        SegmentSpec("FULL", "Full"),
+                        SegmentSpec("SIMPLE", "Simple"),
+                        SegmentSpec("OFF", "Off")
                     ),
-                    selectedKey = greetingTone,
-                    onSelect = viewModel::setGreetingTone
-                )
-                HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
-                SettingsToggleRow(
-                    label = "Show time-of-day word",
-                    subtitle = "Adds \"Good morning / afternoon / evening\" to the greeting.",
-                    checked = greetingTimeWord,
-                    onCheckedChange = viewModel::setGreetingTimeWord,
-                    enabled = greetingTone != "MINIMAL"
-                )
-                HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
-                Text("Hero line", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
-                Column {
-                    listOf(
-                        "COUNT_LEFT" to "13 left today",
-                        "COUNT_TO_GO" to "13 to go",
-                        "COUNT_TASKS" to "13 tasks",
-                        "HIDDEN" to "Hidden"
-                    ).forEach { (key, label) ->
-                        RadioRow(label = label, selected = heroStyle == key) { viewModel.setHeroStyle(key) }
+                    selectedKey = greetingKey,
+                    onSelect = { key ->
+                        when (key) {
+                            "FULL" -> { viewModel.setGreetingTone("WARM"); viewModel.setGreetingTimeWord(true) }
+                            "SIMPLE" -> { viewModel.setGreetingTone("PLAIN"); viewModel.setGreetingTimeWord(false) }
+                            "OFF" -> { viewModel.setGreetingTone("MINIMAL"); viewModel.setGreetingTimeWord(false) }
+                        }
+                        viewModel.setHeroStyle("COUNT_LEFT")
                     }
-                }
+                )
             }
         }
 
         Spacer(Modifier.height(Spacing.listGap))
 
         // ---- Reminders list (rec 3, hide-resolved only) ------------------------------
-        SectionHeader("Reminders")
+        SectionHeader("Reminders list")
         SettingsGroup {
             Column(Modifier.padding(Spacing.cardInner)) {
                 SettingsToggleRow(
@@ -638,41 +626,12 @@ fun TodayCalendarSettingsScreen(
 
         Spacer(Modifier.height(Spacing.listGap))
 
-        // ---- Streak display (rec 6) --------------------------------------------------
-        SectionHeader("Streak display")
+        // ---- Streaks (rec 6) — UX overhaul item 8.2: just the on/off toggle. -----------
+        // The streak_mode ("STRICT"/"LENIENT") and streak_rest_days columns stay live and are
+        // still read by StreakCalculator; only the Strict/Lenient + Rest-days UI is hidden.
+        SectionHeader("Streaks")
         SettingsGroup {
-            Column(Modifier.padding(Spacing.cardInner), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Streak counting", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
-                SegmentedControl(
-                    options = listOf(
-                        SegmentSpec("STRICT", "Strict"),
-                        SegmentSpec("LENIENT", "Lenient")
-                    ),
-                    selectedKey = streakMode,
-                    onSelect = viewModel::setStreakMode
-                )
-                Text(
-                    "Lenient counts a day where everything was done or deliberately skipped.",
-                    style = DaybookText.Caption,
-                    color = DaybookColors.TextMuted
-                )
-                HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
-                Text("Rest days", style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
-                Text(
-                    "Chosen weekdays never break a streak and are never required.",
-                    style = DaybookText.Caption,
-                    color = DaybookColors.TextMuted
-                )
-                val restDays = remember(restDaysCsv) { DateTimeUtils.jsonToDays(restDaysCsv) }
-                DayOfWeekSelector(
-                    selected = restDays,
-                    onToggle = { d ->
-                        val next = restDays.toMutableList()
-                        if (!next.remove(d)) next.add(d)
-                        viewModel.setStreakRestDays(DateTimeUtils.daysToJson(next))
-                    }
-                )
-                HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
+            Column(Modifier.padding(Spacing.cardInner)) {
                 SettingsToggleRow(
                     label = "Show streak flames",
                     subtitle = "Hides the flame pill on Today and the streak figure on Detail stats.",
@@ -684,22 +643,6 @@ fun TodayCalendarSettingsScreen(
     }
 }
 
-/** Single-choice row: label + trailing radio; the whole row selects. */
-@Composable
-private fun RadioRow(label: String, selected: Boolean, onSelect: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableImpl(remember { MutableInteractionSource() }, onSelect)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary, modifier = Modifier.weight(1f))
-        if (selected) {
-            Icon(MI.Filled.Check, contentDescription = "Selected", tint = LocalAccent.current, modifier = Modifier.size(20.dp))
-        }
-    }
-}
 
 /* ------------------------------------------------------------------------- */
 /* Notifications & alarms                                                     */
@@ -710,9 +653,9 @@ fun NotificationSettingsScreen(
     onNavigateBack: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
-    SettingsSubScreen("Notifications & alarms", onNavigateBack) {
+    SettingsSubScreen("Reminders & notifications", onNavigateBack) {
         val ctx = LocalContext.current
-        val clock24h by viewModel.clock24h.collectAsState()
+        val clock24h by viewModel.clock24h.collectAsStateWithLifecycle()
         var tick by remember { mutableStateOf(0) }
         LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
 
@@ -802,11 +745,11 @@ fun NotificationSettingsScreen(
 
         Spacer(Modifier.height(Spacing.listGap))
         SectionHeader(
-            "Habit check-in",
-            subtitle = "One notification for all your batch habits. This time is stored on this phone and isn't synced."
+            "Batch check-in",
+            subtitle = "When the single daily notification for your Batch-type habits fires. Stored on this phone and not synced."
         )
         FormGroup(title = null) {
-            val checkinHhmm by viewModel.habitCheckinTime.collectAsState()
+            val checkinHhmm by viewModel.habitCheckinTime.collectAsStateWithLifecycle()
             var showTimePicker by remember { mutableStateOf(false) }
             Row(
                 Modifier.fillMaxWidth(),
@@ -845,9 +788,9 @@ fun NotificationSettingsScreen(
             subtitle = "Reminders due inside this window are held until it ends — nothing is dropped."
         )
         FormGroup(title = null) {
-            val qhEnabled by viewModel.quietHoursEnabled.collectAsState()
-            val qhStart by viewModel.quietStart.collectAsState()
-            val qhEnd by viewModel.quietEnd.collectAsState()
+            val qhEnabled by viewModel.quietHoursEnabled.collectAsStateWithLifecycle()
+            val qhStart by viewModel.quietStart.collectAsStateWithLifecycle()
+            val qhEnd by viewModel.quietEnd.collectAsStateWithLifecycle()
             var showQhStart by remember { mutableStateOf(false) }
             var showQhEnd by remember { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -879,9 +822,9 @@ fun NotificationSettingsScreen(
 
         // ---- Default snooze (rec 3 / N2) ----------------------------------------------
         Spacer(Modifier.height(Spacing.listGap))
-        SectionHeader("Snooze")
+        SectionHeader("Default snooze")
         FormGroup(title = null) {
-            val snoozeMin by viewModel.defaultSnoozeMinutes.collectAsState()
+            val snoozeMin by viewModel.defaultSnoozeMinutes.collectAsStateWithLifecycle()
             Text(
                 "New reminders start with this snooze interval. The batch check-in also uses it.",
                 style = DaybookText.Caption,
@@ -891,50 +834,8 @@ fun NotificationSettingsScreen(
             SnoozeStepper(minutes = snoozeMin, onChange = viewModel::setDefaultSnoozeMinutes)
         }
 
-        // ---- In-app updates (Firebase App Distribution) --------------------------------
-        Spacer(Modifier.height(Spacing.listGap))
-        SectionHeader(
-            "Updates",
-            subtitle = "Checks Firebase App Distribution for a newer build each time you open the app."
-        )
-        FormGroup(title = null) {
-            val checkForUpdatesEnabled by viewModel.checkForUpdatesEnabled.collectAsState()
-            SettingsToggleRow(
-                label = "Check for updates",
-                checked = checkForUpdatesEnabled,
-                onCheckedChange = viewModel::setCheckForUpdatesEnabled
-            )
-        }
-
-        Spacer(Modifier.height(Spacing.listGap))
-        SectionHeader("Diagnostics")
-        FormGroup(title = null) {
-            Text(
-                "Send a test notification to check the notification path on its own, " +
-                    "without waiting for a reminder time.",
-                style = DaybookText.Caption,
-                color = DaybookColors.TextMuted
-            )
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                text = "Send test notification",
-                onClick = { viewModel.sendTestNotification(); tick++ },
-                modifier = Modifier.fillMaxWidth()
-            )
-            // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 15 (N-10): was a silent no-op on a blocked
-            // channel/permission (a bare Log.w only) — now surfaced right under the button.
-            val testNotificationResult by viewModel.testNotificationResult.collectAsState()
-            testNotificationResult?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, style = DaybookText.Caption, color = DaybookColors.TextMuted)
-            }
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                text = "Re-arm all reminders",
-                onClick = { viewModel.resyncReminders() },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
+        // UX overhaul item 5 / 8.4 / 8.5 — "Updates" (Check for updates) and "Diagnostics"
+        // (Send test notification, Re-arm all reminders) moved to About & help.
     }
 }
 
@@ -948,12 +849,12 @@ fun DataSettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val exportResult by viewModel.exportResult.collectAsState()
-    val importResult by viewModel.importResult.collectAsState()
-    val isExporting by viewModel.isExporting.collectAsState()
-    val isImporting by viewModel.isImporting.collectAsState()
+    val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
+    val importResult by viewModel.importResult.collectAsStateWithLifecycle()
+    val isExporting by viewModel.isExporting.collectAsStateWithLifecycle()
+    val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     // v0.5.3 Phase 6 (D2) — (done, total) while a signed-in range export hydrates cloud months.
-    val hydrateProgress by viewModel.hydrateProgress.collectAsState()
+    val hydrateProgress by viewModel.hydrateProgress.collectAsStateWithLifecycle()
 
     // v0.5.3 Phase 6 (D2) — the chosen export span. Defaults to "this month so far".
     var startDate by remember { mutableStateOf(LocalDate.now().withDayOfMonth(1)) }
@@ -1019,7 +920,7 @@ fun DataSettingsScreen(
         )
     }
 
-    SettingsSubScreen("Export & import", onNavigateBack) {
+    SettingsSubScreen("Backup & data", onNavigateBack) {
         // v0.5.3 Phase 6 (D2) — pick a start and end date, download a JSON of just that range.
         SectionHeader(
             "Export a date range",

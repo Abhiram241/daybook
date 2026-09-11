@@ -4,6 +4,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
@@ -14,7 +16,12 @@ import com.daybook.app.ui.theme.LocalAccent
  * Surface`, `shape = AppShapes.dialog`, title on [DaybookText.DialogTitle], text-button content
  * colour = accent (or [DaybookColors.Danger] when [destructive]). Phase 4 re-points
  * `ConfirmDeleteDialog`, MainActivity's rationale + exact-alarm dialogs, `ConflictDialog`,
- * `DeleteAccountDialog` and `PinDialog` onto it. Nothing calls it yet.
+ * `DeleteAccountDialog` and `PinDialog` onto it.
+ *
+ * UX overhaul item 2 — [textContentColor] defaults to full-contrast [DaybookColors.TextPrimary]
+ * (not M3's low-contrast `onSurfaceVariant`); `tonalElevation = 0.dp` so no elevated tonal wash
+ * sits behind the app's own painted [DaybookColors.Surface]. Both are theme-aware once item 4
+ * routes `DaybookColors` through `LocalDaybookColors`.
  */
 @Composable
 fun DaybookAlertDialog(
@@ -25,12 +32,15 @@ fun DaybookAlertDialog(
     onConfirm: () -> Unit,
     dismissLabel: String? = null,
     onDismiss: (() -> Unit)? = null,
-    destructive: Boolean = false
+    destructive: Boolean = false,
+    textContentColor: Color = DaybookColors.TextPrimary
 ) {
     val confirmColor = if (destructive) DaybookColors.Danger else LocalAccent.current
     AlertDialog(
         onDismissRequest = onDismissRequest,
         containerColor = DaybookColors.Surface,
+        tonalElevation = 0.dp,
+        textContentColor = textContentColor,
         shape = AppShapes.dialog,
         title = { Text(title, style = DaybookText.DialogTitle, color = DaybookColors.TextPrimary) },
         text = text,

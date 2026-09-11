@@ -18,6 +18,7 @@ import com.daybook.app.ui.icons.DaybookIcons
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,23 +73,23 @@ fun DetailScreen(
         onPauseOrDispose { }
     }
 
-    val itemTitle by viewModel.itemTitle.collectAsState()
-    val itemSubtitle by viewModel.itemSubtitle.collectAsState()
-    val itemMotivation by viewModel.itemMotivation.collectAsState()
-    val itemCategory by viewModel.itemCategory.collectAsState()
-    val itemIconKey by viewModel.itemIconKey.collectAsState()
-    val timelineEvents by viewModel.timelineEvents.collectAsState()
-    val filteredTimeline by viewModel.filteredTimeline.collectAsState()
-    val stats by viewModel.stats.collectAsState()
-    val isJournal by viewModel.isJournal.collectAsState()
-    val isHabitJournal by viewModel.isHabitJournal.collectAsState()
-    val isOngoing by viewModel.isOngoing.collectAsState()
-    val showStreaks by viewModel.showStreaks.collectAsState()
-    val query by viewModel.query.collectAsState()
+    val itemTitle by viewModel.itemTitle.collectAsStateWithLifecycle()
+    val itemSubtitle by viewModel.itemSubtitle.collectAsStateWithLifecycle()
+    val itemMotivation by viewModel.itemMotivation.collectAsStateWithLifecycle()
+    val itemCategory by viewModel.itemCategory.collectAsStateWithLifecycle()
+    val itemIconKey by viewModel.itemIconKey.collectAsStateWithLifecycle()
+    val timelineEvents by viewModel.timelineEvents.collectAsStateWithLifecycle()
+    val filteredTimeline by viewModel.filteredTimeline.collectAsStateWithLifecycle()
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val isJournal by viewModel.isJournal.collectAsStateWithLifecycle()
+    val isHabitJournal by viewModel.isHabitJournal.collectAsStateWithLifecycle()
+    val isOngoing by viewModel.isOngoing.collectAsStateWithLifecycle()
+    val showStreaks by viewModel.showStreaks.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
     // v0.5.3 Phase 3 (A4): older terminal timeline rows are paged in on demand.
-    val canLoadMoreTerminal by viewModel.canLoadMoreTerminal.collectAsState()
+    val canLoadMoreTerminal by viewModel.canLoadMoreTerminal.collectAsStateWithLifecycle()
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val tint = remember(itemId) { CardTints.byId(itemId) }
+    val tint = CardTints.byId(itemId)
     val isHabit = itemType == "habit"
 
     var tab by rememberSaveable { mutableStateOf(DetailTab.History) }

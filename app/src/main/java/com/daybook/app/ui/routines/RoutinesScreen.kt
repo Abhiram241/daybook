@@ -22,6 +22,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+// Battery: lifecycle-aware collection so the ViewModel's minute tickers stop while the app is
+// backgrounded instead of running under WhileSubscribed indefinitely.
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daybook.app.data.model.ColorTag
 import com.daybook.app.data.model.HabitType
 import com.daybook.app.ui.components.*
@@ -48,13 +51,13 @@ fun RoutinesScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     viewModel: RoutinesViewModel = hiltViewModel()
 ) {
-    val habits by viewModel.habits.collectAsState()
-    val profile by viewModel.profile.collectAsState()
-    val sort by viewModel.sort.collectAsState()
-    val showArchived by viewModel.showArchived.collectAsState()
-    val filterActive by viewModel.filterActive.collectAsState()
-    val typeFilter by viewModel.typeFilter.collectAsState()
-    val typeCounts by viewModel.typeCounts.collectAsState()
+    val habits by viewModel.habits.collectAsStateWithLifecycle()
+    val profile by viewModel.profile.collectAsStateWithLifecycle()
+    val sort by viewModel.sort.collectAsStateWithLifecycle()
+    val showArchived by viewModel.showArchived.collectAsStateWithLifecycle()
+    val filterActive by viewModel.filterActive.collectAsStateWithLifecycle()
+    val typeFilter by viewModel.typeFilter.collectAsStateWithLifecycle()
+    val typeCounts by viewModel.typeCounts.collectAsStateWithLifecycle()
     val rmList = LocalReduceMotion.current
 
     Box(Modifier.fillMaxSize()) {

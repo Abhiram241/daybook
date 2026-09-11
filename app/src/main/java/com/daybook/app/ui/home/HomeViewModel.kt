@@ -122,6 +122,83 @@ internal fun homeItemVisible(item: HomeItem, types: Set<ReminderFilter>, showRes
     return true
 }
 
+/** UX overhaul item 7 — one labelled section of the Today reminders list. */
+@Immutable
+data class HomeSection(val label: String, val count: Int, val items: List<HomeItem>)
+
+/** How close (ms) a pending reminder must be to "now" to land in the "Now" section. */
+internal const val NOW_WINDOW_MS = 90L * 60_000L
+
+/**
+ * UX overhaul item 7 — pure transform: split the flat, epoch-sorted reminders list into
+ * labelled [HomeSection]s. Empty sections are dropped. Within each section the original
+ * `scheduledEpoch` order is kept.
+ *
+ * - [byType] `true`  → **Habits / Intake / Journal** (the section axis is the domain).
+ * - today (`selectedDate == today`) → **Overdue / Now / Later / Done**:
+ *   an unresolved (`statusLabel == null`) item is Overdue when its time has passed, Now when it
+ *   is within [NOW_WINDOW_MS] ahead, else Later; any resolved item is Done.
+ * - a past selected day → **To do / Missed / Logged / Skipped / Done** (from `statusLabel`;
+ *   `null` = a still-backfillable slot = "To do").
+ * - a future selected day → a single **Upcoming** section.
+ *
+ * Pure — see `GroupHomeItemsTest`.
+ */
+internal fun groupHomeItems(
+    items: List<HomeItem>,
+    selectedDate: LocalDate,
+    today: LocalDate,
+    nowMillis: Long,
+    byType: Boolean
+): List<HomeSection> {
+    val sorted = items.sortedBy { it.scheduledEpoch }
+
+    if (byType) {
+        val journal = sorted.filter { it.isJournal || it.isHabitJournal }
+        val habits = sorted.filter { it.isHabit && !it.isHabitJournal }
+        val intake = sorted.filter { !it.isHabit && !it.isJournal }
+        return listOf(
+            HomeSection("Habits", habits.size, habits),
+            HomeSection("Intake", intake.size, intake),
+            HomeSection("Journal", journal.size, journal)
+        ).filter { it.items.isNotEmpty() }
+    }
+
+    if (selectedDate == today) {
+        val overdue = ArrayList<HomeItem>()
+        val now = ArrayList<HomeItem>()
+        val later = ArrayList<HomeItem>()
+        val done = ArrayList<HomeItem>()
+        for (item in sorted) {
+            when {
+                item.statusLabel != null -> done += item
+                item.scheduledEpoch < nowMillis -> overdue += item
+                item.scheduledEpoch <= nowMillis + NOW_WINDOW_MS -> now += item
+                else -> later += item
+            }
+        }
+        return listOf(
+            HomeSection("Overdue", overdue.size, overdue),
+            HomeSection("Now", now.size, now),
+            HomeSection("Later", later.size, later),
+            HomeSection("Done", done.size, done)
+        ).filter { it.items.isNotEmpty() }
+    }
+
+    // Past or future selected day — group by resolved status.
+    val isPast = selectedDate.isBefore(today)
+    val order = listOf(if (isPast) "To do" else "Upcoming", MISSED_LABEL, LOGGED_LABEL, "Skipped", "Done")
+    val bucketed = sorted.groupBy { item ->
+        when (item.statusLabel) {
+            null -> if (isPast) "To do" else "Upcoming"
+            else -> item.statusLabel
+        }
+    }
+    return order.mapNotNull { label ->
+        bucketed[label]?.takeIf { it.isNotEmpty() }?.let { HomeSection(label, it.size, it) }
+    }
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(

@@ -25,7 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,10 +63,10 @@ fun LockScreen(
 ) {
     BackHandler(enabled = true) { /* system back must not dismiss the lock */ }
 
-    val entry by vm.entry.collectAsState()
-    val wrong by vm.wrongPin.collectAsState()
-    val busy by vm.busy.collectAsState()
-    val userName by vm.userName.collectAsState()
+    val entry by vm.entry.collectAsStateWithLifecycle()
+    val wrong by vm.wrongPin.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val userName by vm.userName.collectAsStateWithLifecycle()
     var biometricOffered by rememberSaveable { mutableStateOf(false) }
     val biometricsAvailable = remember { activity != null && vm.biometricsAvailable() }
 

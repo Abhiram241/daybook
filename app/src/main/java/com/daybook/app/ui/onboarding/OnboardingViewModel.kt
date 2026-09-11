@@ -2,15 +2,12 @@ package com.daybook.app.ui.onboarding
 
 import com.daybook.app.util.safeLaunch
 
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
-import com.daybook.app.ui.icons.DaybookIcons
 import com.daybook.app.ui.theme.AccentColor
-import com.daybook.app.ui.theme.CardTint
-import com.daybook.app.ui.theme.CardTints
 import com.daybook.app.ui.theme.FontChoice
+import com.daybook.app.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,61 +19,70 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 3 (D2) — a step in the post-login wizard. [NameAsk] is
- * today's existing name field (shown only when no name could be silently derived from the Google
- * profile); every session now also gets a short feature tour ([FeatureTip] steps) before landing
- * in the app, content pulled from FEATURES.md §2-§9, condensed per the plan's own recommendation.
+ * UX overhaul item 1 — the first-run wizard rebuilt as a *teaching* flow inside the existing
+ * shell. [NameAsk] is unchanged (shown only when no name was derivable from the Google profile).
+ * [Teach] replaces the old marketing `FeatureTip` — each explains one loop and maps to a small,
+ * in-app-rendered mock ([TeachIllustration]) so the picture always matches the live theme/accent/
+ * font. [PermissionPrimer] explains the three permissions with optional inline "Allow" buttons.
+ * [Ready] is the closing step with the skippable "Create your first habit" link.
  */
 sealed class WizardStep {
     data object NameAsk : WizardStep()
-    data class FeatureTip(
+    data class Teach(
         val title: String,
         val body: String,
-        val icon: ImageVector,
-        val tint: CardTint
+        val illustration: TeachIllustration
     ) : WizardStep()
+    data object PermissionPrimer : WizardStep()
+    data object Ready : WizardStep()
 }
 
-/** Phase 3 — the fixed tour content, independent of whether NameAsk is shown. */
-val OnboardingTourSteps: List<WizardStep.FeatureTip> = listOf(
-    WizardStep.FeatureTip(
-        "Today, at a glance",
-        "Your daily hub: a greeting, how much you've done today, a week strip, and progress cards.",
-        DaybookIcons.BarChart,
-        CardTints.Mint
+/** The screen maps each of these to a cheap static mock built from real primitives. */
+enum class TeachIllustration { TODAY, MAKE_HABIT, INTAKE, SHADE, YOURS }
+
+/** UX overhaul item 1 — the five teaching cards, in order. */
+val OnboardingTeachSteps: List<WizardStep.Teach> = listOf(
+    WizardStep.Teach(
+        "Today is your home base",
+        "Today shows a greeting, how much is left, a week strip, and two progress cards. " +
+            "Tap a past day to log something you missed. The month chevron opens the full calendar.",
+        TeachIllustration.TODAY
     ),
-    WizardStep.FeatureTip(
-        "Track anything",
-        "Habits — individual, batch, ongoing streaks, or chat-style journal check-ins — plus " +
-            "Food/Med reminders and a red-flag diary.",
-        DaybookIcons.Restaurant,
-        CardTints.Rose
+    WizardStep.Teach(
+        "Make a habit",
+        "Individual fires a reminder at each time you set. Batch rolls a group of small habits " +
+            "into one daily check-in. Ongoing just counts days, with no reminders. Journal asks " +
+            "you a few questions each time. You pick the days, times, and snooze length.",
+        TeachIllustration.MAKE_HABIT
     ),
-    WizardStep.FeatureTip(
-        "Reminders that adapt to you",
-        "Skip, snooze, complete, or reply right from the notification — quiet hours and a " +
-            "re-nag for anything missed, with Strict or Lenient streak modes and rest days.",
-        DaybookIcons.AlarmClock,
-        CardTints.SlateBlue
+    WizardStep.Teach(
+        "Food, meds, anything else",
+        "Intake reminders ask \"what did you have?\" and save your reply — from the card or " +
+            "straight from the notification. Flag a food as a red flag to build a diary of triggers.",
+        TeachIllustration.INTAKE
     ),
-    WizardStep.FeatureTip(
-        "Make it yours",
-        "Pick an accent color, a font, and which tabs show in the bottom nav.",
-        DaybookIcons.Palette,
-        CardTints.Lavender
+    WizardStep.Teach(
+        "Reminders work from the shade",
+        "Skip, snooze, complete, or reply without opening the app. Anything you don't answer " +
+            "keeps nudging until you do. Quiet hours hold reminders back — nothing is dropped.",
+        TeachIllustration.SHADE
     ),
-    WizardStep.FeatureTip(
-        "Offline-first, synced, and locked down",
-        "Everything lives on your device first and mirrors across devices once you're signed " +
-            "in — add a PIN or biometric App Lock on top, if you want one.",
-        DaybookIcons.Backup,
-        CardTints.Butter
+    WizardStep.Teach(
+        "Yours, and private",
+        "Pick an accent, a font, and a light or dark theme, and choose which tabs show. " +
+            "Everything lives on your device first and mirrors once you sign in. Add a PIN or " +
+            "biometric lock if you want one.",
+        TeachIllustration.YOURS
     )
 )
 
+/** The tour portion (everything after an optional [WizardStep.NameAsk]). */
+val OnboardingTourSteps: List<WizardStep> =
+    OnboardingTeachSteps + WizardStep.PermissionPrimer + WizardStep.Ready
+
 /**
- * Phase 3 (D2) — the step list for this wizard session: [WizardStep.NameAsk] is included only
- * when no name could be silently derived from the Google profile. Pure — see `WizardStepTest`.
+ * The step list for this wizard session: [WizardStep.NameAsk] is included only when no name
+ * could be silently derived from the Google profile. Pure — see `WizardStepTest`.
  */
 fun buildWizardSteps(hasAutoDerivedName: Boolean): List<WizardStep> =
     if (hasAutoDerivedName) OnboardingTourSteps else listOf(WizardStep.NameAsk) + OnboardingTourSteps
@@ -134,6 +140,12 @@ class OnboardingViewModel @Inject constructor(
 
     private var configured = false
 
+    /** UX overhaul item 1 — true when the wizard is the "Replay the tour" re-run from About &
+     *  help: the step list is tour-only (no NameAsk), the closing button reads "Done" and just
+     *  pops back, and `onboardingCompleted` is never touched. */
+    private val _reviewMode = MutableStateFlow(false)
+    val reviewMode: StateFlow<Boolean> = _reviewMode.asStateFlow()
+
     private val _steps = MutableStateFlow<List<WizardStep>>(buildWizardSteps(hasAutoDerivedName = false))
     val steps: StateFlow<List<WizardStep>> = _steps.asStateFlow()
 
@@ -160,10 +172,27 @@ class OnboardingViewModel @Inject constructor(
         if (derivedName != null) _nameInput.value = derivedName
     }
 
-    /** Advances the wizard, or — from the last step — ends it via [completeOnboarding]. */
+    /**
+     * UX overhaul item 1 — configure the wizard as the read-only "Replay the tour" re-run:
+     * the tour-only step list (no [WizardStep.NameAsk]), position reset to the start. Idempotent.
+     * `onboardingCompleted` is never read or written in this mode.
+     */
+    fun configureReview() {
+        if (configured) return
+        configured = true
+        _reviewMode.value = true
+        _steps.value = OnboardingTourSteps
+        _currentStep.value = 0
+    }
+
+    /**
+     * Advances the wizard, or — from the last step — ends it via [completeOnboarding]. In review
+     * mode the last step is a no-op here: the screen pops back via its own exit callback, and
+     * `onboardingCompleted` / the stored name are never touched.
+     */
     fun next() {
         if (isLastWizardStep(_currentStep.value, _steps.value.size)) {
-            completeOnboarding(_nameInput.value)
+            if (!_reviewMode.value) completeOnboarding(_nameInput.value)
         } else {
             _currentStep.value += 1
         }
@@ -171,7 +200,7 @@ class OnboardingViewModel @Inject constructor(
 
     /** Ends the wizard immediately, from any step, with whatever name is currently known. */
     fun skip() {
-        completeOnboarding(_nameInput.value)
+        if (!_reviewMode.value) completeOnboarding(_nameInput.value)
     }
 
     /** Drives the app-wide accent; re-emits whenever the setting changes. */
@@ -188,6 +217,19 @@ class OnboardingViewModel @Inject constructor(
     val reduceMotion: StateFlow<Boolean> = settingsRepository.observeSettings()
         .map { it.reduceMotion }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * UX overhaul item 4 — the app-wide theme mode, fed to [com.daybook.app.ui.theme.DaybookTheme].
+     * The initial value comes from the SharedPreferences mirror (read synchronously), so the very
+     * first composition in `MainActivity.setContent` is already the correct theme — zero flash.
+     */
+    val themeMode: StateFlow<ThemeMode> = settingsRepository.observeSettings()
+        .map { ThemeMode.fromKeyOrDefault(it.themeMode) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            ThemeMode.fromKeyOrDefault(settingsRepository.readThemeModeMirror())
+        )
 
     /** rec 7 — the ordered CSV of visible bottom-nav route ids. */
     val navTabs: StateFlow<String> = settingsRepository.observeSettings()

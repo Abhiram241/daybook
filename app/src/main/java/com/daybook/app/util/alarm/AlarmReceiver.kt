@@ -112,6 +112,15 @@ class AlarmReceiver : BroadcastReceiver() {
             return
         }
 
+        // UX overhaul item 3 — a BATCH habit is surfaced ONLY by the single consolidated check-in
+        // notification (fireBatch → showBatchHabitNotification). Its per-item occurrences must not
+        // post their own notification — that was the duplicate. Return before the post, the SHOWN
+        // event and the re-nag re-arm. INDIVIDUAL / JOURNAL are untouched.
+        if (!com.daybook.app.data.shouldPostIndividualHabitNotification(habit.type)) {
+            Log.i(TAG, "fireHabit: $occurrenceId is a ${habit.type} habit — suppressing the per-item notification")
+            return
+        }
+
         // Journal-as-habit round: a JOURNAL habit gets its own notification shape (fixed body,
         // Skip+Snooze only, no Complete action) — mirrors how FoodMed-JOURNAL branches in
         // showFoodMedNotification, just routed at the call site since a habit-side JOURNAL

@@ -13,6 +13,7 @@ import com.daybook.app.data.model.AppSettings
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.data.sync.HydrateResult
 import com.daybook.app.ui.theme.FontChoice
+import com.daybook.app.ui.theme.ThemeMode
 import com.daybook.app.util.CrashHandler
 import com.daybook.app.util.JsonUtils
 import com.daybook.app.util.StorageUtils
@@ -182,6 +183,17 @@ class SettingsViewModel @Inject constructor(
 
     fun setFontChoice(key: String) {
         safeLaunch { settingsRepository.setFontChoice(key) }
+    }
+
+    // UX overhaul item 4 — app theme. The theme is reactive (MainActivity observes the same
+    // stream via OnboardingViewModel), so the whole app restyles at once; the SharedPreferences
+    // mirror written by the repo removes the cold-start flash on the next launch.
+    val themeMode: StateFlow<ThemeMode> = settingsRepository.observeSettings()
+        .map { ThemeMode.fromKeyOrDefault(it.themeMode) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.DEFAULT)
+
+    fun setThemeMode(mode: ThemeMode) {
+        safeLaunch { settingsRepository.setThemeMode(mode.storageKey) }
     }
 
     // ---------------------------------------------------------------- Customization round (DB v16)

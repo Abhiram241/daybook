@@ -7,6 +7,8 @@
       values-night/ duplicate were unreferenced and removed (REV-35).
     -->
     <color name="background">#0B0D0F</color>
+    <!-- UX overhaul item 4 — light window background for the pre-inflate splash under LIGHT theme. -->
+    <color name="background_light">#FBFBF9</color>
     <color name="signal_teal">#2DD4BF</color>
     <color name="black">#000000</color>
 </resources>

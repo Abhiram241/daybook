@@ -14,7 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,8 +44,8 @@ fun SignInGateScreen(vm: AccountViewModel = hiltViewModel()) {
     // System back must not escape the gate.
     BackHandler(enabled = true) { }
 
-    val form by vm.form.collectAsState()
-    val conflict by vm.conflict.collectAsState()
+    val form by vm.form.collectAsStateWithLifecycle()
+    val conflict by vm.conflict.collectAsStateWithLifecycle()
 
     conflict?.let { info ->
         ConflictDialog(

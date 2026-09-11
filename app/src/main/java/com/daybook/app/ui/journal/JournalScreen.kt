@@ -16,7 +16,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -48,7 +48,7 @@ fun JournalScreen(
     onOpenHistory: (itemType: String, itemId: String) -> Unit = { _, _ -> },
     vm: JournalViewModel = hiltViewModel()
 ) {
-    val state by vm.state.collectAsState()
+    val state by vm.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.saved, state.missing) {
         // v0.5.3 Phase 5 (§5.8) — a missing occurrence pops straight back with no UI. Accepted as

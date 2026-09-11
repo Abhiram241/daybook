@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Window/splash theme only; the app UI is Compose and is dark-only. -->
+    <!-- Window/splash theme only; the app UI is Compose. -->
     <style name="Theme.Daybook" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@color/background</item>
         <item name="colorPrimary">@color/signal_teal</item>
@@ -8,5 +8,18 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!-- UX overhaul item 4 — MainActivity calls setTheme() to one of these before setContent,
+         from the synchronous theme_mode SharedPreferences mirror, so the pre-inflate
+         windowBackground matches the chosen theme and there is no cold-start flash. -->
+    <style name="Theme.Daybook.Dark" parent="Theme.Daybook">
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.Daybook.Light" parent="Theme.Daybook">
+        <item name="android:windowBackground">@color/background_light</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

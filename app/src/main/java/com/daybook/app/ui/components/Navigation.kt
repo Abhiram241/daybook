@@ -47,6 +47,9 @@ fun FloatingPillNav(
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAccent.current
+    // Hoisted: DaybookColors.* are @Composable getters and can't be read inside drawBehind's
+    // DrawScope lambda.
+    val hairlineColor = DaybookColors.Hairline
 
     Column(
         modifier = modifier
@@ -61,7 +64,7 @@ fun FloatingPillNav(
             .background(DaybookColors.Surface)
             .drawBehind {
                 drawLine(
-                    color = DaybookColors.Hairline,
+                    color = hairlineColor,
                     start = Offset(0f, 0f),
                     end = Offset(size.width, 0f),
                     strokeWidth = 1.dp.toPx()

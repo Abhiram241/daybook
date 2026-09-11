@@ -112,4 +112,8 @@ interface AppSettingsDao {
 
     @Query("UPDATE app_settings SET default_snooze_minutes = :v WHERE id = 1")
     suspend fun updateDefaultSnoozeMinutes(v: Int)
+
+    // DB v20 (UX overhaul item 4) — app theme mode ("DARK"/"LIGHT"/"SYSTEM").
+    @Query("UPDATE app_settings SET theme_mode = :v WHERE id = 1")
+    suspend fun updateThemeMode(v: String)
 }

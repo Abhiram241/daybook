@@ -54,6 +54,16 @@ fun isNoScheduleHabit(type: HabitType): Boolean = type == HabitType.STREAK
 fun armsOwnAlarm(type: HabitType): Boolean = type == HabitType.INDIVIDUAL || type == HabitType.JOURNAL
 
 /**
+ * UX overhaul item 3 — pure: should a per-occurrence ("individual") habit notification be posted
+ * for an occurrence of this habit type? A [HabitType.BATCH] habit is surfaced ONLY by the single
+ * consolidated check-in notification ([com.daybook.app.util.notification.NotificationUtils.showBatchHabitNotification]),
+ * so its per-item occurrences must never post their own — that was the duplicate. INDIVIDUAL /
+ * JOURNAL are unaffected; STREAK has no occurrences at all. See
+ * `ShouldPostIndividualHabitNotificationTest`.
+ */
+fun shouldPostIndividualHabitNotification(type: HabitType): Boolean = type != HabitType.BATCH
+
+/**
  * LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 9 (C-4, High): the outcome of a journal/backfill save.
  * [OccurrenceScheduler.logFoodMed], [OccurrenceScheduler.logJournal],
  * [OccurrenceScheduler.logHabitJournal], [OccurrenceScheduler.backfillFoodMed] and
@@ -316,6 +326,14 @@ class OccurrenceScheduler @Inject constructor(
     /** See [armNextTaskInternal] — identical contract, habit side (v0.5.1 §G/§H). v0.5.3 Phase 3
      *  (A2): re-arming the same row re-uses its surviving `notification_id`, so no alarm is leaked. */
     private suspend fun armNextHabitInternal(habitId: String, allowCatchup: Boolean = true) {
+        // UX overhaul item 3 — belt-and-braces: BATCH (and STREAK) habits never arm a per-time
+        // "next" alarm. Only the app-wide check-in alarm surfaces BATCH. Guards every caller,
+        // including resolveHabit / logHabitJournal, not just the type-gated call in syncHabitInternal.
+        val owner = db.habitDao().getHabitById(habitId)
+        if (owner != null && !armsOwnAlarm(owner.type)) {
+            Log.i(TAG, "armNextHabit($habitId): type=${owner.type} does not arm its own alarm — skipping")
+            return
+        }
         val now = System.currentTimeMillis()
         val floor = if (allowCatchup) now - CATCHUP_WINDOW_MS else now
         val next = db.habitOccurrenceDao().getNextPendingForHabit(habitId, floor)
@@ -361,7 +379,20 @@ class OccurrenceScheduler @Inject constructor(
         // Per-item locking (not one lock for the whole sweep) so a notification action can still
         // slip between items instead of waiting out the entire pass.
         db.foodMedTaskDao().getActiveTasks().first().forEach { syncTask(it.id) }
-        db.habitDao().getActiveHabits().first().forEach { syncHabit(it.id) }
+        val activeHabits = db.habitDao().getActiveHabits().first()
+        activeHabits.forEach { syncHabit(it.id) }
+        // UX overhaul item 3 — stale-alarm cleanup. A habit created as INDIVIDUAL and later
+        // switched to BATCH may still have a leaked per-occurrence "next" alarm armed (the arm
+        // path that armed it no longer runs, but syncHabit doesn't cancel it). Cancel any such
+        // alarm so BATCH is surfaced ONLY by the consolidated check-in notification.
+        activeHabits.filter { it.type == HabitType.BATCH }.forEach { habit ->
+            syncMutex.withLock {
+                db.habitOccurrenceDao().getNextPendingForHabit(habit.id, 0L)?.let { occ ->
+                    notificationUtils.cancelReminderAlarm(occ.id, occ.notificationId, isHabit = true)
+                    notificationUtils.cancelNotification(occ.notificationId)
+                }
+            }
+        }
         // v0.5.2: one app-wide alarm covers every BATCH habit. Every existing re-arm trigger
         // (launch, boot, package replace, tz change, WindowRefreshWorker) reaches syncAll(), so
         // no new WorkManager worker is needed.

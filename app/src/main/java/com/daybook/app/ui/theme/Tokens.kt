@@ -10,34 +10,102 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 
 /**
- * Design tokens for Daybook. Dark-only. The reference's soft/rounded/pastel structure
- * translated onto the near-black palette. See ui-redesign-plan.md.
+ * Design tokens for Daybook. The reference's soft/rounded/pastel structure translated onto the
+ * near-black palette. See ui-redesign-plan.md.
+ *
+ * UX overhaul item 4 — the 13 semantic colour roles are now a theme-resolved [DaybookColorScheme]
+ * provided through [LocalDaybookColors]. The public [DaybookColors] name is kept as a
+ * `@Composable`-getter shim so the ~316 `DaybookColors.X` call sites compile unchanged wherever
+ * they sit inside a `@Composable`. The DARK values below are byte-identical to the pre-overhaul
+ * constants; LIGHT is new. Non-composable readers (Theme.kt's scheme, CardTints.Neutral) read
+ * [DaybookColorsDark] / [DaybookColorsLight] directly, never the shim.
+ */
+@Immutable
+data class DaybookColorScheme(
+    val bg: Color,
+    val surface: Color,
+    val surfaceElevated: Color,
+    val outline: Color,
+    val hairline: Color,
+    val border: Color,
+    val textPrimary: Color,
+    val textMuted: Color,
+    val textFaint: Color,
+    val success: Color,
+    val warning: Color,
+    val danger: Color,
+    val onSolid: Color
+)
+
+/** The exact pre-overhaul dark constants — byte-identical. */
+val DaybookColorsDark = DaybookColorScheme(
+    bg = Color(0xFF0B0D0F),
+    surface = Color(0xFF16181B),
+    surfaceElevated = Color(0xFF1E2124),
+    outline = Color(0xFF2A2D31),
+    hairline = Color(0x14FFFFFF), // white 8%
+    border = Color(0x14FFFFFF),
+    textPrimary = Color(0xFFF2F3F5),
+    textMuted = Color(0xFF9AA0A6),
+    textFaint = Color(0xFF6B7178),
+    success = Color(0xFF4ADE80),
+    warning = Color(0xFFFACC15),
+    danger = Color(0xFFF87171),
+    onSolid = Color(0xFF0B0D0F) // text/icon on a light (#F2F3F5) solid control
+)
+
+/** Calm "paper" light palette — new in the UX overhaul. Tuned on device by the user. */
+val DaybookColorsLight = DaybookColorScheme(
+    bg = Color(0xFFFBFBF9),
+    surface = Color(0xFFFFFFFF),
+    surfaceElevated = Color(0xFFF2F2EF),
+    outline = Color(0xFFE2E2DE),
+    hairline = Color(0x14000000), // black 8%
+    border = Color(0x14000000),
+    textPrimary = Color(0xFF1B1D20),
+    textMuted = Color(0xFF5B6068),
+    textFaint = Color(0xFF8A9099),
+    success = Color(0xFF15803D),
+    warning = Color(0xFFB45309),
+    danger = Color(0xFFDC2626),
+    onSolid = Color(0xFFFFFFFF) // text/icon on a filled accent control
+)
+
+/** Provided by [DaybookTheme]; defaults to dark so previews / tests keep today's look. */
+val LocalDaybookColors = staticCompositionLocalOf { DaybookColorsDark }
+
+/** True when the active [DaybookColorScheme] is the dark one. */
+val isDaybookDarkThemeActive: Boolean
+    @Composable get() = LocalDaybookColors.current === DaybookColorsDark
+
+/**
+ * `@Composable`-getter shim over [LocalDaybookColors]. Every member resolves per theme at read
+ * time. `Border` and `Hairline` are the same 1dp-edge role (kept as two names for call-site
+ * intent — `Border` for card/chip/field edges, `Outline` reserved for dividers).
  */
 object DaybookColors {
-    val Bg = Color(0xFF0B0D0F)
-    val Surface = Color(0xFF16181B)
-    val SurfaceElevated = Color(0xFF1E2124)
-    val Outline = Color(0xFF2A2D31)
-    val Hairline = Color(0x14FFFFFF) // white 8%
-
-    // v0.5.3 Phase 0 — one name for the 1dp edge role. `Border` for every 1dp edge (cards,
-    // chips, tiles, fields); `Outline` stays reserved for dividers only (SettingsRowDivider,
-    // HorizontalDivider in sheets). Phase 4 sweeps the interchangeable uses onto this.
-    val Border = Hairline
-    val TextPrimary = Color(0xFFF2F3F5)
-    val TextMuted = Color(0xFF9AA0A6)
-    val TextFaint = Color(0xFF6B7178)
-    val Success = Color(0xFF4ADE80)
-    val Warning = Color(0xFFFACC15)
-    val Danger = Color(0xFFF87171)
-    val OnSolid = Color(0xFF0B0D0F) // text/icon on a light (#F2F3F5) solid control
+    val Bg: Color @Composable get() = LocalDaybookColors.current.bg
+    val Surface: Color @Composable get() = LocalDaybookColors.current.surface
+    val SurfaceElevated: Color @Composable get() = LocalDaybookColors.current.surfaceElevated
+    val Outline: Color @Composable get() = LocalDaybookColors.current.outline
+    val Hairline: Color @Composable get() = LocalDaybookColors.current.hairline
+    val Border: Color @Composable get() = LocalDaybookColors.current.border
+    val TextPrimary: Color @Composable get() = LocalDaybookColors.current.textPrimary
+    val TextMuted: Color @Composable get() = LocalDaybookColors.current.textMuted
+    val TextFaint: Color @Composable get() = LocalDaybookColors.current.textFaint
+    val Success: Color @Composable get() = LocalDaybookColors.current.success
+    val Warning: Color @Composable get() = LocalDaybookColors.current.warning
+    val Danger: Color @Composable get() = LocalDaybookColors.current.danger
+    val OnSolid: Color @Composable get() = LocalDaybookColors.current.onSolid
 }
 
 @Immutable
@@ -52,7 +120,8 @@ data class CardTint(
     val accent: Color
 )
 
-object CardTints {
+/** Dark pastel card tints — byte-identical to the pre-overhaul `CardTints`. */
+object CardTintsDark {
     val Lavender = CardTint(Color(0xFF2A2536), Color(0xFF322C42), Color(0xFFF2F3F5), Color(0xFFB4B0BE), Color(0xFF8E8A98), Color(0xFFA78BFA))
     val Peach = CardTint(Color(0xFF332723), Color(0xFF3D2F2A), Color(0xFFF2F3F5), Color(0xFFC0B2AB), Color(0xFF9C9089), Color(0xFFF5A97F))
     val Mint = CardTint(Color(0xFF1F312B), Color(0xFF263C34), Color(0xFFF2F3F5), Color(0xFFA9BEB6), Color(0xFF8AA099), Color(0xFF7FD1B0))
@@ -62,32 +131,84 @@ object CardTints {
 
     /** Utilitarian, non-pastel card (Settings, form groups). */
     val Neutral = CardTint(
-        fill = DaybookColors.Surface,
-        fillRaised = DaybookColors.SurfaceElevated,
-        onFill = DaybookColors.TextPrimary,
-        onFillMuted = DaybookColors.TextMuted,
-        onFillFaint = DaybookColors.TextFaint,
-        accent = DaybookColors.TextMuted
+        fill = DaybookColorsDark.surface,
+        fillRaised = DaybookColorsDark.surfaceElevated,
+        onFill = DaybookColorsDark.textPrimary,
+        onFillMuted = DaybookColorsDark.textMuted,
+        onFillFaint = DaybookColorsDark.textFaint,
+        accent = DaybookColorsDark.textMuted
     )
 
     val ALL: List<CardTint> = listOf(Lavender, Peach, Mint, Butter, SlateBlue, Rose)
 
     private val OVERRIDE = mapOf(
-        "LAVENDER" to Lavender,
-        "PEACH" to Peach,
-        "MINT" to Mint,
-        "BUTTER" to Butter,
-        "SLATE_BLUE" to SlateBlue,
-        "ROSE" to Rose
+        "LAVENDER" to Lavender, "PEACH" to Peach, "MINT" to Mint,
+        "BUTTER" to Butter, "SLATE_BLUE" to SlateBlue, "ROSE" to Rose
     )
 
     fun byIndex(i: Int): CardTint = ALL[((i % ALL.size) + ALL.size) % ALL.size]
-
     fun byId(id: String): CardTint = ALL[abs(id.hashCode()) % ALL.size]
-
-    /** Explicit per-item override wins; otherwise auto-assign by list position. */
     fun resolve(overrideName: String?, positionalIndex: Int): CardTint =
         OVERRIDE[overrideName] ?: byIndex(positionalIndex)
+}
+
+/** Light pastel card tints for the paper ground — new in the UX overhaul. */
+object CardTintsLight {
+    private val onFill = Color(0xFF1B1D20)
+    private val onFillMuted = Color(0xFF5B6068)
+    private val onFillFaint = Color(0xFF8A9099)
+    val Lavender = CardTint(Color(0xFFF1ECFB), Color(0xFFE7DEF7), onFill, onFillMuted, onFillFaint, Color(0xFF7C5CE0))
+    val Peach = CardTint(Color(0xFFFCEEE6), Color(0xFFF8E1D3), onFill, onFillMuted, onFillFaint, Color(0xFFC2683B))
+    val Mint = CardTint(Color(0xFFE5F5EF), Color(0xFFD6EDE3), onFill, onFillMuted, onFillFaint, Color(0xFF0F9488))
+    val Butter = CardTint(Color(0xFFF9F1DD), Color(0xFFF3E8C7), onFill, onFillMuted, onFillFaint, Color(0xFFB7791F))
+    val SlateBlue = CardTint(Color(0xFFE9F0FB), Color(0xFFDAE6F7), onFill, onFillMuted, onFillFaint, Color(0xFF2563EB))
+    val Rose = CardTint(Color(0xFFFBEBF1), Color(0xFFF7DDE7), onFill, onFillMuted, onFillFaint, Color(0xFFE23D5B))
+
+    val Neutral = CardTint(
+        fill = DaybookColorsLight.surface,
+        fillRaised = DaybookColorsLight.surfaceElevated,
+        onFill = DaybookColorsLight.textPrimary,
+        onFillMuted = DaybookColorsLight.textMuted,
+        onFillFaint = DaybookColorsLight.textFaint,
+        accent = DaybookColorsLight.textMuted
+    )
+
+    val ALL: List<CardTint> = listOf(Lavender, Peach, Mint, Butter, SlateBlue, Rose)
+
+    private val OVERRIDE = mapOf(
+        "LAVENDER" to Lavender, "PEACH" to Peach, "MINT" to Mint,
+        "BUTTER" to Butter, "SLATE_BLUE" to SlateBlue, "ROSE" to Rose
+    )
+
+    fun byIndex(i: Int): CardTint = ALL[((i % ALL.size) + ALL.size) % ALL.size]
+    fun byId(id: String): CardTint = ALL[abs(id.hashCode()) % ALL.size]
+    fun resolve(overrideName: String?, positionalIndex: Int): CardTint =
+        OVERRIDE[overrideName] ?: byIndex(positionalIndex)
+}
+
+/**
+ * Theme-resolved accessor. Members are `@Composable` getters that pick the dark or light tint
+ * set from [LocalDaybookColors] — the ~36 `CardTints.*` call sites (all inside composables)
+ * compile unchanged. Non-composable readers use [CardTintsDark] directly.
+ */
+object CardTints {
+    private val light: Boolean
+        @Composable get() = LocalDaybookColors.current !== DaybookColorsDark
+
+    val Lavender: CardTint @Composable get() = if (light) CardTintsLight.Lavender else CardTintsDark.Lavender
+    val Peach: CardTint @Composable get() = if (light) CardTintsLight.Peach else CardTintsDark.Peach
+    val Mint: CardTint @Composable get() = if (light) CardTintsLight.Mint else CardTintsDark.Mint
+    val Butter: CardTint @Composable get() = if (light) CardTintsLight.Butter else CardTintsDark.Butter
+    val SlateBlue: CardTint @Composable get() = if (light) CardTintsLight.SlateBlue else CardTintsDark.SlateBlue
+    val Rose: CardTint @Composable get() = if (light) CardTintsLight.Rose else CardTintsDark.Rose
+    val Neutral: CardTint @Composable get() = if (light) CardTintsLight.Neutral else CardTintsDark.Neutral
+    val ALL: List<CardTint> @Composable get() = if (light) CardTintsLight.ALL else CardTintsDark.ALL
+
+    @Composable fun byIndex(i: Int): CardTint = if (light) CardTintsLight.byIndex(i) else CardTintsDark.byIndex(i)
+    @Composable fun byId(id: String): CardTint = if (light) CardTintsLight.byId(id) else CardTintsDark.byId(id)
+    @Composable fun resolve(overrideName: String?, positionalIndex: Int): CardTint =
+        if (light) CardTintsLight.resolve(overrideName, positionalIndex)
+        else CardTintsDark.resolve(overrideName, positionalIndex)
 }
 
 object Spacing {

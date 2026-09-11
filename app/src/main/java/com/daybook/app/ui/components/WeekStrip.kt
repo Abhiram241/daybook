@@ -1,7 +1,6 @@
 package com.daybook.app.ui.components
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateFloatAsState
@@ -216,13 +215,14 @@ fun WeekStrip(
             )
         }
 
-        // "Back to today" — only while a non-today date is selected. Springs in/out on the
-        // selection crossing today so it doesn't occupy header space the rest of the time.
-        AnimatedVisibility(visible = selectedDate != today) {
-            Box(
-                Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
+        // "Back to today" — shown only while a non-today date is selected, but its row height is
+        // ALWAYS reserved (fixed-height Box, content toggled inside) so the calendar body below
+        // doesn't jump when the link appears/disappears (UX overhaul item 7).
+        Box(
+            Modifier.fillMaxWidth().height(36.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selectedDate != today) {
                 TextLink(text = "Back to today", onClick = { onSelect(today) })
             }
         }

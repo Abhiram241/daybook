@@ -1,50 +1,90 @@
 package com.daybook.app.ui.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
+/**
+ * UX overhaul item 4 — where the app's theme comes from. `DARK` is the default for every
+ * existing and fresh install; nothing changes until the user opts in from Appearance → Theme.
+ */
+enum class ThemeMode(val storageKey: String) {
+    DARK("DARK"),
+    LIGHT("LIGHT"),
+    SYSTEM("SYSTEM");
+
+    companion object {
+        val DEFAULT = DARK
+        fun fromKeyOrDefault(k: String?): ThemeMode =
+            entries.firstOrNull { it.storageKey == k } ?: DEFAULT
+    }
+}
+
+// Maps the dark [DaybookColorScheme] roles onto M3. Reads the raw [DaybookColorsDark] fields
+// directly (file scope — not the `@Composable`-getter shim). Byte-identical to the pre-overhaul
+// scheme apart from the explicit transparent `surfaceTint` (UX overhaul item 2).
 private val DarkScheme = darkColorScheme(
-    primary = DaybookColors.TextPrimary,
-    onPrimary = DaybookColors.OnSolid,
-    primaryContainer = DaybookColors.SurfaceElevated,
-    onPrimaryContainer = DaybookColors.TextPrimary,
-    secondary = DaybookColors.TextPrimary,
-    onSecondary = DaybookColors.OnSolid,
-    secondaryContainer = DaybookColors.SurfaceElevated,
-    onSecondaryContainer = DaybookColors.TextPrimary,
-    tertiary = DaybookColors.TextPrimary,
-    onTertiary = DaybookColors.OnSolid,
-    background = DaybookColors.Bg,
-    onBackground = DaybookColors.TextPrimary,
-    surface = DaybookColors.Surface,
-    onSurface = DaybookColors.TextPrimary,
-    surfaceVariant = DaybookColors.SurfaceElevated,
-    onSurfaceVariant = DaybookColors.TextMuted,
-    error = DaybookColors.Danger,
-    onError = DaybookColors.OnSolid,
-    outline = DaybookColors.Outline,
-    outlineVariant = DaybookColors.Outline,
-    scrim = DaybookColors.Bg
+    primary = DaybookColorsDark.textPrimary,
+    onPrimary = DaybookColorsDark.onSolid,
+    primaryContainer = DaybookColorsDark.surfaceElevated,
+    onPrimaryContainer = DaybookColorsDark.textPrimary,
+    secondary = DaybookColorsDark.textPrimary,
+    onSecondary = DaybookColorsDark.onSolid,
+    secondaryContainer = DaybookColorsDark.surfaceElevated,
+    onSecondaryContainer = DaybookColorsDark.textPrimary,
+    tertiary = DaybookColorsDark.textPrimary,
+    onTertiary = DaybookColorsDark.onSolid,
+    background = DaybookColorsDark.bg,
+    onBackground = DaybookColorsDark.textPrimary,
+    surface = DaybookColorsDark.surface,
+    onSurface = DaybookColorsDark.textPrimary,
+    surfaceVariant = DaybookColorsDark.surfaceElevated,
+    onSurfaceVariant = DaybookColorsDark.textMuted,
+    error = DaybookColorsDark.danger,
+    onError = DaybookColorsDark.onSolid,
+    outline = DaybookColorsDark.outline,
+    outlineVariant = DaybookColorsDark.outline,
+    scrim = DaybookColorsDark.bg,
+    surfaceTint = Color.Transparent
 )
 
-// v0.5.3 Phase 7 (#36) — one shape system. The M3 [Shapes] set is now derived from [AppShapes]
-// so corner radii have a single source of truth. extraSmall/small/medium/large map 1:1 onto
-// AppShapes.field / button / card / dialog — the radii are byte-identical to the pre-Phase-7
-// literals (10 / 12 / 14 / 16 dp), so no M3 component that reads `MaterialTheme.shapes`
-// (Switch track, Slider tick marks, Card, Chip, Menu, ExposedDropdownMenu, etc.) renders a
-// different corner.
-//
-// extraLarge stays an explicit all-corners RoundedCornerShape(20.dp) rather than
-// AppShapes.sheet: `sheet` is a top-corners-only shape (bottom radii 0, for a docked bottom
-// sheet), but M3 maps `extraLarge` onto full-bleed dialogs (DatePickerDialog / TimePicker) that
-// need all four corners rounded. ModalBottomSheet zeroes its own bottom corners regardless, so
-// the docked-sheet case is unaffected. 20.dp is the same radius AppShapes.sheet uses.
+// The light counterpart — same role mapping onto [DaybookColorsLight].
+private val LightScheme = lightColorScheme(
+    primary = DaybookColorsLight.textPrimary,
+    onPrimary = DaybookColorsLight.onSolid,
+    primaryContainer = DaybookColorsLight.surfaceElevated,
+    onPrimaryContainer = DaybookColorsLight.textPrimary,
+    secondary = DaybookColorsLight.textPrimary,
+    onSecondary = DaybookColorsLight.onSolid,
+    secondaryContainer = DaybookColorsLight.surfaceElevated,
+    onSecondaryContainer = DaybookColorsLight.textPrimary,
+    tertiary = DaybookColorsLight.textPrimary,
+    onTertiary = DaybookColorsLight.onSolid,
+    background = DaybookColorsLight.bg,
+    onBackground = DaybookColorsLight.textPrimary,
+    surface = DaybookColorsLight.surface,
+    onSurface = DaybookColorsLight.textPrimary,
+    surfaceVariant = DaybookColorsLight.surfaceElevated,
+    onSurfaceVariant = DaybookColorsLight.textMuted,
+    error = DaybookColorsLight.danger,
+    onError = DaybookColorsLight.onSolid,
+    outline = DaybookColorsLight.outline,
+    outlineVariant = DaybookColorsLight.outline,
+    scrim = DaybookColorsLight.bg,
+    surfaceTint = Color.Transparent
+)
+
+// v0.5.3 Phase 7 (#36) — one shape system. extraSmall/small/medium/large map 1:1 onto
+// AppShapes.field / button / card / dialog. extraLarge stays an all-corners RoundedCornerShape(20.dp)
+// for full-bleed M3 dialogs (DatePicker / TimePicker).
 private val DaybookShapes = Shapes(
     extraSmall = AppShapes.field,
     small = AppShapes.button,
@@ -54,13 +94,15 @@ private val DaybookShapes = Shapes(
 )
 
 /**
- * App is dark-only. [accent] is the user-selectable highlight colour (see [AccentColor]);
- * [fontChoice] swaps the app-wide typeface (see [FontChoice] / [daybookTypography]).
+ * [accent] is the user-selectable highlight colour (see [AccentColor]); [fontChoice] swaps the
+ * app-wide typeface (see [FontChoice] / [daybookTypography]); [themeMode] picks dark / light /
+ * follow-system (UX overhaul item 4).
  */
 @Composable
 fun DaybookTheme(
     accent: AccentColor = AccentColor.DEFAULT,
     fontChoice: FontChoice = FontChoice.DEFAULT,
+    themeMode: ThemeMode = ThemeMode.DEFAULT,
     // rec 4 — the user preference; OR-ed here with the OS ANIMATOR_DURATION_SCALE == 0 setting.
     reduceMotion: Boolean = false,
     content: @Composable () -> Unit
@@ -76,19 +118,29 @@ fun DaybookTheme(
     }
     val reduce = effectiveReduceMotion(reduceMotion, if (osNoAnim) 0f else 1f)
     val typography = remember(fontChoice) { daybookTypography(fontChoice) }
-    // v0.5.3 Phase 0 (§3.12 / backlog #16) — key the scheme on `accent` so every default M3
+
+    val systemDark = isSystemInDarkTheme()
+    val dark = when (themeMode) {
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+        ThemeMode.SYSTEM -> systemDark
+    }
+    val colors = if (dark) DaybookColorsDark else DaybookColorsLight
+    val accentColor = accent.colorFor(dark)
+    // v0.5.3 Phase 0 (§3.12 / backlog #16) — key the scheme on theme + accent so every default M3
     // control (Switch/RadioButton/Checkbox/CircularProgressIndicator/text-selection handles)
     // picks up the user accent instead of near-white `TextPrimary`.
-    val scheme = remember(accent) {
-        DarkScheme.copy(
-            primary = accent.color,
-            onPrimary = DaybookColors.OnSolid,
-            secondary = accent.color,
-            tertiary = accent.color
+    val scheme = remember(themeMode, accent, dark) {
+        (if (dark) DarkScheme else LightScheme).copy(
+            primary = accentColor,
+            onPrimary = colors.onSolid,
+            secondary = accentColor,
+            tertiary = accentColor
         )
     }
     CompositionLocalProvider(
-        LocalAccent provides accent.color,
+        LocalDaybookColors provides colors,
+        LocalAccent provides accentColor,
         LocalReduceMotion provides reduce
     ) {
         MaterialTheme(

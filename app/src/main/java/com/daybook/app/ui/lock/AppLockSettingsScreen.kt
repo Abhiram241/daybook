@@ -13,7 +13,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,8 +66,8 @@ fun AppLockSettingsScreen(
     onNavigateBack: () -> Unit,
     vm: LockViewModel = hiltViewModel()
 ) {
-    val enabled by vm.isEnabled.collectAsState()
-    val timeout by vm.timeout.collectAsState()
+    val enabled by vm.isEnabled.collectAsStateWithLifecycle()
+    val timeout by vm.timeout.collectAsStateWithLifecycle()
     val activity = LocalContext.current as? FragmentActivity
     val biometricsAvailable = remember { activity != null && vm.biometricsAvailable() }
 
@@ -107,7 +107,7 @@ fun AppLockSettingsScreen(
         }
     }
 
-    SettingsSubScreen("App lock", onNavigateBack) {
+    SettingsSubScreen("Privacy & lock", onNavigateBack) {
         Text(
             "Ask for a PIN" + (if (biometricsAvailable) " or fingerprint" else "") +
                 " before opening Daybook. Unlimited attempts, no lockout.",

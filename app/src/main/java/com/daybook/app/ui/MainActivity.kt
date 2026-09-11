@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavType
@@ -71,6 +72,7 @@ import com.daybook.app.ui.settings.NotificationSettingsScreen
 import com.daybook.app.ui.settings.SettingsScreen
 import com.daybook.app.ui.settings.TodayCalendarSettingsScreen
 import com.daybook.app.ui.theme.DaybookColors
+import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.DaybookTheme
 import com.daybook.app.util.notification.NotificationUtils
 import dagger.hilt.android.AndroidEntryPoint
@@ -101,16 +103,29 @@ class MainActivity : FragmentActivity() {
     /** (occurrenceId, isHabit) from a tapped notification, consumed once by [MainApp]. */
     private val deepLinkOccurrence = MutableStateFlow<Pair<String, Boolean>?>(null)
 
+    /** UX overhaul item 1 — set by onboarding's "Create your first habit" link; [MainApp]
+     *  navigates to Add Habit once it mounts, then clears it. */
+    private val pendingOpenAddHabit = MutableStateFlow(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // UX overhaul item 4 — pick the Activity window background synchronously (before
+        // setContent) from the theme_mode SharedPreferences mirror, so the pre-inflate splash
+        // matches the chosen theme and there is no dark/light flash on cold start.
+        applyWindowTheme()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         readDeepLink(intent)
 
-        // Opt in to the display's highest refresh rate, but only when it's actually worth it.
+        // Ask for the display's highest refresh rate as a SOFT hint, but only when it's worth it.
+        // `preferredRefreshRate` (unlike the old `preferredDisplayModeId`) does not pin the panel
+        // to one mode for the whole session — the system stays free to drop the panel to a lower
+        // rate for static / idle frames (LTPO down-clocking), which is what keeps the device from
+        // running warm while the app is merely foregrounded and not animating. Compose still
+        // requests the panel's high rate on its own during scroll / fling / animation.
         runCatching {
             val best = display?.supportedModes?.maxByOrNull { it.refreshRate }
             if (best != null && best.refreshRate > 90f) {
-                window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+                window.attributes = window.attributes.apply { preferredRefreshRate = best.refreshRate }
             }
         }
 
@@ -186,9 +201,13 @@ class MainActivity : FragmentActivity() {
                     text = {
                         Text(
                             if (permanentlyDenied)
-                                "Notifications are turned off for Daybook. Open settings to allow them so reminders can alert you."
+                                "Notifications are turned off for Daybook, so reminders can't alert you at all. " +
+                                    "Open settings and allow notifications, then your set times will start coming through."
                             else
-                                "Daybook reminds you at your set times and needs notification access to do that. You can also change this later in Settings."
+                                "Daybook reminds you at the times you set, and it needs notification access to do that. " +
+                                    "Without it, reminders are silent. You can change this later in Settings.",
+                            style = DaybookText.CardSubtitle,
+                            color = DaybookColors.TextPrimary
                         )
                     },
                     confirmLabel = if (permanentlyDenied) "Open settings" else "Allow",
@@ -229,7 +248,10 @@ class MainActivity : FragmentActivity() {
                     title = "Allow exact alarms",
                     text = {
                         Text(
-                            "Daybook fires reminders at exact times and needs the Alarms & reminders permission."
+                            "Without this, reminders can still arrive but the system may batch them and fire them late. " +
+                                "Tap Allow, then turn on ‘Alarms & reminders’ for Daybook.",
+                            style = DaybookText.CardSubtitle,
+                            color = DaybookColors.TextPrimary
                         )
                     },
                     confirmLabel = "Allow",
@@ -251,13 +273,19 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
-            val accent by onboardingViewModel.accentColor.collectAsState()
-            val fontChoice by onboardingViewModel.fontChoice.collectAsState()
-            val reduceMotion by onboardingViewModel.reduceMotion.collectAsState()
-            DaybookTheme(accent = accent, fontChoice = fontChoice, reduceMotion = reduceMotion) {
-                val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsState()
-                val locked by appLockRepository.isLocked.collectAsState()
-                val authState by authRepository.state.collectAsState()
+            val accent by onboardingViewModel.accentColor.collectAsStateWithLifecycle()
+            val fontChoice by onboardingViewModel.fontChoice.collectAsStateWithLifecycle()
+            val reduceMotion by onboardingViewModel.reduceMotion.collectAsStateWithLifecycle()
+            val themeMode by onboardingViewModel.themeMode.collectAsStateWithLifecycle()
+            DaybookTheme(
+                accent = accent,
+                fontChoice = fontChoice,
+                themeMode = themeMode,
+                reduceMotion = reduceMotion
+            ) {
+                val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsStateWithLifecycle()
+                val locked by appLockRepository.isLocked.collectAsStateWithLifecycle()
+                val authState by authRepository.state.collectAsStateWithLifecycle()
 
                 // v0.5.1 §D + §K — the four-stage launch gate, outermost first:
                 //
@@ -302,7 +330,37 @@ class MainActivity : FragmentActivity() {
                             restoredUserName = null   // sub-decision (c)
                         )
                         LaunchedEffect(derived) { onboardingViewModel.configure(derived) }
-                        OnboardingScreen(viewModel = onboardingViewModel)
+                        OnboardingScreen(
+                            viewModel = onboardingViewModel,
+                            onOpenAddHabit = { pendingOpenAddHabit.value = true },
+                            onAllowNotifications = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            },
+                            onAllowExactAlarms = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    runCatching {
+                                        startActivity(
+                                            Intent(
+                                                Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                                Uri.parse("package:$packageName")
+                                            )
+                                        )
+                                    }
+                                }
+                            },
+                            onAllowBattery = {
+                                runCatching {
+                                    startActivity(
+                                        Intent(
+                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:$packageName")
+                                        )
+                                    )
+                                }
+                            }
+                        )
                     }
                     else -> MainApp()
                 }
@@ -355,6 +413,18 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /** UX overhaul item 4 — sync theme pick from the SharedPreferences mirror. */
+    private fun applyWindowTheme() {
+        val dark = when (com.daybook.app.data.ThemeModePrefs.read(this)) {
+            "LIGHT" -> false
+            "SYSTEM" -> (resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            else -> true
+        }
+        setTheme(if (dark) R.style.Theme_Daybook_Dark else R.style.Theme_Daybook_Light)
+    }
+
     private fun readDeepLink(intent: Intent?) {
         val occId = intent?.getStringExtra(NotificationUtils.EXTRA_OPEN_OCCURRENCE_ID) ?: return
         val isHabit = intent.getBooleanExtra(NotificationUtils.EXTRA_OPEN_IS_HABIT, false)
@@ -370,8 +440,8 @@ class MainActivity : FragmentActivity() {
         // rec 7 (SD-2) — the bottom-nav tabs are configurable now: default landing tab + hide tabs
         // (NOT reorder). Today ("home") is always present and always first, preserving the
         // "index 0 == Today" invariant BackHandler + deep-link fallbacks rely on.
-        val navTabsCsv by onboardingViewModel.navTabs.collectAsState()
-        val defaultLandingTab by onboardingViewModel.defaultLandingTab.collectAsState()
+        val navTabsCsv by onboardingViewModel.navTabs.collectAsStateWithLifecycle()
+        val defaultLandingTab by onboardingViewModel.defaultLandingTab.collectAsStateWithLifecycle()
         val visibleRoutes = remember(navTabsCsv) { com.daybook.app.ui.NavConfig.visibleRoutesFrom(navTabsCsv) }
         // The top-level tabs live in one HorizontalPager (swipe between them + tab-order-aware
         // directional slide come for free). Detail/Add/Edit/Settings stay stacked over "main".
@@ -380,8 +450,18 @@ class MainActivity : FragmentActivity() {
             pageCount = { visibleRoutes.size }
         )
 
+        // UX overhaul item 1 — onboarding's "Create your first habit" link opens Add Habit once
+        // the app is actually mounted (the nav graph doesn't exist during the onboarding gate).
+        val pendingAddHabit by pendingOpenAddHabit.collectAsStateWithLifecycle()
+        LaunchedEffect(pendingAddHabit) {
+            if (pendingAddHabit) {
+                pendingOpenAddHabit.value = false
+                navController.navigate("add_habit")
+            }
+        }
+
         // Route a tapped reminder notification to its detail screen (REV-07).
-        val pendingDeepLink by deepLinkOccurrence.collectAsState()
+        val pendingDeepLink by deepLinkOccurrence.collectAsStateWithLifecycle()
         LaunchedEffect(pendingDeepLink) {
             val (occId, isHabit) = pendingDeepLink ?: return@LaunchedEffect
             val isJournal = !isHabit && kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -570,11 +650,11 @@ class MainActivity : FragmentActivity() {
                         onNavigateBack = { navController.popBackStack() },
                         onOpenAppearance = { navController.navigate("settings_appearance") },
                         onOpenTodayCalendar = { navController.navigate("settings_today") },
-                        onOpenNavigation = { navController.navigate("settings_navigation") },
                         onOpenNotifications = { navController.navigate("settings_notifications") },
                         onOpenData = { navController.navigate("settings_data") },
                         onOpenAccount = { navController.navigate("settings_account") },
-                        onOpenAppLock = { navController.navigate("settings_app_lock") }
+                        onOpenAppLock = { navController.navigate("settings_app_lock") },
+                        onOpenAbout = { navController.navigate("settings_about") }
                     )
                 }
                 composable("settings_app_lock") {
@@ -591,8 +671,20 @@ class MainActivity : FragmentActivity() {
                 composable("settings_today") {
                     TodayCalendarSettingsScreen(onNavigateBack = { navController.popBackStack() })
                 }
-                composable("settings_navigation") {
-                    com.daybook.app.ui.settings.NavigationSettingsScreen(onNavigateBack = { navController.popBackStack() })
+                composable("settings_about") {
+                    com.daybook.app.ui.settings.AboutSettingsScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        onReplayTour = { navController.navigate("onboarding_review") }
+                    )
+                }
+                composable("onboarding_review") {
+                    val reviewVm: OnboardingViewModel =
+                        androidx.hilt.navigation.compose.hiltViewModel()
+                    LaunchedEffect(Unit) { reviewVm.configureReview() }
+                    OnboardingScreen(
+                        viewModel = reviewVm,
+                        onExitReview = { navController.popBackStack() }
+                    )
                 }
                 composable("settings_notifications") {
                     NotificationSettingsScreen(onNavigateBack = { navController.popBackStack() })

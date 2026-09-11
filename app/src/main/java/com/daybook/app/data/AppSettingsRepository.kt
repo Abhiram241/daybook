@@ -1,7 +1,9 @@
 package com.daybook.app.data
 
+import android.content.Context
 import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.data.model.AppSettings
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -9,6 +11,7 @@ import javax.inject.Singleton
 
 @Singleton
 class AppSettingsRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val database: AppDatabase
 ) {
     suspend fun getSettings(): AppSettings {
@@ -59,6 +62,18 @@ class AppSettingsRepository @Inject constructor(
     suspend fun setDefaultLandingTab(v: String) { ensureRow(); database.appSettingsDao().updateDefaultLandingTab(v) }
     suspend fun setNavTabs(v: String) { ensureRow(); database.appSettingsDao().updateNavTabs(v) }
     suspend fun setDefaultSnoozeMinutes(v: Int) { ensureRow(); database.appSettingsDao().updateDefaultSnoozeMinutes(v) }
+
+    // DB v20 (UX overhaul item 4). Writes Room, then mirrors to SharedPreferences so
+    // MainActivity can read the theme synchronously before setContent (zero flash).
+    suspend fun setThemeMode(v: String) {
+        ensureRow()
+        database.appSettingsDao().updateThemeMode(v)
+        ThemeModePrefs.write(context, v)
+    }
+
+    /** Synchronous, non-suspending read of the theme-mode SharedPreferences mirror. Used as the
+     *  StateFlow initial value so the very first composition is already the right theme. */
+    fun readThemeModeMirror(): String = ThemeModePrefs.read(context)
 
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.daybook.app.ui.components.BackHeader
@@ -21,8 +22,8 @@ fun EditHabitScreen(
 ) {
     val state = remember { HabitFormState() }
     var initialized by remember { mutableStateOf(false) }
-    val errorMessage by formViewModel.errorMessage.collectAsState()
-    val successMessage by formViewModel.successMessage.collectAsState()
+    val errorMessage by formViewModel.errorMessage.collectAsStateWithLifecycle()
+    val successMessage by formViewModel.successMessage.collectAsStateWithLifecycle()
 
     LaunchedEffect(habitId) {
         routinesViewModel.getHabitById(habitId) { habit ->

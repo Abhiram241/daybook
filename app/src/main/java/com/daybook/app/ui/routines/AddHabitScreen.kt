@@ -1,6 +1,7 @@
 package com.daybook.app.ui.routines
 
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.hilt.navigation.compose.hiltViewModel
 
@@ -10,12 +11,12 @@ fun AddHabitScreen(
     viewModel: AddHabitViewModel = hiltViewModel()
 ) {
     val state = remember { HabitFormState() }
-    val errorMessage by viewModel.errorMessage.collectAsState()
-    val successMessage by viewModel.successMessage.collectAsState()
-    val preview by viewModel.nextReminderPreview.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val successMessage by viewModel.successMessage.collectAsStateWithLifecycle()
+    val preview by viewModel.nextReminderPreview.collectAsStateWithLifecycle()
     // rec 3 (N2) — a NEW habit form starts at the app-wide default snooze. Seed once, and only
     // while the field is still untouched (== the HabitFormState default), so a user edit wins.
-    val defaultSnooze by viewModel.defaultSnooze.collectAsState()
+    val defaultSnooze by viewModel.defaultSnooze.collectAsStateWithLifecycle()
     var snoozeSeeded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(defaultSnooze) {
         if (!snoozeSeeded && state.snooze == 10) state.snooze = defaultSnooze

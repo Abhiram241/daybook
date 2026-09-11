@@ -1,6 +1,7 @@
 package com.daybook.app.ui.foodmed
 
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.hilt.navigation.compose.hiltViewModel
 
@@ -10,14 +11,14 @@ fun AddFoodMedScreen(
     viewModel: AddFoodMedViewModel = hiltViewModel()
 ) {
     val state = remember { FoodMedFormState() }
-    val errorMessage by viewModel.errorMessage.collectAsState()
-    val successMessage by viewModel.successMessage.collectAsState()
-    val preview by viewModel.nextReminderPreview.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val prompts by viewModel.prompts.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val successMessage by viewModel.successMessage.collectAsStateWithLifecycle()
+    val preview by viewModel.nextReminderPreview.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val prompts by viewModel.prompts.collectAsStateWithLifecycle()
     // rec 3 (N2) — a NEW reminder form starts at the app-wide default snooze (seed once, only
     // while the field is still untouched so a user edit wins).
-    val defaultSnooze by viewModel.defaultSnooze.collectAsState()
+    val defaultSnooze by viewModel.defaultSnooze.collectAsStateWithLifecycle()
     var snoozeSeeded by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(defaultSnooze) {
         if (!snoozeSeeded && state.snooze == 10) state.snooze = defaultSnooze

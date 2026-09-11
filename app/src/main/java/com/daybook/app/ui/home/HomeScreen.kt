@@ -34,6 +34,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
+// Battery: lifecycle-aware collection so the ViewModel's minute/boundary tickers and Room
+// pipelines stop while the app is backgrounded instead of running under WhileSubscribed forever.
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daybook.app.data.model.ColorTag
 import com.daybook.app.ui.components.*
 import com.daybook.app.ui.icons.Icons
@@ -72,22 +75,22 @@ fun HomeScreen(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     viewModel: HomeViewModel = hiltViewModel()
 ) {
-    val items by viewModel.homeItems.collectAsState()
-    val visibleItems by viewModel.visibleItems.collectAsState()
-    val typeFilter by viewModel.typeFilter.collectAsState()
-    val showResolved by viewModel.showResolved.collectAsState()
-    val monthReady by viewModel.monthReady.collectAsState()
-    val habitStreak by viewModel.habitStreak.collectAsState()
-    val foodMedStreak by viewModel.foodMedStreak.collectAsState()
-    val showStreaks by viewModel.showStreaks.collectAsState()
-    val heroStyle by viewModel.heroStyle.collectAsState()
-    val selectedDate by viewModel.selectedDate.collectAsState()
-    val greeting by viewModel.greeting.collectAsState()
-    val today by viewModel.today.collectAsState()
-    val profile by viewModel.profile.collectAsState()
-    val weekStart by viewModel.weekStart.collectAsState()
-    val calendarDefaultExpanded by viewModel.calendarDefaultExpanded.collectAsState()
-    val syncStatus by viewModel.syncStatus.collectAsState()
+    val items by viewModel.homeItems.collectAsStateWithLifecycle()
+    val visibleItems by viewModel.visibleItems.collectAsStateWithLifecycle()
+    val typeFilter by viewModel.typeFilter.collectAsStateWithLifecycle()
+    val showResolved by viewModel.showResolved.collectAsStateWithLifecycle()
+    val monthReady by viewModel.monthReady.collectAsStateWithLifecycle()
+    val habitStreak by viewModel.habitStreak.collectAsStateWithLifecycle()
+    val foodMedStreak by viewModel.foodMedStreak.collectAsStateWithLifecycle()
+    val showStreaks by viewModel.showStreaks.collectAsStateWithLifecycle()
+    val heroStyle by viewModel.heroStyle.collectAsStateWithLifecycle()
+    val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
+    val greeting by viewModel.greeting.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
+    val profile by viewModel.profile.collectAsStateWithLifecycle()
+    val weekStart by viewModel.weekStart.collectAsStateWithLifecycle()
+    val calendarDefaultExpanded by viewModel.calendarDefaultExpanded.collectAsStateWithLifecycle()
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val reduceMotion = LocalReduceMotion.current
     val context = LocalContext.current
 
@@ -115,6 +118,12 @@ fun HomeScreen(
     }
     var undoToken by remember { mutableStateOf(0) }
     var remindersFilterOpen by remember { mutableStateOf(false) }
+    // UX overhaul item 7 — "Group by type" is session state (survives rotation), never an
+    // app_settings column. Off = the Overdue / Now / Later / Done time axis.
+    var groupByType by rememberSaveable { mutableStateOf(false) }
+    val reminderSections = remember(visibleItems, selectedDate, today, groupByType) {
+        groupHomeItems(visibleItems, selectedDate, today, System.currentTimeMillis(), groupByType)
+    }
     // HARD (D10.2): headline count + progress ratios stay bound to the UNFILTERED list.
     val pending = remember(items) { items.count { it.canComplete || it.canReply || it.canSkip } }
     val habitRatio = remember(items) { ratio(items, isHabit = true) }
@@ -221,7 +230,14 @@ fun HomeScreen(
                     )
                 }
             } else {
-                itemsIndexed(visibleItems, key = { _, it -> it.id }) { index, item ->
+              var precedingCount = 0
+              reminderSections.forEach { section ->
+                val base = precedingCount
+                item(key = "section-${section.label}") {
+                    ReminderSectionLabel(section.label, section.count)
+                }
+                itemsIndexed(section.items, key = { _, it -> it.id }) { indexInSection, item ->
+                    val index = base + indexInSection
                     val openJournal = {
                         if (item.occurrenceId != null) onNavigateToJournal(item.occurrenceId)
                         else onNavigateToJournalBackfill(item.detailId, item.scheduledEpoch)
@@ -265,6 +281,8 @@ fun HomeScreen(
                         }
                     )
                 }
+                precedingCount += section.items.size
+              }
             }
         }
     }
@@ -287,7 +305,12 @@ fun HomeScreen(
             showArchived = showResolved,
             onToggleArchived = { viewModel.setShowResolved(!showResolved) },
             archivedRowLabel = "Show completed",
-            onReset = viewModel::resetReminderFilter,
+            groupByType = groupByType,
+            onToggleGroupByType = { groupByType = !groupByType },
+            onReset = {
+                groupByType = false
+                viewModel.resetReminderFilter()
+            },
         )
 
         UndoSnack(token = undoToken)
@@ -481,6 +504,20 @@ private fun ProgressCard(
     }
 }
 
+/**
+ * UX overhaul item 7 — a lightweight muted section label for the grouped reminders list, e.g.
+ * "NOW · 2". No card chrome, no new colours.
+ */
+@Composable
+private fun ReminderSectionLabel(label: String, count: Int) {
+    Text(
+        "${label.uppercase()} · $count",
+        style = DaybookText.Metadata,
+        color = DaybookColors.TextMuted,
+        modifier = Modifier.padding(top = Spacing.xs, bottom = Spacing.xs)
+    )
+}
+
 @Composable
 private fun ReminderCard(
     item: HomeItem,
@@ -536,37 +573,21 @@ private fun ReminderCard(
                 item.subtitle?.let {
                     Text(it, style = DaybookText.CardSubtitle, color = tint.onFillMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                // v0.5.4: recorded Crohn's trigger flag on a resolved FOOD log.
-                item.loggedRedFlag?.takeIf { it != com.daybook.app.data.model.RedFlag.NONE }?.let { flag ->
-                    val flagColor = if (flag == com.daybook.app.data.model.RedFlag.RED)
-                        DaybookColors.Danger else DaybookColors.Warning
-                    val flagText = (if (flag == com.daybook.app.data.model.RedFlag.RED) "Red flag" else "Possible trigger") +
-                        (item.loggedSuspectedFood?.let { " · $it" }.orEmpty())
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // v0.5.3 Phase 4 (§4.10) — the semantic colour stays on the dot; the text
-                        // reads in `tint.onFillMuted` (Danger/Warning as text is low-contrast on
-                        // the pastel `fill`).
-                        Box(Modifier.size(7.dp).clip(CircleShape).background(flagColor))
-                        Spacer(Modifier.width(5.dp))
-                        // v0.5.3 Phase 5 (§5.4) — one caption system: flag text is Metadata / onFillFaint.
-                        Text(
-                            flagText,
-                            style = DaybookText.Metadata,
-                            color = tint.onFillFaint,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                // UX overhaul item 7 — one lightened meta line: time, then any recorded FOOD
+                // detail (red-flag / suspected food / outside food) folded in and truncated.
+                // No action is removed; this is spacing / hierarchy only.
+                val loggedFlag = item.loggedRedFlag?.takeIf { it != com.daybook.app.data.model.RedFlag.NONE }
+                val flagDot = when (loggedFlag) {
+                    com.daybook.app.data.model.RedFlag.RED -> DaybookColors.Danger
+                    com.daybook.app.data.model.RedFlag.MAYBE -> DaybookColors.Warning
+                    else -> null
                 }
-                // v0.5.2 build 8: recorded "outside food" marker on a resolved FOOD log.
-                if (item.loggedOutsideFood == true) {
-                    Text(
-                        "Outside food",
-                        style = DaybookText.Metadata,
-                        color = tint.onFillFaint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                val metaExtra = buildList {
+                    loggedFlag?.let {
+                        add(if (it == com.daybook.app.data.model.RedFlag.RED) "Red flag" else "Possible trigger")
+                    }
+                    item.loggedSuspectedFood?.let { add(it) }
+                    if (item.loggedOutsideFood == true) add("Outside food")
                 }
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -577,7 +598,17 @@ private fun ReminderCard(
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(item.scheduledTime, style = DaybookText.Metadata, color = tint.onFillMuted)
+                    if (flagDot != null) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(flagDot))
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        (listOf(item.scheduledTime) + metaExtra).joinToString(" · "),
+                        style = DaybookText.Metadata,
+                        color = tint.onFillMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
             Spacer(Modifier.width(8.dp))

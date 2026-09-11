@@ -462,3 +462,17 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN check_for_updates_enabled INTEGER NOT NULL DEFAULT 1")
     }
 }
+
+/**
+ * v19 -> v20 (UX overhaul item 4 — light / dark theme). ONE additive column:
+ * `theme_mode` ("DARK" / "LIGHT" / "SYSTEM"). `NOT NULL DEFAULT 'DARK'` byte-matches
+ * `@ColumnInfo(defaultValue = "DARK")` so every existing row reads DARK and nothing changes
+ * until the user opts in. No table rebuild, no row rewrite. Device-local — NOT in `BackupModel`,
+ * NOT in any export, NOT in `ContentHash` / the sync loop — same as every `app_settings` column
+ * since v16. This is the entire permitted schema surface for the overhaul.
+ */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN theme_mode TEXT NOT NULL DEFAULT 'DARK'")
+    }
+}
