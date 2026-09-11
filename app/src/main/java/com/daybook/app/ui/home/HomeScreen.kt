@@ -91,6 +91,8 @@ fun HomeScreen(
     val weekStart by viewModel.weekStart.collectAsStateWithLifecycle()
     val calendarDefaultExpanded by viewModel.calendarDefaultExpanded.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
+    // ROUND 0 (C9): revertItem() must not fail silently — this carries its outcome to UndoSnack.
+    val undoFeedback by viewModel.undoFeedback.collectAsStateWithLifecycle()
     val reduceMotion = LocalReduceMotion.current
     val context = LocalContext.current
 
@@ -313,7 +315,7 @@ fun HomeScreen(
             },
         )
 
-        UndoSnack(token = undoToken)
+        UndoSnack(token = undoToken, text = undoFeedback ?: "Undone")
     }
 }
 
@@ -768,21 +770,46 @@ private fun ReminderCard(
     BottomSheetMenu(
         visible = sheetOpen,
         onDismiss = { sheetOpen = false },
-        actions = buildList {
-            if (isLoggedText || isEditableHabitJournal) {
-                // Journal Mode: edit the entry instead of undoing it (a text reply has an edit
-                // path; there is no "undo" for it on the Today card anymore).
-                add(SheetAction(MI.Filled.Edit, "Edit", onClick = editEntry))
-            } else if (item.statusLabel != null && item.statusLabel != MISSED_LABEL && item.occurrenceId != null) {
-                add(SheetAction(DaybookIcons.Unarchive, "Undo", onClick = onUndo))
-            }
-            // Snooze/Skip act on a *pending* slot: snoozing or skipping an already-resolved
-            // occurrence would re-arm or re-write a finished row. Every card that could open this
-            // sheet before v0.5.3 had statusLabel == null, so this list is unchanged for them.
-            if (item.statusLabel == null) {
-                add(SheetAction(DaybookIcons.Clock, "Snooze", onClick = onSnooze))
-                add(SheetAction(MI.Filled.Close, "Skip", onClick = onSkip))
+        // ROUND 0 (Z3): the decision of WHICH actions appear is pulled out into the pure,
+        // unit-tested `sheetActionsFor` below — this `when` only maps its labels back onto the
+        // icon + onClick each one already had. Previously `isLoggedText || isEditableHabitJournal`
+        // was an `else if` against the Undo branch, so a LOGGED intake row got "Edit" and nothing
+        // else — there was no way back to not-logged from any screen. Edit and Undo are different
+        // actions; `sheetActionsFor` offers both independently.
+        actions = sheetActionsFor(
+            isLoggedText = isLoggedText,
+            isEditableHabitJournal = isEditableHabitJournal,
+            statusLabel = item.statusLabel,
+            hasOccurrence = item.occurrenceId != null
+        ).map { label ->
+            when (label) {
+                "Edit" -> SheetAction(MI.Filled.Edit, "Edit", onClick = editEntry)
+                "Undo" -> SheetAction(DaybookIcons.Unarchive, "Undo", onClick = onUndo)
+                "Snooze" -> SheetAction(DaybookIcons.Clock, "Snooze", onClick = onSnooze)
+                else -> SheetAction(MI.Filled.Close, "Skip", onClick = onSkip)
             }
         }
     )
+}
+
+/**
+ * ROUND 0 (Z3): the Today card overflow sheet's action list, extracted as a pure function so it
+ * is unit-testable without composing [ReminderCard] — the repo's own house style (§10) for a
+ * decision like this. Mirrors the `if`/`if` (not `if`/`else if`) in the [BottomSheetMenu] call
+ * above exactly: "Edit" and "Undo" are independent — a resolved, editable row (a logged intake
+ * entry, or a logged Journal-as-habit row) can offer both, not just one. "Snooze"/"Skip" act only
+ * on a still-pending slot.
+ */
+internal fun sheetActionsFor(
+    isLoggedText: Boolean,
+    isEditableHabitJournal: Boolean,
+    statusLabel: String?,
+    hasOccurrence: Boolean
+): List<String> = buildList {
+    if (isLoggedText || isEditableHabitJournal) add("Edit")
+    if (statusLabel != null && statusLabel != MISSED_LABEL && hasOccurrence) add("Undo")
+    if (statusLabel == null) {
+        add("Snooze")
+        add("Skip")
+    }
 }

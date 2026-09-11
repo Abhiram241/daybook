@@ -204,8 +204,19 @@ class RespondViewModel @Inject constructor(
         }
     }
 
-    fun undo() = resolve {
-        if (isHabit) occurrenceScheduler.revertHabit(occId) else occurrenceScheduler.revertFoodMed(occId)
+    // ROUND 0 (C9): undo() used to go through `resolve {}` below, which discards its action's
+    // result and unconditionally sets `done = true` — a swallowed error. It now handles its own
+    // outcome, mirroring how log() already handles LogResult. This also fixes the habit-side
+    // "Undo" button, which had the same swallowed-error behaviour.
+    fun undo() {
+        if (_state.value.busy) return
+        _state.update { it.copy(busy = true, rejectedMessage = null) }
+        safeLaunch {
+            val ok = runCatching {
+                if (isHabit) occurrenceScheduler.revertHabit(occId) else occurrenceScheduler.revertFoodMed(occId)
+            }.isSuccess
+            _state.update { applyUndoResult(it, ok) }
+        }
     }
 
     private inline fun resolve(crossinline action: suspend () -> Unit) {
@@ -215,5 +226,17 @@ class RespondViewModel @Inject constructor(
             runCatching { action() }
             _state.update { it.copy(busy = false, done = true) }
         }
+    }
+
+    companion object {
+        // ROUND 0 (Z3): the state-transition half of undo()'s outcome, pulled out so it is
+        // unit-testable without a Room-backed OccurrenceScheduler or a coroutine dispatcher — this
+        // project's unit tests are plain JUnit4 with no Robolectric and no mocking library, so
+        // undo() itself (a real suspend call into Room via OccurrenceScheduler, a final class) can
+        // never run under `./gradlew test`. Semantics are exactly the inline `if (ok) … else …`
+        // undo() evaluates; this is the same code, not a second copy.
+        internal fun applyUndoResult(current: UiState, ok: Boolean): UiState =
+            if (ok) current.copy(busy = false, done = true)
+            else current.copy(busy = false, rejectedMessage = "Couldn't reset this entry. Try again.")
     }
 }

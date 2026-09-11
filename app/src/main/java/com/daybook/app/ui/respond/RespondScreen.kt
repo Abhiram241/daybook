@@ -14,6 +14,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -28,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
 import com.daybook.app.ui.components.BackHeader
 import com.daybook.app.ui.components.BigHeadline
+import com.daybook.app.ui.components.DaybookAlertDialog
 import com.daybook.app.ui.components.DaybookChip
 import com.daybook.app.ui.components.DaybookTextField
 import com.daybook.app.ui.components.GhostButton
@@ -50,9 +54,27 @@ fun RespondScreen(
     vm: RespondViewModel = hiltViewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    // ROUND 0: confirm-first for the destructive "Reset to not logged" action below.
+    var confirmReset by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.done, state.missing) {
         if (state.done || state.missing) onDone()
+    }
+
+    if (confirmReset) {
+        DaybookAlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = "Reset this entry?",
+            text = {
+                Text(
+                    "This clears what you logged and puts the reminder back to not logged. Your typed answer is deleted and can't be brought back."
+                )
+            },
+            confirmLabel = "Reset",
+            onConfirm = { confirmReset = false; vm.undo() },
+            dismissLabel = "Cancel",
+            destructive = true
+        )
     }
 
     Column(
@@ -206,10 +228,21 @@ fun RespondScreen(
                         onClick = { vm.log() },
                         enabled = state.reply.isNotBlank() && !state.busy
                     )
-                    // Journal Mode: Skip is meaningless while editing an existing log.
                     if (!state.isEdit) {
+                        // Journal Mode: Skip is meaningless while editing an existing log.
                         Spacer(Modifier.height(8.dp))
                         GhostButton(text = "Skip", onClick = { vm.skip() }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        // ROUND 0: reset a mistaken log back to an unanswered slot. `vm.undo()`
+                        // already existed and already called revertFoodMed; it was simply
+                        // unreachable from here.
+                        Spacer(Modifier.height(8.dp))
+                        GhostButton(
+                            text = "Reset to not logged",
+                            onClick = { confirmReset = true },
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }

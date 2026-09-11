@@ -53,6 +53,17 @@ internal const val MISSED_LABEL = "Missed"
  *  routes this (unlike a habit "Done" or a "Skipped") to the entry editor, not to undo-to-pending. */
 internal const val LOGGED_LABEL = "Logged"
 
+/**
+ * ROUND 0 (Z3): [HomeViewModel.revertItem]'s outcome-to-copy mapping, pulled out so it is
+ * unit-testable without a Room-backed OccurrenceScheduler or a coroutine dispatcher — this
+ * project's unit tests are plain JUnit4 with no Robolectric and no mocking library, so
+ * revertItem() itself (a real suspend call into Room via OccurrenceScheduler, a final class) can
+ * never run under `./gradlew test`. Semantics are exactly the inline `if (ok) … else …`
+ * revertItem() evaluates; this is the same code, not a second copy.
+ */
+internal fun undoFeedbackFor(ok: Boolean): String =
+    if (ok) "Undone" else "Couldn't undo that. Try again."
+
 @Immutable
 data class HomeItem(
     val id: String,
@@ -759,12 +770,19 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    // ROUND 0 (C9): revert must not fail silently.
+    private val _undoFeedback = MutableStateFlow<String?>(null)
+    val undoFeedback: StateFlow<String?> = _undoFeedback.asStateFlow()
+
     /** v0.5.3 item 1: one-tap undo of a resolved reminder back to a blank PENDING slot. */
     fun revertItem(item: HomeItem) {
         val occ = item.occurrenceId ?: return
         safeLaunch {
-            if (item.isHabit) occurrenceScheduler.revertHabit(occ)
-            else occurrenceScheduler.revertFoodMed(occ)
+            val ok = runCatching {
+                if (item.isHabit) occurrenceScheduler.revertHabit(occ)
+                else occurrenceScheduler.revertFoodMed(occ)
+            }.isSuccess
+            _undoFeedback.value = undoFeedbackFor(ok)
         }
     }
 
