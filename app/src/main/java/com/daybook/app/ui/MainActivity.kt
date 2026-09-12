@@ -75,6 +75,20 @@ import com.daybook.app.ui.settings.TodayCalendarSettingsScreen
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.DaybookTheme
+import com.daybook.app.ui.theme.LocalAccent
+import com.daybook.app.ui.theme.LocalOnAccent
+import com.daybook.app.ui.theme.onAccentInk
+import com.daybook.app.ui.workout.WorkoutRoutes
+import com.daybook.app.ui.workout.AddExerciseScreen
+import com.daybook.app.ui.workout.ExercisePickerMode
+import com.daybook.app.ui.workout.ExerciseFormScreen
+import com.daybook.app.ui.workout.RoutineEditScreen
+import com.daybook.app.ui.workout.WorkoutDetailScreen
+import com.daybook.app.ui.workout.WorkoutHistoryScreen
+import com.daybook.app.ui.workout.WorkoutHomeScreen
+import com.daybook.app.ui.workout.WorkoutSessionScreen
+import com.daybook.app.ui.workout.WorkoutSettingsScreen
+import com.daybook.app.ui.components.NavCoachMark
 import com.daybook.app.util.notification.NotificationUtils
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -100,6 +114,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var cloudSyncRepository: com.daybook.app.data.sync.CloudSyncRepository
     @Inject lateinit var authRepository: AuthRepository
     @Inject lateinit var appLockRepository: AppLockRepository
+    @Inject lateinit var workoutFontPrefs: com.daybook.app.data.workout.WorkoutFontPrefs
 
     /** (occurrenceId, isHabit) from a tapped notification, consumed once by [MainApp]. */
     private val deepLinkOccurrence = MutableStateFlow<Pair<String, Boolean>?>(null)
@@ -107,6 +122,21 @@ class MainActivity : FragmentActivity() {
     /** UX overhaul item 1 — set by onboarding's "Create your first habit" link; [MainApp]
      *  navigates to Add Habit once it mounts, then clears it. */
     private val pendingOpenAddHabit = MutableStateFlow(false)
+
+    /**
+     * Bug fix (post-A6) — the Add-Exercise picker's result, for whichever screen navigated to it
+     * (the live session or the routine editor). §3.6.6's original design routed this through the
+     * PREVIOUS `NavBackStackEntry`'s own `SavedStateHandle`, observed from inside each consumer's
+     * `ViewModel` — on-device testing found that path unreliable (tapping a row popped back to
+     * the session with nothing added: the write to `previousBackStackEntry?.savedStateHandle`
+     * was not reaching the still-alive `WorkoutSessionViewModel`'s collector in practice, most
+     * likely a `NavBackStackEntry` timing/identity subtlety around an immediate
+     * set-then-`popBackStack()`). Replaced with the exact same proven mechanism this file already
+     * uses for the notification deep link (`deepLinkOccurrence` above): a plain
+     * `MutableStateFlow` on the Activity, set by the picker and consumed by a `LaunchedEffect` in
+     * whichever destination is current after the pop — no `NavBackStackEntry` indirection at all.
+     */
+    private val pickedExerciseId = MutableStateFlow<List<String>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -602,25 +632,205 @@ class MainActivity : FragmentActivity() {
             { taskId -> navController.navigate("edit_foodmed/$taskId") }
         }
 
+        // ------------------------------------------------------------------ A5: Beast Mode shell
+        // (§3.6) — long-press "Today" to enter, long-press Beast Mode's own leftmost nav item to
+        // leave. Eight stacked `composable(...)` destinations, siblings of "main" — not a nested
+        // `navigation(...)` graph and not a fourth page of "main"'s own pager (§3.6.0/§3.6.6). Item
+        // 3 (Workout UI fixes plan, LOCKED — PRIORITY): Routines/History/Exercises are no longer
+        // three of those destinations — they're pages of their OWN `HorizontalPager`, hosted
+        // inside the single HOME destination (see `beastPagerState` below and the `composable
+        // (WorkoutRoutes.HOME)` block further down).
+        val appSettings by appSettingsRepository.observeSettings()
+            .collectAsStateWithLifecycle(initialValue = com.daybook.app.data.model.AppSettings())
+        val workoutAccent = remember(appSettings.workoutAccentColor) {
+            com.daybook.app.ui.workout.beast.BeastAccentColor.fromKey(appSettings.workoutAccentColor)
+        }
+        // A5 (§3.6.3) — the coach-mark's lifecycle: dismissed (and workout_hint_state advanced)
+        // by tapping "Got it" (-> 1, handled in the coachMark slot below), performing the
+        // long-press (-> 2, handled in onLongSelect below), or navigating away from `main` (-> 1).
+        LaunchedEffect(onMain, appSettings.workoutHintState) {
+            if (!onMain && appSettings.workoutHintState == 0) {
+                runCatching { appSettingsRepository.setWorkoutHintState(1) }
+            }
+        }
+
+        // Item 3 (Workout UI fixes plan, LOCKED — PRIORITY) — Beast Mode's 3 tabs (Routines/
+        // History/Exercises, `WorkoutRoutes.NAV`) rebuilt as pages of one `HorizontalPager`,
+        // exactly the same mechanism as `"main"`'s own pager above: physically swipeable, one
+        // shared back-stack entry (`WorkoutRoutes.HOME`, the only one of the three still a real
+        // NavHost destination — HISTORY/LIBRARY are now just pager pages, not destinations) so
+        // the 3 screens' ViewModels co-instantiate for instant switching, and `goToBeastPage`
+        // mirrors `goToPage` (a plain `scrollToPage` — every nav-bar tap snaps, per §O below;
+        // dragging is the pager's own gesture and still slides).
+        val beastPagerState = rememberPagerState(initialPage = 0, pageCount = { WorkoutRoutes.NAV.size })
+        val beastSettledPage by remember { derivedStateOf { beastPagerState.currentPage } }
+        val goToBeastPage: (Int) -> Unit = remember(beastPagerState, scope) {
+            { idx -> scope.launch { beastPagerState.scrollToPage(idx) }; Unit }
+        }
+        val onSelectBeastRoute: (String) -> Unit = remember(goToBeastPage) {
+            { route -> goToBeastPage(WorkoutRoutes.NAV.indexOf(route).coerceAtLeast(0)) }
+        }
+        val goWorkout: () -> Unit = remember(navController, goToBeastPage) {
+            {
+                // Always land on Routines for a fresh entry into Beast Mode (long-press "Today",
+                // or Settings -> "Beast Mode") — mirrors `exitBeastMode`'s own goToPage(0) below,
+                // and matches today's behaviour where `goWorkout` always opened the HOME
+                // destination specifically. `beastPagerState` otherwise persists its page across
+                // stacked child destinations (Settings, a routine, a session) the same way
+                // `pagerState` persists across "main"'s own child destinations.
+                goToBeastPage(0)
+                navController.navigate(WorkoutRoutes.HOME) { launchSingleTop = true }
+            }
+        }
+        // A5 (§3.6.8) — popBackStack(to "main") clears the whole workout stack in one pop,
+        // however deep the user was; goToPage(0) lands on TODAY specifically, since the gesture
+        // began on Today.
+        val exitBeastMode: () -> Unit = remember(navController, goToPage) {
+            {
+                navController.popBackStack(route = "main", inclusive = false)
+                goToPage(0)
+            }
+        }
+        val goWorkoutSettings: () -> Unit = remember(navController) {
+            { navController.navigate(WorkoutRoutes.SETTINGS) }
+        }
+        val goWorkoutSession: (String) -> Unit = remember(navController) {
+            { id -> navController.navigate(WorkoutRoutes.session(id)) { launchSingleTop = true } }
+        }
+        val goWorkoutDetail: (String) -> Unit = remember(navController) {
+            { id -> navController.navigate(WorkoutRoutes.detail(id)) }
+        }
+        val goRoutineEdit: (String?) -> Unit = remember(navController) {
+            { id -> navController.navigate(WorkoutRoutes.routineEdit(id)) }
+        }
+        val goPickExercise: () -> Unit = remember(navController) {
+            { navController.navigate(WorkoutRoutes.PICK_EXERCISE) }
+        }
+        val goNewExercise: () -> Unit = remember(navController) {
+            { navController.navigate(WorkoutRoutes.NEW_EXERCISE) }
+        }
+        val goEditExercise: (String) -> Unit = remember(navController) {
+            { id -> navController.navigate(WorkoutRoutes.editExercise(id)) }
+        }
+        val goSettingsData: () -> Unit = remember(navController) {
+            { navController.navigate("settings_data") { launchSingleTop = true } }
+        }
+
+        // Item 3 — HISTORY/LIBRARY are no longer separate NavHost destinations (they're pager
+        // pages inside the single HOME entry), so "in the Beast Mode nav" is now just "is HOME the
+        // current back-stack entry", exactly as "onMain" is "is 'main' the current entry" above.
+        val inBeastNav = backStackRoute == WorkoutRoutes.HOME
+        val inBeast = backStackRoute in WorkoutRoutes.ALL
+        val showNav = onMain || inBeastNav
+        // The pill nav still keys off a route string; on the Beast Mode pager it tracks the
+        // settled page the same way `currentRoute` tracks `settledPage` for "main" above.
+        val beastCurrentRoute = WorkoutRoutes.NAV.getOrElse(beastSettledPage) { WorkoutRoutes.HOME }
+        val workoutIcon: ImageVector = ImageVector.vectorResource(R.drawable.ic_workout)
+        val beastNavItems = remember(workoutIcon) {
+            listOf(
+                NavItemSpec(WorkoutRoutes.HOME, workoutIcon, "Routines"),
+                NavItemSpec(WorkoutRoutes.HISTORY, com.daybook.app.ui.icons.DaybookIcons.Clock, "History"),
+                NavItemSpec(WorkoutRoutes.LIBRARY, com.daybook.app.ui.icons.DaybookIcons.Category, "Exercises")
+            )
+        }
+
+        // A5 (§3.8.3) — the current APP accent, already resolved by the outer DaybookTheme; only
+        // the Beast Mode branch needs its own colorFor(dark) resolution.
+        val isDark = com.daybook.app.ui.theme.LocalIsDark.current
+        val appAccentColor = LocalAccent.current
+        val modeAccentColor = if (inBeast) workoutAccent.colorFor(isDark) else appAccentColor
+
         // v0.5.3 Phase 4 (§4.8 / §4.11) — the PaddingValues overload; `fabPresent = true` folds
         // the Habits/Intake FAB clearance into the list padding so the FAB stops overlapping the
         // last card. The deprecated `Dp` overload is gone.
+        //
+        // A5 (§3.8.3) — the Beast Mode accent covers EVERY workout route AND the pill nav,
+        // because the nav is drawn by DaybookScaffold, outside the NavHost. Gated on the route
+        // (WorkoutRoutes.ALL, not a hand-written literal set), so `main` and every settings/
+        // detail/form route keep the app accent exactly as today.
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalAccent provides modeAccentColor,
+            LocalOnAccent provides onAccentInk(modeAccentColor)
+        ) {
+        // User request — bold fonts (AND, separately, an optional different typeface) scoped to
+        // Beast Mode only. `beastFontOverride` is Beast Mode's own font pick from its Settings
+        // screen (independent of Settings > Appearance > Font; see `WorkoutFontPrefs`'s KDoc) —
+        // `null` means "match the app's own font choice". Either way, `beastTypography` then
+        // bumps the label/title weights on top (see its KDoc for why Bold, not Black, is the
+        // real bump). Same colorScheme/shapes as the outer DaybookTheme; only while `inBeast` —
+        // every `DaybookText.*` read inside this subtree (including the nav pill, drawn by
+        // `DaybookScaffold` below) picks this up for free.
+        val beastFontOverride by workoutFontPrefs.fontChoice.collectAsStateWithLifecycle()
+        val appTypography = androidx.compose.material3.MaterialTheme.typography
+        val baseTypography = if (inBeast && beastFontOverride != null) {
+            remember(beastFontOverride) { com.daybook.app.ui.theme.daybookTypography(beastFontOverride!!) }
+        } else appTypography
+        val scopedTypography = if (inBeast) {
+            remember(baseTypography) { com.daybook.app.ui.workout.beast.beastTypography(baseTypography) }
+        } else baseTypography
+        androidx.compose.material3.MaterialTheme(
+            colorScheme = androidx.compose.material3.MaterialTheme.colorScheme,
+            typography = scopedTypography,
+            shapes = androidx.compose.material3.MaterialTheme.shapes
+        ) {
         DaybookScaffold(
-            showNav = onMain,
-            currentRoute = currentRoute,
-            navItems = navItems,
-            onSelectRoute = onSelectRoute,
-            fabPresent = true
+            showNav = showNav,
+            currentRoute = if (onMain) currentRoute else if (inBeastNav) beastCurrentRoute else backStackRoute,
+            navItems = if (inBeastNav) beastNavItems else navItems,
+            onSelectRoute = if (inBeastNav) onSelectBeastRoute else onSelectRoute,
+            fabPresent = true,
+            // A5 (§3.6.1/§3.6.8) — one mechanism, two configurations: hold Today to enter, hold
+            // Beast Mode's own leftmost item (Routines) to leave.
+            onLongSelect = if (inBeastNav) { _ -> exitBeastMode() } else { _ ->
+                if (appSettings.workoutHintState < 2) {
+                    scope.launch { runCatching { appSettingsRepository.setWorkoutHintState(2) } }
+                }
+                goWorkout()
+            },
+            longPressRoute = if (inBeastNav) WorkoutRoutes.HOME else "home",
+            longPressLabel = if (inBeastNav) "Leave Beast Mode" else "Start a workout",
+            hintDotRoutes = if (!inBeastNav && appSettings.workoutHintState < 2) setOf("home") else emptySet(),
+            // A5 (§3.6.3 a) — the one-time coach-mark, `main` only, `workout_hint_state == 0`.
+            coachMark = if (onMain && appSettings.workoutHintState == 0) { navClearance ->
+                var shown by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { kotlinx.coroutines.delay(600); shown = true }
+                if (shown) {
+                    NavCoachMark(
+                        text = "Hold \"Today\" to start a workout.",
+                        actionLabel = "Got it",
+                        bottomClearance = navClearance,
+                        onDismiss = {
+                            scope.launch { runCatching { appSettingsRepository.setWorkoutHintState(1) } }
+                        }
+                    )
+                }
+            } else null
         ) { scaffoldPadding ->
             NavHost(
                 navController = navController,
                 startDestination = "main",
                 // v0.5.3 Phase 4 (§4.7) — literal tween durations → Motion tokens.
                 // rec 4 — reduce-motion drops the slide/scale, keeping a plain cross-fade.
-                enterTransition = { if (reduceMotion) fadeIn() else Motion.navEnter },
-                exitTransition = { if (reduceMotion) fadeOut() else fadeOut(tween(110)) + scaleOut(targetScale = 0.98f) },
-                popEnterTransition = { if (reduceMotion) fadeIn() else fadeIn(tween(160)) + scaleIn(initialScale = 0.98f) },
-                popExitTransition = { if (reduceMotion) fadeOut() else fadeOut(tween(110)) + slideOutH() }
+                // BEAST_MODE_REDESIGN_PLAN.md follow-up — crossing the main/Beast Mode boundary
+                // (either direction) gets its own "portal" scale+fade instead of the plain
+                // slide/scale every other nav transition uses, so entering/leaving the mode reads
+                // as a deliberate shift into a different visual language, not just another push.
+                enterTransition = {
+                    if (crossesIntoBeast(initialState, targetState)) beastEnter(reduceMotion)
+                    else if (reduceMotion) fadeIn() else Motion.navEnter
+                },
+                exitTransition = {
+                    if (crossesIntoBeast(initialState, targetState)) beastExit(reduceMotion)
+                    else if (reduceMotion) fadeOut() else fadeOut(tween(110)) + scaleOut(targetScale = 0.98f)
+                },
+                popEnterTransition = {
+                    if (crossesOutOfBeast(initialState, targetState)) beastPopEnter(reduceMotion)
+                    else if (reduceMotion) fadeIn() else fadeIn(tween(160)) + scaleIn(initialScale = 0.98f)
+                },
+                popExitTransition = {
+                    if (crossesOutOfBeast(initialState, targetState)) beastPopExit(reduceMotion)
+                    else if (reduceMotion) fadeOut() else fadeOut(tween(110)) + slideOutH()
+                }
             ) {
                 composable("main") {
                     // System back from Habits/Intake returns to Today first (matches the old
@@ -681,7 +891,8 @@ class MainActivity : FragmentActivity() {
                         onOpenData = { navController.navigate("settings_data") },
                         onOpenAccount = { navController.navigate("settings_account") },
                         onOpenAppLock = { navController.navigate("settings_app_lock") },
-                        onOpenAbout = { navController.navigate("settings_about") }
+                        onOpenAbout = { navController.navigate("settings_about") },
+                        onOpenWorkout = goWorkout
                     )
                 }
                 composable("settings_app_lock") {
@@ -775,12 +986,163 @@ class MainActivity : FragmentActivity() {
                         onOpenHistory = { itemType, itemId -> navController.navigate("detail/$itemType/$itemId") }
                     )
                 }
+
+                // ---------------------------------------------------------- A5/A6: Beast Mode
+                // Eight stacked destinations, siblings of "main" (§3.6.6). Item 3 (LOCKED,
+                // PRIORITY) — Routines/History/Exercises are no longer three of them: they're
+                // pages of one HorizontalPager inside this single HOME entry, the same mechanism
+                // "main" uses for Today/Habits/Intake above (physically swipeable; a nav-bar tap
+                // snaps via `goToBeastPage`/`scrollToPage`, matching `goToPage`'s own behaviour;
+                // the 3 screens' ViewModels co-instantiate under this one back-stack entry for
+                // instant switching). System back from History/Exercises returns to Routines via
+                // the same `BackHandler` pattern "main" uses; back from Routines falls through to
+                // the NavHost's normal pop (this entry has no `popUpTo`), landing on whatever was
+                // below (matches today's behaviour). The rest render full-screen with no nav via
+                // `showNav`.
+                composable(WorkoutRoutes.HOME) {
+                    BackHandler(enabled = beastSettledPage != 0) { goToBeastPage(0) }
+                    HorizontalPager(
+                        state = beastPagerState,
+                        key = { it },
+                        beyondViewportPageCount = 1,
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        when (WorkoutRoutes.NAV.getOrElse(page) { WorkoutRoutes.HOME }) {
+                            WorkoutRoutes.HISTORY -> WorkoutHistoryScreen(
+                                contentPadding = scaffoldPadding,
+                                onOpenSession = goWorkoutSession,
+                                onOpenDetail = goWorkoutDetail
+                            )
+                            WorkoutRoutes.LIBRARY -> AddExerciseScreen(
+                                mode = ExercisePickerMode.BROWSE,
+                                contentPadding = scaffoldPadding,
+                                onPick = {},
+                                onBack = null,
+                                onNewExercise = goNewExercise,
+                                onEditExercise = goEditExercise,
+                                onOpenHistory = {}
+                            )
+                            else -> WorkoutHomeScreen(
+                                contentPadding = scaffoldPadding,
+                                onOpenWorkoutSettings = goWorkoutSettings,
+                                onStartSession = goWorkoutSession,
+                                onNewRoutine = { goRoutineEdit(null) },
+                                onEditRoutine = { id -> goRoutineEdit(id) }
+                            )
+                        }
+                    }
+                }
+                composable(WorkoutRoutes.SETTINGS) {
+                    WorkoutSettingsScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        onLeaveBeastMode = exitBeastMode,
+                        onImportFromHevy = goSettingsData
+                    )
+                }
+                composable(WorkoutRoutes.PICK_EXERCISE) {
+                    AddExerciseScreen(
+                        mode = ExercisePickerMode.PICK,
+                        contentPadding = scaffoldPadding,
+                        onPick = { exerciseIds ->
+                            // Bug fix — see `pickedExerciseId`'s KDoc. Set BEFORE popping so the
+                            // consumer's LaunchedEffect (keyed on this flow) sees the new value
+                            // the instant its screen recomposes back into view.
+                            pickedExerciseId.value = exerciseIds
+                            navController.popBackStack()
+                        },
+                        onBack = { navController.popBackStack() },
+                        onNewExercise = goNewExercise,
+                        onEditExercise = goEditExercise,
+                        onOpenHistory = {}
+                    )
+                }
+                composable(WorkoutRoutes.NEW_EXERCISE) {
+                    ExerciseFormScreen(onNavigateBack = { navController.popBackStack() })
+                }
+                composable(WorkoutRoutes.EDIT_EXERCISE) {
+                    ExerciseFormScreen(onNavigateBack = { navController.popBackStack() })
+                }
+                composable(
+                    WorkoutRoutes.ROUTINE_EDIT,
+                    arguments = listOf(navArgument("routineId") { type = NavType.StringType; nullable = true; defaultValue = null })
+                ) {
+                    val routineEditViewModel: com.daybook.app.ui.workout.RoutineEditViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+                    val pendingPick by pickedExerciseId.collectAsStateWithLifecycle()
+                    LaunchedEffect(pendingPick) {
+                        pendingPick?.let { ids ->
+                            ids.forEach { routineEditViewModel.addExercise(it) }
+                            pickedExerciseId.value = null
+                        }
+                    }
+                    RoutineEditScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        onPickExercise = goPickExercise,
+                        viewModel = routineEditViewModel
+                    )
+                }
+                composable(WorkoutRoutes.SESSION) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId") ?: ""
+                    val sessionViewModel: com.daybook.app.ui.workout.WorkoutSessionViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+                    val pendingPick by pickedExerciseId.collectAsStateWithLifecycle()
+                    LaunchedEffect(pendingPick) {
+                        pendingPick?.let { ids ->
+                            ids.forEach { sessionViewModel.addExercise(it) }
+                            pickedExerciseId.value = null
+                        }
+                    }
+                    WorkoutSessionScreen(
+                        sessionId = sessionId,
+                        viewModel = sessionViewModel,
+                        onNavigateBack = { navController.popBackStack() },
+                        onPickExercise = goPickExercise,
+                        onFinished = { navController.popBackStack() }
+                    )
+                }
+                composable(WorkoutRoutes.DETAIL) { backStackEntry ->
+                    val sessionId = backStackEntry.arguments?.getString("sessionId") ?: ""
+                    WorkoutDetailScreen(
+                        sessionId = sessionId,
+                        onNavigateBack = { navController.popBackStack() },
+                        onEdit = { goWorkoutSession(sessionId) },
+                        onSessionStarted = goWorkoutSession
+                    )
+                }
             }
+        }
+        }
         }
     }
 }
 
 private fun slideOutH() = androidx.compose.animation.slideOutHorizontally(Motion.medium()) { it / 6 }
+
+/** True for the forward nav ("main" -> a Beast Mode route) that opens Beast Mode. */
+private fun crossesIntoBeast(
+    initialState: androidx.navigation.NavBackStackEntry,
+    targetState: androidx.navigation.NavBackStackEntry
+): Boolean = initialState.destination.route == "main" && targetState.destination.route in com.daybook.app.ui.workout.WorkoutRoutes.ALL
+
+/** True for the pop (a Beast Mode route -> "main") that closes Beast Mode — fires regardless of
+ *  which Beast screen was on top (Settings/Session/Detail/…) when the long-press-exit or system
+ *  back triggered it. */
+private fun crossesOutOfBeast(
+    initialState: androidx.navigation.NavBackStackEntry,
+    targetState: androidx.navigation.NavBackStackEntry
+): Boolean = initialState.destination.route in com.daybook.app.ui.workout.WorkoutRoutes.ALL && targetState.destination.route == "main"
+
+/** BEAST_MODE_REDESIGN_PLAN.md follow-up — the "portal" transition into Beast Mode's darker,
+ *  bolder visual language: a slight zoom-in + fade rather than the app's usual horizontal slide. */
+private fun beastEnter(reduceMotion: Boolean) =
+    if (reduceMotion) fadeIn() else fadeIn(tween(360)) + scaleIn(initialScale = 0.90f, animationSpec = tween(360))
+
+private fun beastExit(reduceMotion: Boolean) =
+    if (reduceMotion) fadeOut() else fadeOut(tween(220)) + scaleOut(targetScale = 1.06f, animationSpec = tween(220))
+
+private fun beastPopEnter(reduceMotion: Boolean) =
+    if (reduceMotion) fadeIn() else fadeIn(tween(300)) + scaleIn(initialScale = 1.06f, animationSpec = tween(300))
+
+private fun beastPopExit(reduceMotion: Boolean) =
+    if (reduceMotion) fadeOut() else fadeOut(tween(240)) + scaleOut(targetScale = 0.90f, animationSpec = tween(240))
 
 /** SharedPreferences key: the exact-alarm dialog has been shown once (ask-once, like notifications). */
 private const val KEY_ALARM_PERMISSION_ASKED = "alarm_permission_asked"

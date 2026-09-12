@@ -126,4 +126,23 @@ interface AppSettingsDao {
 
     @Query("UPDATE app_settings SET corner_scale = :v WHERE id = 1")
     suspend fun updateCornerScale(v: Float)
+
+    // ------------------------------------------------------------------------ Round A (DB v22)
+    @Query("UPDATE app_settings SET weight_unit = :v WHERE id = 1")
+    suspend fun updateWeightUnit(v: String)
+
+    @Query("UPDATE app_settings SET workout_accent_color = :v WHERE id = 1")
+    suspend fun updateWorkoutAccentColor(v: String)
+
+    @Query("UPDATE app_settings SET rest_timer_default_seconds = :v WHERE id = 1")
+    suspend fun updateRestTimerDefaultSeconds(v: Int)
+
+    @Query("UPDATE app_settings SET workout_hint_state = :v WHERE id = 1")
+    suspend fun updateWorkoutHintState(v: Int)
+
+    @Query("UPDATE app_settings SET workout_today_card_enabled = :v WHERE id = 1")
+    suspend fun updateWorkoutTodayCardEnabled(v: Boolean)
+
+    @Query("UPDATE app_settings SET default_exercise_group = :v WHERE id = 1")
+    suspend fun updateDefaultExerciseGroup(v: String?)
 }

@@ -67,4 +67,21 @@ class RangeImportNonDestructiveTest {
         assertFalse(pushDeletesAllowed(changed, userInitiated = false))
         assertTrue(pushDeletesAllowed(changed, userInitiated = true))
     }
+
+    // -------------------------------------------------------------- A4: workout month range (§4.4)
+
+    @Test fun `monthLocalDateRange spans the whole month regardless of its real length`() {
+        assertEquals("2026-02-01" to "2026-02-31", monthLocalDateRange("2026-02"))
+        assertEquals("2026-09-01" to "2026-09-31", monthLocalDateRange("2026-09"))
+    }
+
+    @Test fun `monthLocalDateRange bounds every real local_date string in that month lexicographically`() {
+        val (start, end) = monthLocalDateRange("2026-02")
+        // February has no 31st, but the BETWEEN bound must still admit every real Feb date and
+        // exclude January/March — string comparison of fixed-width ISO dates does this correctly.
+        assertTrue("2026-02-01" >= start && "2026-02-01" <= end)
+        assertTrue("2026-02-28" >= start && "2026-02-28" <= end)
+        assertFalse("2026-01-31" in start..end)
+        assertFalse("2026-03-01" in start..end)
+    }
 }

@@ -986,6 +986,117 @@ class MigrationTest {
         )
     }
 
+    // ------------------------------------------------------------- v21 -> v22 (Round A — Workout mode)
+
+    /**
+     * A9 (§3.5) — the six new tables + five new `app_settings` columns +
+     * `workout_sessions.routine_id` all exist. R18's not-null guard extends to the five
+     * `workout_routine_exercises` target columns (Ri3): a `NOT NULL DEFAULT 0` there would
+     * destroy the distinction between "no target" and "a target of zero".
+     */
+    @Test
+    @Throws(IOException::class)
+    fun migrate21To22() {
+        helper.createDatabase(TEST_DB, 21).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 22, true, MIGRATION_21_22)
+
+        val newTables = setOf(
+            "exercises", "workout_sessions", "workout_exercises", "workout_sets",
+            "workout_routines", "workout_routine_exercises"
+        )
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN " +
+                "('exercises','workout_sessions','workout_exercises','workout_sets'," +
+                "'workout_routines','workout_routine_exercises')"
+        ).use { c ->
+            val found = HashSet<String>()
+            while (c.moveToNext()) found += c.getString(0)
+            assertEquals(newTables, found)
+        }
+
+        db.query("SELECT * FROM app_settings").use { c ->
+            listOf(
+                "weight_unit", "workout_accent_color", "rest_timer_default_seconds",
+                "workout_hint_state", "workout_today_card_enabled",
+                // Feature addition (post-A6) — same still-unshipped MIGRATION_21_22.
+                "default_exercise_group"
+            ).forEach { assertTrue("missing column $it", c.columnNames.contains(it)) }
+        }
+        // default_exercise_group is nullable with no schema default (mirrors profile_photo_path).
+        db.query("PRAGMA table_info(app_settings)").use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            val notNullIdx = c.getColumnIndex("notnull")
+            while (c.moveToNext()) {
+                if (c.getString(nameIdx) == "default_exercise_group") {
+                    assertTrue("default_exercise_group must be nullable", c.getInt(notNullIdx) == 0)
+                }
+            }
+        }
+        db.query("SELECT * FROM workout_sessions").use { c ->
+            assertTrue(c.columnNames.contains("routine_id"))
+        }
+
+        // Ri3/R18 — none of the five target columns may be NOT NULL.
+        db.query("PRAGMA table_info(workout_routine_exercises)").use { c ->
+            val notNullByName = HashMap<String, Boolean>()
+            val nameIdx = c.getColumnIndex("name")
+            val notNullIdx = c.getColumnIndex("notnull")
+            while (c.moveToNext()) {
+                notNullByName[c.getString(nameIdx)] = c.getInt(notNullIdx) != 0
+            }
+            listOf(
+                "target_sets", "target_reps", "target_weight_kg",
+                "target_duration_seconds", "target_distance_meters"
+            ).forEach { col ->
+                assertTrue("$col must be nullable (Ri3)", notNullByName[col] == false)
+            }
+        }
+    }
+
+    /** A pre-existing app_settings row must come out of the migration with every new column at
+     *  its declared default, and every existing column byte-for-byte intact. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate21To22_preservesExistingRowsAndDefaults() {
+        helper.createDatabase(TEST_DB, 21).apply {
+            execSQL(
+                "INSERT INTO app_settings (id,default_snooze_minutes,onboarding_completed,user_name," +
+                    "accent_color,notif_permission_asked,profile_photo_path,font_choice,habit_checkin_time," +
+                    "habits_accent_color,intake_accent_color,check_for_updates_enabled,theme_mode," +
+                    "dark_style,light_style,corner_scale) " +
+                    "VALUES (1,15,1,'Alex','CORAL',1,'/tmp/p.jpg','LITERATA','08:30','CORAL','CORAL',0,'LIGHT'," +
+                    "'CHARCOAL','PAPER',1.0)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 22, true, MIGRATION_21_22)
+        db.query(
+            "SELECT user_name, weight_unit, workout_accent_color, rest_timer_default_seconds, " +
+                "workout_hint_state, workout_today_card_enabled FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+            assertEquals("KG", c.getString(1))
+            assertEquals("CORAL", c.getString(2))
+            assertEquals(0, c.getInt(3))
+            assertEquals(0, c.getInt(4))
+            assertEquals(1, c.getInt(5))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To22() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 22, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
+        )
+    }
+
     @Test
     @Throws(IOException::class)
     fun migrateAll_3To8() {
@@ -1014,7 +1125,7 @@ class MigrationTest {
                 MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                 MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
                 MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21
+                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
             )
             .fallbackToDestructiveMigrationFrom(1)
             .build()

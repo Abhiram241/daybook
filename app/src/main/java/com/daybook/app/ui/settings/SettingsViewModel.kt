@@ -9,6 +9,8 @@ import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.ExportImportRepository
 import com.daybook.app.data.OccurrenceScheduler
 import com.daybook.app.data.ProfilePhotoStore
+import com.daybook.app.data.WorkoutRepository
+import com.daybook.app.data.workout.HevyImportOutcome
 import com.daybook.app.data.model.AppSettings
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.data.sync.HydrateResult
@@ -48,6 +50,7 @@ class SettingsViewModel @Inject constructor(
     private val profilePhotoStore: ProfilePhotoStore,
     private val cloudSync: CloudSyncRepository,
     private val jsonUtils: JsonUtils,
+    private val workoutRepository: WorkoutRepository,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -397,6 +400,40 @@ class SettingsViewModel @Inject constructor(
                 // instead of surfacing as a message. The size check above should make this rare in
                 // practice; this is the belt-and-braces backstop for whatever it doesn't catch.
                 _importResult.value = "Import failed: ${t.message}"
+            } finally {
+                _isImporting.value = false
+            }
+        }
+    }
+
+    /**
+     * A8 (§3.9.1) — mirrors [importFromUri] exactly: same size guard, same
+     * `_isImporting`/`_importResult` pair and fixed-height result slot, same picker order
+     * (confirm-first). The one deliberate difference is the dialog copy (§3.9.1) — this is a
+     * merge, not a replace, so its `DaybookAlertDialog` at the call site is NOT `destructive`.
+     */
+    fun importHevyFromUri(uri: android.net.Uri) {
+        safeLaunch {
+            _isImporting.value = true
+            _importResult.value = null
+            try {
+                val size = storageUtils.fileSizeBytes(uri)
+                if (size != null && size > MAX_IMPORT_BYTES) {
+                    _importResult.value = "Couldn't import: that file is too large (the limit is 10 MB)."
+                    return@safeLaunch
+                }
+                val text = storageUtils.readText(uri)
+                if (text == null) {
+                    _importResult.value = "Couldn't read the file. Try picking it again."
+                    return@safeLaunch
+                }
+                val outcome = workoutRepository.importHevyCsv(text, (size ?: text.toByteArray(Charsets.UTF_8).size.toLong()).toInt())
+                _importResult.value = when (outcome) {
+                    is HevyImportOutcome.Success -> outcome.message
+                    is HevyImportOutcome.Failure -> outcome.message
+                }
+            } catch (t: Throwable) {
+                _importResult.value = "Couldn't import: something went wrong and nothing was changed."
             } finally {
                 _isImporting.value = false
             }

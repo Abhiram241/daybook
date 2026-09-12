@@ -98,6 +98,14 @@ class AppSettingsRepository @Inject constructor(
     fun readLightStyleMirror(): String = ThemePrefs.readLightStyle(context)
     fun readCornerScaleMirror(): Float = ThemePrefs.readCornerScale(context)
 
+    // --------------------------------------------------------------------------- Round A (DB v22)
+    suspend fun setWeightUnit(v: String) { ensureRow(); database.appSettingsDao().updateWeightUnit(v) }
+    suspend fun setWorkoutAccentColor(v: String) { ensureRow(); database.appSettingsDao().updateWorkoutAccentColor(v) }
+    suspend fun setRestTimerDefaultSeconds(v: Int) { ensureRow(); database.appSettingsDao().updateRestTimerDefaultSeconds(v) }
+    suspend fun setWorkoutHintState(v: Int) { ensureRow(); database.appSettingsDao().updateWorkoutHintState(v) }
+    suspend fun setWorkoutTodayCardEnabled(v: Boolean) { ensureRow(); database.appSettingsDao().updateWorkoutTodayCardEnabled(v) }
+    suspend fun setDefaultExerciseGroup(v: String?) { ensureRow(); database.appSettingsDao().updateDefaultExerciseGroup(v) }
+
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =
         database.appSettingsDao().observeSettings().map { it ?: AppSettings() }

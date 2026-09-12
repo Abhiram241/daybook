@@ -134,5 +134,19 @@ fun AboutSettingsScreen(
                 }
             }
         }
+
+        // A7 (§3.3.5) — the required, permanent attribution line for the RepDB exercise catalog
+        // (§3.3) free-tier licence: free for commercial in-app use, one visible credit line.
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Credits")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                Text(
+                    "Exercise data by RepDB (repdb.co)",
+                    style = DaybookText.Caption,
+                    color = DaybookColors.TextMuted
+                )
+            }
+        }
     }
 }

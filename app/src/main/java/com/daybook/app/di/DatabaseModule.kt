@@ -27,6 +27,9 @@ import com.daybook.app.data.local.MIGRATION_17_18
 import com.daybook.app.data.local.MIGRATION_18_19
 import com.daybook.app.data.local.MIGRATION_19_20
 import com.daybook.app.data.local.MIGRATION_20_21
+import com.daybook.app.data.local.MIGRATION_21_22
+import com.daybook.app.data.WorkoutRepository
+import com.daybook.app.data.workout.ExerciseCatalog
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,7 +49,7 @@ object DatabaseModule {
             AppDatabase::class.java,
             "daybook_database"
         )
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
             // No 1->2 path exists, so a v1 database would otherwise throw on open and every DB
             // touch (including the alarm receiver's) would fail silently behind runCatching.
             .fallbackToDestructiveMigrationFrom(1)
@@ -81,4 +84,30 @@ object DatabaseModule {
     @Singleton
     fun provideCustomPromptRepository(database: AppDatabase): CustomPromptRepository =
         CustomPromptRepository(database)
+
+    // A3: Round A (workout mode).
+    @Provides
+    @Singleton
+    fun provideExerciseCatalog(@ApplicationContext context: Context): ExerciseCatalog =
+        ExerciseCatalog(context)
+
+    // A8: Hevy CSV import.
+    @Provides
+    @Singleton
+    fun provideHevyImporter(
+        database: AppDatabase,
+        exerciseCatalog: ExerciseCatalog,
+        cloudSyncRepository: com.daybook.app.data.sync.CloudSyncRepository
+    ): com.daybook.app.data.workout.HevyImporter =
+        com.daybook.app.data.workout.HevyImporter(database, exerciseCatalog, cloudSyncRepository)
+
+    @Provides
+    @Singleton
+    fun provideWorkoutRepository(
+        database: AppDatabase,
+        exerciseCatalog: ExerciseCatalog,
+        appSettingsRepository: AppSettingsRepository,
+        hevyImporter: com.daybook.app.data.workout.HevyImporter
+    ): WorkoutRepository =
+        WorkoutRepository(database, exerciseCatalog, appSettingsRepository, hevyImporter)
 }

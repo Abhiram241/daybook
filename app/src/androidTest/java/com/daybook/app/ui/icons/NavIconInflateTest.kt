@@ -31,6 +31,12 @@ class NavIconInflateTest {
     @Test fun navHabits() = assertInflates(R.drawable.ic_nav_habits, "ic_nav_habits")
     @Test fun navIntake() = assertInflates(R.drawable.ic_nav_intake, "ic_nav_intake")
 
+    // A5 (§3.6.0) — Beast Mode's dumbbell glyph, inflated via `ImageVector.vectorResource` for
+    // the third Beast Mode nav item, so it needs the same real-Resources inflate guard as every
+    // other nav icon: a vector that inflates fine on the authoring machine but not on API 26 would
+    // make that nav item silently blank.
+    @Test fun navWorkout() = assertInflates(R.drawable.ic_workout, "ic_workout")
+
     // v0.5.1 §F — the three per-category notification small icons. This is the ONLY automated
     // protection against the disappearing-notification failure mode (plan R6): a small icon
     // SystemUI cannot inflate makes the entire notification vanish with no error surfaced to the

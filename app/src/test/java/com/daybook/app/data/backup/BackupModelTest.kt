@@ -193,4 +193,105 @@ class BackupModelTest {
         assertNull(jsonUtils.fromIso("not a date"))
         assertNull(jsonUtils.fromIso(null))
     }
+
+    // ---------------------------------------------------------------- A4: Round A wire additions
+
+    private fun workoutSample() = sample().let { base ->
+        base.copy(
+            definitions = base.definitions.copy(
+                customExercises = listOf(
+                    ExerciseDef(
+                        id = "ex1", name = "Cable Curl (custom grip)", primaryMuscle = "BICEPS",
+                        equipment = "CABLE", trackingMode = "WEIGHT_REPS",
+                        createdAt = "2026-08-01T00:00:00Z", notes = "Use the rope attachment"
+                    )
+                ),
+                routines = listOf(
+                    RoutineDef(
+                        id = "r1", name = "Push day", orderIndex = 0,
+                        createdAt = "2026-08-01T00:00:00Z", updatedAt = "2026-08-02T00:00:00Z",
+                        notes = "Chest/shoulders/triceps",
+                        exercises = listOf(
+                            RoutineExerciseDef(
+                                id = "re1", exerciseId = "builtin:bench-press", orderIndex = 0,
+                                targetSets = 3, targetReps = 10, targetWeightKg = 60f,
+                                restSeconds = 90
+                            ),
+                            RoutineExerciseDef(
+                                // A mix of null and non-null targets — Ri3/R18: a null target must
+                                // round-trip as null, never coerced to 0.
+                                id = "re2", exerciseId = "builtin:plank", orderIndex = 1,
+                                targetSets = null, targetReps = null, targetWeightKg = null,
+                                targetDurationSeconds = 45, targetDistanceMeters = null
+                            )
+                        )
+                    )
+                )
+            ),
+            days = base.days + DayEntry(
+                date = "2026-08-29",
+                workouts = listOf(
+                    WorkoutLog(
+                        id = "w1", startedAt = "2026-08-29T06:00:00Z", endedAt = "2026-08-29T07:00:00Z",
+                        title = "Morning push", routineId = "r1",
+                        exercises = listOf(
+                            WorkoutExerciseLog(
+                                id = "we1", exerciseId = "builtin:bench-press", orderIndex = 0,
+                                notes = "Felt strong today", restSeconds = 90,
+                                sets = listOf(
+                                    WorkoutSetLog(
+                                        id = "s1", setNumber = 1, reps = 10, weightKg = 60f,
+                                        setType = "NORMAL", completedAt = "2026-08-29T06:05:00Z"
+                                    ),
+                                    // A bodyweight/duration set with weight/reps absent must
+                                    // round-trip as absent, not zero.
+                                    WorkoutSetLog(
+                                        id = "s2", setNumber = 2, durationSeconds = 45,
+                                        setType = "WARMUP"
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    @Test
+    fun roundTrip_preservesPopulatedWorkoutDayAndRoutine() {
+        val decoded = jsonUtils.decode(jsonUtils.encode(workoutSample()))
+        assertEquals(workoutSample(), decoded)
+
+        val routine = decoded.definitions.routines.first()
+        assertEquals(2, routine.exercises.size)
+        val withTarget = routine.exercises.first { it.id == "re1" }
+        assertEquals(3, withTarget.targetSets)
+        assertEquals(60f, withTarget.targetWeightKg)
+        val withoutTargets = routine.exercises.first { it.id == "re2" }
+        assertNull(withoutTargets.targetSets)
+        assertNull(withoutTargets.targetWeightKg)
+        assertEquals(45, withoutTargets.targetDurationSeconds)
+
+        val day = decoded.days.first { it.date == "2026-08-29" }
+        val set2 = day.workouts.first().exercises.first().sets.first { it.id == "s2" }
+        assertNull(set2.weightKg)
+        assertNull(set2.reps)
+        assertEquals(45, set2.durationSeconds)
+    }
+
+    @Test
+    fun oldFile_withoutWorkoutKeys_decodesWithEmptyWorkoutFields() {
+        val text = """
+            {
+              "meta": { "formatVersion": 2, "exportedAt": "x", "appVersionName": "0.5.7" },
+              "definitions": { "habits": [] },
+              "days": [ { "date": "2026-08-28" } ]
+            }
+        """.trimIndent()
+        val decoded = jsonUtils.decode(text)
+        assertTrue(decoded.definitions.customExercises.isEmpty())
+        assertTrue(decoded.definitions.routines.isEmpty())
+        assertTrue(decoded.days.first().workouts.isEmpty())
+    }
 }

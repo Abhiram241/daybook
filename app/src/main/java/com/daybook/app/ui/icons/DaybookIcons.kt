@@ -60,6 +60,15 @@ object DaybookIcons {
     val Remove: ImageVector by lazy { v("Remove", "M19,13H5v-2h14v2z") }
 
     /**
+     * Item 2/6 (Workout UI fixes plan, LOCKED) — a hand-drawn lightning-bolt (Material "flash"
+     * silhouette, redrawn as a single filled path so it matches this file's flat-icon convention
+     * — not pulled from material-icons-extended, which was dropped for APK-size reasons). Used
+     * specifically for no-routine/instant workout sessions, so they read as visually distinct from
+     * routine-started sessions (which keep `ic_workout`).
+     */
+    val Bolt: ImageVector by lazy { v("Bolt", "M7,2v11h3v9l7,-12h-4l4,-8z") }
+
+    /**
      * v0.5.3 Phase 4 (§4.6 / D1) — converted from the lone `vStroke` glyph to a **filled**
      * alarm (Material `alarm` path data) so `DaybookIcons` is one visual weight. Name kept.
      */
@@ -335,6 +344,13 @@ object DaybookIcons {
      * deliberate placeholder for `Icons.getIcon`'s logged unknown-key fallback (wired in
      * Phase 4 §D1, replacing the silent `else -> Task`).
      */
+    /** Beast Mode "This week" PR stat tile (BEAST_MODE_REDESIGN_PLAN.md §4.1) — a filled 5-point
+     *  star, redrawn as a single path so it matches this file's flat-icon convention rather than
+     *  reaching for `material-icons-extended` (dropped for APK-size reasons — see file header). */
+    val Star: ImageVector by lazy {
+        v("Star", "M12,17.27L18.18,21l-1.64,-7.03L22,9.24l-7.19,-0.61L12,2 9.19,8.63 2,9.24l5.46,4.73L5.82,21z")
+    }
+
     val Unknown: ImageVector by lazy {
         v(
             "Unknown",

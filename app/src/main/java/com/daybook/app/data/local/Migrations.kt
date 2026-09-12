@@ -494,3 +494,117 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN corner_scale REAL NOT NULL DEFAULT 1.0")
     }
 }
+
+/**
+ * A1 (R18, C2, C8): v21 -> v22 — Round A ("Beast Mode" / workout mode). 100% additive: six new
+ * tables (no existing table rebuilt, no row rewritten, no data lost) plus five new device-local
+ * `app_settings` columns. Every DEFAULT below byte-matches the corresponding
+ * `@ColumnInfo(defaultValue = …)` in WorkoutModel.kt / DataModel.kt — a mismatch fails Room's
+ * identity-hash check at open (HEALTH_AND_WORKOUT_PLAN.md §3.5).
+ *
+ * Every `workout_routine_exercises` target column and every `workout_sets` value column is
+ * NULLABLE with NO `NOT NULL DEFAULT` (Ri3 / R18): a non-null default would destroy the
+ * distinction between "no target"/"not tracked" and "a target of zero", corrupting blank-is-
+ * not-zero volume/PR logic. `MigrationTest.migrate21To22` asserts none of them is NOT NULL.
+ *
+ * No foreign keys (§3.2): child rows get repository-level cleanup inside `withTransaction`
+ * instead, so the import path can insert children before parents in either order.
+ */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `exercises` (" +
+                "`id` TEXT NOT NULL, `name` TEXT NOT NULL, " +
+                "`primary_muscle` TEXT NOT NULL, `equipment` TEXT NOT NULL, " +
+                "`tracking_mode` TEXT NOT NULL, `is_archived` INTEGER NOT NULL DEFAULT 0, " +
+                "`source` TEXT NOT NULL DEFAULT 'USER', " +
+                "`created_at` INTEGER NOT NULL, `notes` TEXT, PRIMARY KEY(`id`))"
+        )
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_sessions` (" +
+                "`id` TEXT NOT NULL, `local_date` TEXT NOT NULL, `started_at` INTEGER NOT NULL, " +
+                "`ended_at` INTEGER, `title` TEXT, `notes` TEXT, " +
+                "`status` TEXT NOT NULL DEFAULT 'ACTIVE', `source` TEXT NOT NULL DEFAULT 'MANUAL', " +
+                "`routine_id` TEXT, " + // NULLABLE, no FK — a session must never be orphaned by a deleted routine.
+                "`created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_sessions_local_date` ON `workout_sessions`(`local_date`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_sessions_started_at` ON `workout_sessions`(`started_at`)")
+
+        // Routines are DEFINITIONS, like habits and custom exercises — no local_date, never
+        // month-partitioned, never evicted (§4.4 item 6).
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_routines` (" +
+                "`id` TEXT NOT NULL, `name` TEXT NOT NULL, `notes` TEXT, " +
+                "`order_index` INTEGER NOT NULL, " +
+                "`is_archived` INTEGER NOT NULL DEFAULT 0, " +
+                "`source` TEXT NOT NULL DEFAULT 'USER', " +
+                "`created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_routines_order_index` ON `workout_routines`(`order_index`)")
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_routine_exercises` (" +
+                "`id` TEXT NOT NULL, `routine_id` TEXT NOT NULL, `exercise_id` TEXT NOT NULL, " +
+                "`order_index` INTEGER NOT NULL, " +
+                "`target_sets` INTEGER, `target_reps` INTEGER, `target_weight_kg` REAL, " +
+                "`target_duration_seconds` INTEGER, `target_distance_meters` REAL, " +
+                "`rest_seconds` INTEGER, `notes` TEXT, " +
+                "`created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_workout_routine_exercises_routine_id_order_index` " +
+                "ON `workout_routine_exercises`(`routine_id`,`order_index`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_workout_routine_exercises_exercise_id` " +
+                "ON `workout_routine_exercises`(`exercise_id`)"
+        )
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_exercises` (" +
+                "`id` TEXT NOT NULL, `session_id` TEXT NOT NULL, `exercise_id` TEXT NOT NULL, " +
+                "`order_index` INTEGER NOT NULL, `notes` TEXT, `superset_id` TEXT, `rest_seconds` INTEGER, " +
+                "`created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_workout_exercises_session_id_order_index` " +
+                "ON `workout_exercises`(`session_id`,`order_index`)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_exercises_exercise_id` ON `workout_exercises`(`exercise_id`)")
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_sets` (" +
+                "`id` TEXT NOT NULL, `workout_exercise_id` TEXT NOT NULL, " +
+                "`session_id` TEXT NOT NULL, `exercise_id` TEXT NOT NULL, " +
+                "`set_number` INTEGER NOT NULL, " +
+                "`reps` INTEGER, `weight_kg` REAL, `duration_seconds` INTEGER, `distance_meters` REAL, " +
+                "`rpe` INTEGER, " +
+                "`set_type` TEXT NOT NULL DEFAULT 'NORMAL', " +
+                "`notes` TEXT, `completed_at` INTEGER, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_workout_sets_workout_exercise_id_set_number` " +
+                "ON `workout_sets`(`workout_exercise_id`,`set_number`)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_sets_session_id` ON `workout_sets`(`session_id`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_sets_exercise_id` ON `workout_sets`(`exercise_id`)")
+
+        // Device-local settings, same treatment as every app_settings column since v16 — all four
+        // surfaced on Beast Mode's OWN settings screen (§3.8.2), not Daybook's main settings_*
+        // screens. `nav_tabs` is untouched: Workout is not a tab (§3.6).
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN weight_unit TEXT NOT NULL DEFAULT 'KG'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN workout_accent_color TEXT NOT NULL DEFAULT 'CORAL'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN rest_timer_default_seconds INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN workout_hint_state INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN workout_today_card_enabled INTEGER NOT NULL DEFAULT 1")
+        // Feature addition (post-A6, same still-unshipped MIGRATION_21_22 — nothing has been
+        // installed to a device yet) — the Add-Exercise picker's default active filter chip
+        // (§ new "group Add Exercise by muscle group" feature). Stores a MuscleGroup enum name,
+        // or NULL for "All" (no default group). Nullable, NO schema default (mirrors
+        // `profile_photo_path`) — a target column, same Ri3-flavoured reasoning as the routine
+        // target columns: "no preference set" must not collapse into a real MuscleGroup value.
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN default_exercise_group TEXT")
+    }
+}

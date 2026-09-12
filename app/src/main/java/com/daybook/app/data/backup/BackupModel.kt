@@ -63,6 +63,60 @@ data class Definitions(
     // the per-habit HabitDef.journalQuestions below. No migration-forward of old content (user's
     // explicit "fresh start" decision); an old backup's `journalQuestions` key is simply ignored
     // on decode (ignoreUnknownKeys = true).
+
+    /** A4 (§4.2) — the user's CUSTOM exercises only, never the built-in RepDB catalog.
+     *  `@EncodeDefault(NEVER)` so a user who never opens Workout mode sees ZERO change to
+     *  `definitionsHash` — same technique as `journalQuestions` / `streakLongest`. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val customExercises: List<ExerciseDef> = emptyList(),
+
+    /** A4 (§4.2) — Routines are DEFINITIONS, like habits and custom exercises: no local_date, so
+     *  they do NOT belong in [DayEntry] and are NOT month-partitioned. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val routines: List<RoutineDef> = emptyList()
+)
+
+@Serializable
+data class ExerciseDef(
+    val id: String,
+    val name: String,
+    val primaryMuscle: String,
+    val equipment: String,
+    val trackingMode: String,
+    val createdAt: String,      // ISO-8601 UTC
+    val archived: Boolean = false,
+    val source: String = "USER",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val notes: String? = null
+)
+
+@Serializable
+data class RoutineDef(
+    val id: String,
+    val name: String,
+    val orderIndex: Int,
+    val createdAt: String,      // ISO-8601 UTC
+    val updatedAt: String,      // ISO-8601 UTC
+    val archived: Boolean = false,
+    val source: String = "USER",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val notes: String? = null,
+    // Nested, not a second top-level list keyed by routineId — a child list beside its parent can
+    // be imported half-way, and a routine with orphaned rows renders wrong.
+    val exercises: List<RoutineExerciseDef> = emptyList()
+)
+
+@Serializable
+data class RoutineExerciseDef(
+    val id: String,
+    val exerciseId: String,
+    val orderIndex: Int,
+    // Every target NULLABLE, omitted by explicitNulls = false.
+    val targetSets: Int? = null,
+    val targetReps: Int? = null,
+    val targetWeightKg: Float? = null,
+    val targetDurationSeconds: Int? = null,
+    val targetDistanceMeters: Float? = null,
+    val restSeconds: Int? = null,
+    val notes: String? = null
 )
 
 @Serializable
@@ -144,7 +198,54 @@ data class DayEntry(
     /** Sorted by `scheduledTime`. */
     val habitLogs: List<HabitLog> = emptyList(),
     /** Sorted by `scheduledTime`. */
-    val intakeLogs: List<IntakeLog> = emptyList()
+    val intakeLogs: List<IntakeLog> = emptyList(),
+    /** A4 (§4.2) — that local date's workout sessions. `@EncodeDefault(NEVER)` so a non-workout
+     *  day's `contentHash` is byte-identical before/after this build. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val workouts: List<WorkoutLog> = emptyList()
+)
+
+@Serializable
+data class WorkoutLog(
+    val id: String,
+    val startedAt: String,                 // ISO-8601 UTC
+    val endedAt: String? = null,
+    val title: String? = null,
+    val notes: String? = null,
+    val status: String = "COMPLETED",
+    val source: String = "MANUAL",
+    // NULLABLE, so explicitNulls = false omits it entirely for every session that did not come
+    // from a routine. A dangling id (the routine was deleted) round-trips untouched.
+    val routineId: String? = null,
+    // Sets nest inside their exercise block rather than sitting flat on the session, mirroring the
+    // workout_exercises table — a block's note, rest timer and superset id round-trip without
+    // being repeated on every set.
+    val exercises: List<WorkoutExerciseLog> = emptyList()
+)
+
+@Serializable
+data class WorkoutExerciseLog(
+    val id: String,
+    val exerciseId: String,
+    val orderIndex: Int,
+    val notes: String? = null,
+    val supersetId: String? = null,
+    val restSeconds: Int? = null,
+    val sets: List<WorkoutSetLog> = emptyList()
+)
+
+@Serializable
+data class WorkoutSetLog(
+    val id: String,
+    val setNumber: Int,
+    val reps: Int? = null,
+    val weightKg: Float? = null,
+    val durationSeconds: Int? = null,
+    val distanceMeters: Float? = null,
+    val rpe: Int? = null,
+    val setType: String = "NORMAL",
+    val notes: String? = null,
+    val completedAt: String? = null
 )
 
 @Serializable

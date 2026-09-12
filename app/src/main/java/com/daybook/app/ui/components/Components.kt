@@ -4,9 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -109,6 +111,24 @@ internal fun Modifier.clickableImpl(
 ): Modifier = this.clickable(
     interactionSource = interaction,
     indication = null,
+    onClick = onClick
+)
+
+// A5 (§3.6.1 a) — the long-press-capable twin of clickableImpl. Same "no indication" rule: the
+// app draws its own press feedback (scale/tint), it never uses the Material ripple.
+// `onLongClickLabel` is NOT cosmetic — TalkBack reads it as "double tap and hold to <label>", and
+// it is what puts the gesture in switch-access's actions menu. Never pass null here.
+@OptIn(ExperimentalFoundationApi::class)
+internal fun Modifier.combinedClickableImpl(
+    interaction: MutableInteractionSource,
+    onLongClickLabel: String,
+    onLongClick: () -> Unit,
+    onClick: () -> Unit
+): Modifier = this.combinedClickable(
+    interactionSource = interaction,
+    indication = null,
+    onLongClickLabel = onLongClickLabel,
+    onLongClick = onLongClick,
     onClick = onClick
 )
 
@@ -584,6 +604,14 @@ fun GhostButton(
     enabled: Boolean = true,
     loading: Boolean = false,
     /**
+     * Bug fix — an outline-only Ghost button sitting directly against a near-black background
+     * (e.g. the session screen's bottom bar, right above the on-screen keyboard) reads as
+     * invisible/"no fill" even though its Hairline border IS there. Pass `true` for call sites
+     * that need to stay legible in that kind of low-contrast spot; every existing caller keeps
+     * the original outline-only look by default.
+     */
+    filled: Boolean = false,
+    /**
      * Optional leading slot, laid out before the label. Pass an [Image] (not [Icon]) for a
      * multicolour brand mark so it is not flattened to the content colour — v0.5.1 §E.
      */
@@ -605,8 +633,9 @@ fun GhostButton(
             // Settings). Disabled now gets a visible Outline border plus a faint fill so the
             // shape still reads as a control.
             .then(
-                if (enabled) Modifier
-                else Modifier.background(DaybookColors.SurfaceElevated.copy(alpha = 0.4f))
+                if (!enabled) Modifier.background(DaybookColors.SurfaceElevated.copy(alpha = 0.4f))
+                else if (filled) Modifier.background(DaybookColors.SurfaceElevated)
+                else Modifier
             )
             .border(
                 BorderStroke(1.5.dp, if (enabled) DaybookColors.Hairline else DaybookColors.Outline),

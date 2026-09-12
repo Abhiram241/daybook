@@ -1,16 +1,26 @@
 package com.daybook.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.snap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,7 +30,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,20 +44,42 @@ import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.IconButtonSize
 import com.daybook.app.ui.theme.LocalAccent
+import com.daybook.app.ui.theme.LocalReduceMotion
 import com.daybook.app.ui.theme.Motion
 import com.daybook.app.ui.theme.Spacing
+import kotlinx.coroutines.delay
 
 @Immutable
 data class NavItemSpec(val route: String, val icon: ImageVector, val label: String)
 
 internal val NavContentHeight = 62.dp
 
+/**
+ * A5 (§3.6.2) — the dead-zone-then-ramp arithmetic behind the press-and-hold feedback, extracted
+ * so it is testable without Compose. `longPressTimeoutMillis` is the platform's own value (via
+ * `LocalViewConfiguration`, itself honouring the user's own Accessibility -> Touch and hold delay
+ * setting) — never a hard-coded 500. The ramp must finish exactly when the gesture triggers, so
+ * it is the timeout minus the dead zone that already elapsed doing nothing.
+ */
+internal fun longPressRampMillis(longPressTimeoutMillis: Long, deadZoneMillis: Int = 120): Int =
+    (longPressTimeoutMillis - deadZoneMillis).coerceAtLeast(1).toInt()
+
+private const val HOLD_DEAD_ZONE_MILLIS = 120L
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FloatingPillNav(
     items: List<NavItemSpec>,
     currentRoute: String?,
     onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // A5 (§3.6.1 b) — one implementation, two configurations: Daybook's own nav passes
+    // longPressRoute = "home"; Beast Mode's nav passes longPressRoute = WorkoutRoutes.HOME. The
+    // gate is a ROUTE check, not an index check (§3.6.1 note 1).
+    onLongSelect: ((String) -> Unit)? = null,
+    longPressRoute: String? = null,
+    longPressLabel: String? = null,
+    hintDotRoutes: Set<String> = emptySet()
 ) {
     val NavShape = AppShapes.nav
     val accent = LocalAccent.current
@@ -88,6 +124,11 @@ fun FloatingPillNav(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val reduceMotion = LocalReduceMotion.current
+                val haptics = LocalHapticFeedback.current
+                val longPressTimeoutMillis = LocalViewConfiguration.current.longPressTimeoutMillis
+                val rampMillis = remember(longPressTimeoutMillis) { longPressRampMillis(longPressTimeoutMillis) }
+
                 items.forEach { item ->
                     val selected = item.route == currentRoute
                     val tint by animateColorAsState(
@@ -95,6 +136,45 @@ fun FloatingPillNav(
                         Motion.softSpring(),
                         label = "navTint"
                     )
+                    val longPressable = onLongSelect != null && longPressRoute != null && item.route == longPressRoute
+                    val interaction = remember { MutableInteractionSource() }
+                    val pressed by interaction.collectIsPressedAsState()
+
+                    // A5 (§3.6.2) — the dead-zone-then-ramp state. Only the long-pressable item
+                    // ever sets this true; every other item's holdActive never leaves false.
+                    var holdActive by remember { mutableStateOf(false) }
+                    if (longPressable) {
+                        LaunchedEffect(pressed) {
+                            if (pressed) {
+                                delay(HOLD_DEAD_ZONE_MILLIS)
+                                holdActive = true
+                            } else {
+                                holdActive = false
+                            }
+                        }
+                    }
+
+                    // Scale ramps 1.00 -> 1.18 linearly over rampMillis while holding (dropped
+                    // entirely under reduce-motion — "no growth"); releasing early springs back
+                    // via the same spring CircleIconButton uses. Tint lerps to the accent the same
+                    // way, except under reduce-motion it snaps instead — the haptic still fires
+                    // either way (a haptic is not motion).
+                    val holdScaleTarget = if (!reduceMotion && holdActive) 1.18f else 1f
+                    val holdScale by animateFloatAsState(
+                        holdScaleTarget,
+                        if (holdActive) tween(durationMillis = rampMillis, easing = LinearEasing) else Motion.pressSpring(),
+                        label = "navHoldScale"
+                    )
+                    val holdTint by animateColorAsState(
+                        if (holdActive) accent else tint,
+                        when {
+                            reduceMotion -> snap()
+                            holdActive -> tween(durationMillis = rampMillis, easing = LinearEasing)
+                            else -> Motion.softSpring()
+                        },
+                        label = "navHoldTint"
+                    )
+
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -105,19 +185,52 @@ fun FloatingPillNav(
                             // filling. The column wraps its content (icon + label + 8.dp vertical
                             // padding); `Arrangement.Center` + the Box's `heightIn(min =
                             // NavContentHeight)` keep the items vertically centred in the bar.
-                            .clickableImpl(remember { MutableInteractionSource() }) { onSelect(item.route) }
+                            .then(
+                                if (longPressable) {
+                                    Modifier.combinedClickableImpl(
+                                        interaction = interaction,
+                                        onLongClickLabel = longPressLabel ?: "",
+                                        onLongClick = {
+                                            // A5 (§3.6.2) — the haptic tick fires first, while the
+                                            // finger is still down, before navigation itself.
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onLongSelect!!(item.route)
+                                        },
+                                        onClick = { onSelect(item.route) }
+                                    )
+                                } else {
+                                    Modifier.clickableImpl(interaction) { onSelect(item.route) }
+                                }
+                            )
                             .padding(vertical = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Icon(
-                            imageVector = item.icon,
-                            // v0.5.3 Phase 0 (§3.10) — label Text below is always visible, so the
-                            // icon is decorative; null stops TalkBack double-reading "Today, Today".
-                            contentDescription = null,
-                            tint = tint,
-                            modifier = Modifier.size(if (selected) 24.dp else 22.dp)
-                        )
+                        Box {
+                            Icon(
+                                imageVector = item.icon,
+                                // v0.5.3 Phase 0 (§3.10) — label Text below is always visible, so
+                                // the icon is decorative; null stops TalkBack double-reading
+                                // "Today, Today". The gesture reaches TalkBack via onLongClickLabel.
+                                contentDescription = null,
+                                tint = holdTint,
+                                modifier = Modifier
+                                    .size(if (selected) 24.dp else 22.dp)
+                                    .graphicsLayer { scaleX = holdScale; scaleY = holdScale }
+                            )
+                            // A5 (§3.6.3 b) — the persistent hint dot, until the gesture is used
+                            // once. Decorative; the coach-mark text carries the announcement.
+                            if (item.route in hintDotRoutes) {
+                                Box(
+                                    Modifier
+                                        .align(Alignment.TopEnd)
+                                        .offset(x = 6.dp, y = (-2).dp)
+                                        .size(4.dp)
+                                        .clip(CircleShape)
+                                        .background(accent)
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(4.dp))
                         Text(
                             item.label,
@@ -157,6 +270,16 @@ fun DaybookScaffold(
     onSelectRoute: (String) -> Unit,
     modifier: Modifier = Modifier,
     fabPresent: Boolean = false,
+    // A5 (§3.6.1 b) — threaded straight through to FloatingPillNav; DaybookScaffold itself does
+    // nothing with them beyond passing them on. Defaulted so every existing call site (there was
+    // only ever one, MainActivity.kt) stays source-compatible.
+    onLongSelect: ((String) -> Unit)? = null,
+    longPressRoute: String? = null,
+    longPressLabel: String? = null,
+    hintDotRoutes: Set<String> = emptySet(),
+    // A5 (§3.6.3 a) — the one-time coach-mark's slot. Rendered ABOVE the nav (so it floats over
+    // it, not under), only while `showNav` — there is nothing to anchor it to otherwise.
+    coachMark: (@Composable BoxScope.(navClearance: Dp) -> Unit)? = null,
     content: @Composable (contentPadding: PaddingValues) -> Unit
 ) {
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -175,7 +298,13 @@ fun DaybookScaffold(
             .clipToBounds()
     ) {
         content(contentPadding)
-        DaybookScaffoldNav(showNav, currentRoute, navItems, onSelectRoute)
+        DaybookScaffoldNav(
+            showNav, currentRoute, navItems, onSelectRoute,
+            onLongSelect, longPressRoute, longPressLabel, hintDotRoutes
+        )
+        if (showNav && coachMark != null) {
+            coachMark(navClearance)
+        }
     }
 }
 
@@ -187,7 +316,11 @@ private fun BoxScope.DaybookScaffoldNav(
     showNav: Boolean,
     currentRoute: String?,
     navItems: List<NavItemSpec>,
-    onSelectRoute: (String) -> Unit
+    onSelectRoute: (String) -> Unit,
+    onLongSelect: ((String) -> Unit)? = null,
+    longPressRoute: String? = null,
+    longPressLabel: String? = null,
+    hintDotRoutes: Set<String> = emptySet()
 ) {
     if (!showNav) return
     Box(
@@ -206,6 +339,10 @@ private fun BoxScope.DaybookScaffoldNav(
         items = navItems,
         currentRoute = currentRoute,
         onSelect = onSelectRoute,
-        modifier = Modifier.align(Alignment.BottomCenter)
+        modifier = Modifier.align(Alignment.BottomCenter),
+        onLongSelect = onLongSelect,
+        longPressRoute = longPressRoute,
+        longPressLabel = longPressLabel,
+        hintDotRoutes = hintDotRoutes
     )
 }

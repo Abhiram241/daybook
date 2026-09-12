@@ -1390,7 +1390,12 @@ class CloudSyncRepository @Inject constructor(
         val DATA_TABLES = arrayOf(
             "habits", "habit_occurrences", "habit_events",
             "food_med_tasks", "food_med_occurrences", "food_med_events",
-            "custom_categories", "custom_prompts"
+            "custom_categories", "custom_prompts",
+            // A4 (R12, §4.1): Round A (workout mode). No test catches a forgotten entry here in
+            // THIS direction — DataTablesSyncTest only catches a STALE one — so this is a manual
+            // step every round must not skip.
+            "exercises", "workout_sessions", "workout_exercises", "workout_sets",
+            "workout_routines", "workout_routine_exercises"
         )
 
         // Parent doc.

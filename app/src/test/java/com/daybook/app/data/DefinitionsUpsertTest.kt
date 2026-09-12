@@ -36,4 +36,20 @@ class DefinitionsUpsertTest {
         val remote = setOf("a", "b", "c")
         assertEquals(remote, defsDelta(setOf("a", "z"), remote).first)
     }
+
+    /** A4 — `defsDelta` is generic over any definition-id set; `applyRemoteDefinitions` reuses it
+     *  verbatim for custom-exercise ids and for routine ids (§4.4 item 5). A routine renamed on
+     *  another device (same id) must never be deleted locally, exactly like a habit rename. */
+    @Test fun routineRename_sameId_neverDeleted() {
+        val local = setOf("r1", "r2")
+        val remote = setOf("r1", "r2")   // r2 renamed remotely — id unchanged
+        val (toUpsert, toDelete) = defsDelta(local, remote)
+        assertTrue("r2" in toUpsert)
+        assertFalse("r2" in toDelete)
+    }
+
+    @Test fun routineDeletedRemotely_isDeleteOnlyLocally() {
+        val (_, toDelete) = defsDelta(localIds = setOf("r1", "r2"), remoteIds = setOf("r1"))
+        assertEquals(setOf("r2"), toDelete)
+    }
 }

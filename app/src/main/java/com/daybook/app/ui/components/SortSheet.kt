@@ -1,5 +1,6 @@
 package com.daybook.app.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -11,12 +12,15 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -33,16 +37,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.annotation.DrawableRes
 import com.daybook.app.ui.icons.DaybookIcons
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.LocalAccent
 
 @Immutable
-data class SortOption(val key: String, val label: String)
+data class SortOption(
+    val key: String,
+    val label: String,
+    // Item 6 (Workout UI fixes plan, LOCKED) — the Muscle Groups filter sheet's leading thumbnail
+    // per row. Both default null so every other `SortSheet` caller (Intake sort, Habits sort,
+    // App-lock "Lock after", …) is visually unaffected. At most one of the two is set per option:
+    // a real per-muscle image when one exists, else a generic fallback glyph (never both).
+    @DrawableRes val leadingImageRes: Int? = null,
+    val leadingIconVector: ImageVector? = null
+)
 
 @Immutable
 data class FacetOption(val key: String, val label: String, val count: Int?)
@@ -98,6 +116,11 @@ fun SortSheet(
     // controls stay on-accent even though ModalBottomSheet hosts its content in a separate window.
     val accent = LocalAccent.current
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Item 6 (Workout UI fixes plan) — the Muscle Groups list gained a leading thumbnail per row,
+    // which pushed its natural (content-sized) height well past half the screen on most phones.
+    // Cap the sheet at half the screen height and let the options themselves scroll within that,
+    // so every caller (this one included) reads as a "half-page" sheet, never a near-full screen.
+    val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.5f
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
@@ -105,7 +128,12 @@ fun SortSheet(
         shape = AppShapes.sheet,
         modifier = modifier,
     ) {
-        Column(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxSheetHeight)
+                .verticalScroll(rememberScrollState())
+        ) {
             Spacer(Modifier.height(2.dp))
 
             // v0.5.3: the Home "Reminders" filter reuses this sheet with no sort rows at all —
@@ -117,6 +145,8 @@ fun SortSheet(
                         label = opt.label,
                         selected = opt.key == selectedSortKey,
                         accent = accent,
+                        leadingImageRes = opt.leadingImageRes,
+                        leadingIconVector = opt.leadingIconVector,
                         onClick = {
                             onSelectSort(opt.key)
                             if (dismissOnSelect) onDismiss()
@@ -230,8 +260,32 @@ private fun SheetRow(
 )
 
 @Composable
-private fun SortRow(label: String, selected: Boolean, accent: Color, onClick: () -> Unit) {
+private fun SortRow(
+    label: String,
+    selected: Boolean,
+    accent: Color,
+    onClick: () -> Unit,
+    leadingImageRes: Int? = null,
+    leadingIconVector: ImageVector? = null
+) {
     SheetRow(active = selected, accent = accent, onClick = onClick) {
+        if (leadingImageRes != null) {
+            Image(
+                painter = painterResource(leadingImageRes),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(28.dp).clip(CircleShape).background(DaybookColors.SurfaceElevated)
+            )
+            Spacer(Modifier.width(12.dp))
+        } else if (leadingIconVector != null) {
+            Icon(
+                imageVector = leadingIconVector,
+                contentDescription = null,
+                tint = if (selected) accent else DaybookColors.TextMuted,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+        }
         Text(
             label,
             style = MaterialTheme.typography.bodyLarge,

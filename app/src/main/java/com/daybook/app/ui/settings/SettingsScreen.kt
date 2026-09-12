@@ -59,6 +59,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.daybook.app.BuildConfig
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import com.daybook.app.R
 import com.daybook.app.ui.DaybookDatePickerDialog
 import com.daybook.app.ui.TimePickerDialog
@@ -97,6 +99,10 @@ fun SettingsScreen(
     onOpenAccount: () -> Unit = {},
     onOpenAppLock: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
+    // A7 (§3.8.1) — the ONE Workout row Daybook's main Settings carries. Unconditional, behind
+    // no toggle: the accessibility floor for anyone who never sees or cannot perform the
+    // long-press gesture (§3.6.4).
+    onOpenWorkout: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
     accountViewModel: com.daybook.app.ui.account.AccountViewModel = hiltViewModel(),
     lockViewModel: com.daybook.app.ui.lock.LockViewModel = hiltViewModel()
@@ -283,6 +289,21 @@ fun SettingsScreen(
             // v0.5.1 §M: the "Monthly backup reminder" SettingsGroup used to sit here. Removed —
             // the feature had no scheduling logic behind it, only a switch. Its dead column
             // `backup_reminder_enabled` was dropped by MIGRATION_11_12 (v0.5.2 D2).
+
+            item {
+                // A7 (§3.8.1) — exactly one row. Every actual Workout *setting* (weight unit,
+                // accent, rest timer default, Show-on-Today) lives on Beast Mode's own settings
+                // screen, reachable only from inside it — this row is the entrance, not a
+                // setting itself, so it stays behind no toggle, ever.
+                SectionHeader("Workout", subtitle = "Beast Mode has its own settings, inside it.")
+                SettingsGroup {
+                    SettingsRow(
+                        icon = ImageVector.vectorResource(R.drawable.ic_workout),
+                        title = "Open Workout",
+                        onClick = onOpenWorkout
+                    )
+                }
+            }
 
             item {
                 // v0.5.4 Phase 1 (S1) — sign out from the hub. Own group above the version footer;
@@ -986,6 +1007,35 @@ fun DataSettingsScreen(
         )
     }
 
+    // A8 (§3.9.1) — Hevy CSV import. Same confirm-first-then-pick order as the JSON import
+    // above; NOT destructive, since this merges (skipping duplicates) rather than replacing.
+    val openHevyLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importHevyFromUri(it) } }
+    var confirmHevyImport by remember { mutableStateOf(false) }
+    if (confirmHevyImport) {
+        DaybookAlertDialog(
+            onDismissRequest = { confirmHevyImport = false },
+            title = "Import from Hevy?",
+            text = {
+                Text(
+                    "This adds your Hevy workouts to Daybook. Nothing already in Daybook is changed " +
+                        "or removed, and workouts you've already imported are skipped.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DaybookColors.TextMuted
+                )
+            },
+            confirmLabel = "Choose file",
+            onConfirm = {
+                confirmHevyImport = false
+                openHevyLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*"))
+            },
+            dismissLabel = "Cancel",
+            onDismiss = { confirmHevyImport = false },
+            destructive = false
+        )
+    }
+
     SettingsSubScreen("Backup & data", onNavigateBack) {
         // v0.5.3 Phase 6 (D2) — pick a start and end date, download a JSON of just that range.
         SectionHeader(
@@ -1041,14 +1091,28 @@ fun DataSettingsScreen(
                 }
 
                 // v0.5.3 Phase 5 (§5.15) — a fixed-height result slot so feedback doesn't shift layout.
+                // A8 (§3.9.9): extended with the "Imported " success prefix and the S3 neutral
+                // (TextMuted) case — re-importing an already-imported file is not a failure.
                 Box(Modifier.fillMaxWidth().heightIn(min = 36.dp)) {
                     val msg = importResult ?: exportResult
                     if (msg != null) {
-                        val ok = msg.startsWith("Exported ") || msg.startsWith("Import successful")
+                        val neutral = msg.startsWith("Nothing new to import")
+                        // Hevy import — a "⚠" marker means some exercise names weren't in the
+                        // catalog and got auto-created as custom (see `HevyImporter.summarise`).
+                        // Still a successful import, just worth flagging distinctly from a plain
+                        // "Imported" success line.
+                        val warning = msg.contains("⚠")
+                        val ok = msg.startsWith("Exported ") || msg.startsWith("Import successful") ||
+                            msg.startsWith("Imported ")
                         Text(
                             msg,
                             style = DaybookText.Caption,
-                            color = if (ok) DaybookColors.Success else DaybookColors.Danger
+                            color = when {
+                                neutral -> DaybookColors.TextMuted
+                                warning -> DaybookColors.Warning
+                                ok -> DaybookColors.Success
+                                else -> DaybookColors.Danger
+                            }
                         )
                     }
                 }
@@ -1086,6 +1150,18 @@ fun DataSettingsScreen(
                     }
                 )
             }
+        }
+
+        // A8 (§3.9.1) — a separate group so it reads as its own import source, not a JSON option.
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Import from another app")
+        FormGroup(title = null) {
+            GhostButton(
+                text = if (isImporting) "Importing…" else "Import from Hevy (CSV)",
+                onClick = { confirmHevyImport = true },
+                enabled = !isImporting,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

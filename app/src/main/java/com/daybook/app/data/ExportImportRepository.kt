@@ -12,11 +12,18 @@ import com.daybook.app.data.backup.HabitDef
 import com.daybook.app.data.backup.HabitLog
 import com.daybook.app.data.backup.IntakeLog
 import com.daybook.app.data.backup.IntakeReminderDef
+import com.daybook.app.data.backup.ExerciseDef
+import com.daybook.app.data.backup.RoutineDef
+import com.daybook.app.data.backup.RoutineExerciseDef
+import com.daybook.app.data.backup.WorkoutLog
+import com.daybook.app.data.backup.WorkoutExerciseLog
+import com.daybook.app.data.backup.WorkoutSetLog
 import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.data.model.ColorTag
 import com.daybook.app.data.model.CustomCategory
 import com.daybook.app.data.model.CustomPrompt
 import com.daybook.app.data.model.DayOfWeek
+import com.daybook.app.data.model.Exercise
 import com.daybook.app.data.model.FoodMedOccurrence
 import com.daybook.app.data.model.FoodMedTask
 import com.daybook.app.data.model.Habit
@@ -25,6 +32,11 @@ import com.daybook.app.data.model.HabitType
 import com.daybook.app.data.model.Occurrence
 import com.daybook.app.data.model.RedFlag
 import com.daybook.app.data.model.TaskType
+import com.daybook.app.data.model.WorkoutExercise
+import com.daybook.app.data.model.WorkoutRoutine
+import com.daybook.app.data.model.WorkoutRoutineExercise
+import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.util.DateTimeUtils
 import com.daybook.app.util.JsonUtils
 import com.daybook.app.util.notification.NotificationIdSequence
@@ -142,6 +154,14 @@ class ExportImportRepository @Inject constructor(
         val foodMedOccurrences = database.foodMedOccurrenceDao().getAllOccurrences().first()
         val customCategories = database.customCategoryDao().getNames()
         val customPrompts = database.customPromptDao().getNames()
+        // A4 (§4.4 item 1): custom exercises + routines (definitions), and every workout session
+        // grouped by local_date (history, nested inside DayEntry.workouts).
+        val customExercises = database.exerciseDao().getAll()
+        val routines = database.routineDao().getAllRoutinesIncludingArchived()
+        val routineExerciseRows = routines.map { it.id }.chunked(SQLITE_MAX_VARS)
+            .flatMap { database.routineDao().getRoutineExercisesForRoutines(it) }
+            .groupBy { it.routineId }
+        val workoutByDate = exportWorkoutsByLocalDate()
 
         val habitIds = habits.mapTo(HashSet()) { it.id }
         val taskIds = tasks.mapTo(HashSet()) { it.id }
@@ -196,12 +216,14 @@ class ExportImportRepository @Inject constructor(
             )
         }
 
-        // ISO "yyyy-MM-dd" strings sort chronologically as plain text.
-        val days = (habitByDate.keys + intakeByDate.keys).sorted().map { date ->
+        // ISO "yyyy-MM-dd" strings sort chronologically as plain text. A4: a day with ONLY a
+        // workout (no habit/intake logs) must still appear, so workoutByDate.keys joins the union.
+        val days = (habitByDate.keys + intakeByDate.keys + workoutByDate.keys).sorted().map { date ->
             DayEntry(
                 date = date,
                 habitLogs = habitByDate[date].orEmpty().sortedBy { it.scheduledTime },
-                intakeLogs = intakeByDate[date].orEmpty().sortedBy { it.scheduledTime }
+                intakeLogs = intakeByDate[date].orEmpty().sortedBy { it.scheduledTime },
+                workouts = workoutByDate[date].orEmpty()
             )
         }
 
@@ -251,10 +273,156 @@ class ExportImportRepository @Inject constructor(
                         )
                     },
                 customCategories = customCategories,
-                customPrompts = customPrompts
+                customPrompts = customPrompts,
+                customExercises = customExercises.map { e ->
+                    ExerciseDef(
+                        id = e.id, name = e.name, primaryMuscle = e.primaryMuscle,
+                        equipment = e.equipment, trackingMode = e.trackingMode,
+                        createdAt = jsonUtils.toIso(e.createdAt), archived = e.isArchived,
+                        source = e.source, notes = e.notes?.takeIf { it.isNotBlank() }
+                    )
+                },
+                routines = routines.map { r ->
+                    RoutineDef(
+                        id = r.id, name = r.name, orderIndex = r.orderIndex,
+                        createdAt = jsonUtils.toIso(r.createdAt), updatedAt = jsonUtils.toIso(r.updatedAt),
+                        archived = r.isArchived, source = r.source,
+                        notes = r.notes?.takeIf { it.isNotBlank() },
+                        exercises = routineExerciseRows[r.id].orEmpty().sortedBy { it.orderIndex }.map { k ->
+                            RoutineExerciseDef(
+                                id = k.id, exerciseId = k.exerciseId, orderIndex = k.orderIndex,
+                                targetSets = k.targetSets, targetReps = k.targetReps,
+                                targetWeightKg = k.targetWeightKg,
+                                targetDurationSeconds = k.targetDurationSeconds,
+                                targetDistanceMeters = k.targetDistanceMeters,
+                                restSeconds = k.restSeconds, notes = k.notes?.takeIf { it.isNotBlank() }
+                            )
+                        }
+                    )
+                }
             ),
             days = days
         )
+    }
+
+    /**
+     * A4 (§4.4 item 1) — every workout session, its blocks and its sets, grouped by the session's
+     * `local_date`. Both the block fetch and the set fetch go through the chunked
+     * `getExercisesForSessions` / `getSetsForSessions` (900-var cap) rather than one query per
+     * session (an N+1 that would scale with the user's whole workout history).
+     */
+    private suspend fun exportWorkoutsByLocalDate(): Map<String, List<WorkoutLog>> {
+        val sessions = database.workoutDao().getAllSessions()
+        if (sessions.isEmpty()) return emptyMap()
+        val sessionIds = sessions.map { it.id }
+        val exercisesBySession = sessionIds.chunked(SQLITE_MAX_VARS)
+            .flatMap { database.workoutDao().getExercisesForSessions(it) }
+            .groupBy { it.sessionId }
+        val setsByBlock = sessionIds.chunked(SQLITE_MAX_VARS)
+            .flatMap { database.workoutDao().getSetsForSessions(it) }
+            .groupBy { it.workoutExerciseId }
+
+        val byDate = HashMap<String, MutableList<WorkoutLog>>()
+        for (session in sessions) {
+            val blocks = exercisesBySession[session.id].orEmpty().sortedBy { it.orderIndex }
+            val exerciseLogs = blocks.map { block ->
+                val sets = setsByBlock[block.id].orEmpty().sortedBy { it.setNumber }
+                WorkoutExerciseLog(
+                    id = block.id, exerciseId = block.exerciseId, orderIndex = block.orderIndex,
+                    notes = block.notes?.takeIf { it.isNotBlank() }, supersetId = block.supersetId,
+                    restSeconds = block.restSeconds,
+                    sets = sets.map { s ->
+                        WorkoutSetLog(
+                            id = s.id, setNumber = s.setNumber, reps = s.reps, weightKg = s.weightKg,
+                            durationSeconds = s.durationSeconds, distanceMeters = s.distanceMeters,
+                            rpe = s.rpe, setType = s.setType,
+                            notes = s.notes?.takeIf { it.isNotBlank() },
+                            completedAt = s.completedAt?.let { jsonUtils.toIso(it) }
+                        )
+                    }
+                )
+            }
+            byDate.getOrPut(session.localDate) { mutableListOf() } += WorkoutLog(
+                id = session.id,
+                startedAt = jsonUtils.toIso(session.startedAt),
+                endedAt = session.endedAt?.let { jsonUtils.toIso(it) },
+                title = session.title, notes = session.notes, status = session.status,
+                source = session.source, routineId = session.routineId, exercises = exerciseLogs
+            )
+        }
+        return byDate
+    }
+
+    /**
+     * A4 — the inverse of [exportWorkoutsByLocalDate]: `DayEntry.workouts` -> flat entity lists,
+     * ready to insert. Each set/block's `sessionId`/`exerciseId` is re-derived from its enclosing
+     * `WorkoutLog`/`WorkoutExerciseLog` (§4.2 — neither rides the wire denormalised).
+     */
+    private fun mapDaysToWorkouts(days: List<DayEntry>): Triple<List<WorkoutSession>, List<WorkoutExercise>, List<WorkoutSet>> {
+        val sessions = ArrayList<WorkoutSession>()
+        val exercises = ArrayList<WorkoutExercise>()
+        val sets = ArrayList<WorkoutSet>()
+        for (day in days) {
+            for (log in day.workouts) {
+                val startedAt = jsonUtils.fromIso(log.startedAt) ?: continue
+                sessions += WorkoutSession(
+                    id = log.id, localDate = day.date, startedAt = startedAt,
+                    endedAt = log.endedAt?.let { jsonUtils.fromIso(it) }, title = log.title,
+                    notes = log.notes, status = log.status, source = log.source,
+                    routineId = log.routineId, createdAt = startedAt
+                )
+                for (ex in log.exercises) {
+                    exercises += WorkoutExercise(
+                        id = ex.id, sessionId = log.id, exerciseId = ex.exerciseId,
+                        orderIndex = ex.orderIndex, notes = ex.notes, supersetId = ex.supersetId,
+                        restSeconds = ex.restSeconds, createdAt = startedAt
+                    )
+                    for (s in ex.sets) {
+                        sets += WorkoutSet(
+                            id = s.id, workoutExerciseId = ex.id, sessionId = log.id,
+                            exerciseId = ex.exerciseId, setNumber = s.setNumber, reps = s.reps,
+                            weightKg = s.weightKg, durationSeconds = s.durationSeconds,
+                            distanceMeters = s.distanceMeters, rpe = s.rpe, setType = s.setType,
+                            notes = s.notes, completedAt = s.completedAt?.let { jsonUtils.fromIso(it) }
+                        )
+                    }
+                }
+            }
+        }
+        return Triple(sessions, exercises, sets)
+    }
+
+    private fun Exercise.toDef() = ExerciseDef(
+        id = id, name = name, primaryMuscle = primaryMuscle, equipment = equipment,
+        trackingMode = trackingMode, createdAt = jsonUtils.toIso(createdAt), archived = isArchived,
+        source = source, notes = notes?.takeIf { it.isNotBlank() }
+    )
+
+    private fun ExerciseDef.toEntity() = Exercise(
+        id = id, name = name, primaryMuscle = primaryMuscle, equipment = equipment,
+        trackingMode = trackingMode, isArchived = archived, source = source,
+        createdAt = jsonUtils.fromIso(createdAt) ?: System.currentTimeMillis(),
+        notes = notes?.takeIf { it.isNotBlank() }
+    )
+
+    private fun RoutineDef.toRoutineEntity() = WorkoutRoutine(
+        id = id, name = name, notes = notes?.takeIf { it.isNotBlank() }, orderIndex = orderIndex,
+        isArchived = archived, source = source,
+        createdAt = jsonUtils.fromIso(createdAt) ?: System.currentTimeMillis(),
+        updatedAt = jsonUtils.fromIso(updatedAt) ?: System.currentTimeMillis()
+    )
+
+    private fun RoutineDef.toChildEntities(): List<WorkoutRoutineExercise> {
+        val createdAtMillis = jsonUtils.fromIso(createdAt) ?: System.currentTimeMillis()
+        return exercises.map { e ->
+            WorkoutRoutineExercise(
+                id = e.id, routineId = id, exerciseId = e.exerciseId, orderIndex = e.orderIndex,
+                targetSets = e.targetSets, targetReps = e.targetReps, targetWeightKg = e.targetWeightKg,
+                targetDurationSeconds = e.targetDurationSeconds, targetDistanceMeters = e.targetDistanceMeters,
+                restSeconds = e.restSeconds, notes = e.notes?.takeIf { it.isNotBlank() },
+                createdAt = createdAtMillis
+            )
+        }
     }
 
     private fun timesOf(timesJson: String): List<String> =
@@ -348,6 +516,12 @@ class ExportImportRepository @Inject constructor(
             val (habitOccurrences, foodMedOccurrences) =
                 mapDaysToOccurrences(backup.days, habitIds, taskIds)
 
+            // A4 (§4.4 item 3): full-replace also covers the six workout tables.
+            val customExercises = backup.definitions.customExercises.map { it.toEntity() }
+            val routines = backup.definitions.routines.map { it.toRoutineEntity() }
+            val routineExercises = backup.definitions.routines.flatMap { it.toChildEntities() }
+            val (workoutSessions, workoutExercises, workoutSets) = mapDaysToWorkouts(backup.days)
+
             database.withTransaction {
                 // Order matters only for readability — there are no FK constraints.
                 database.habitEventDao().deleteAll()
@@ -358,6 +532,14 @@ class ExportImportRepository @Inject constructor(
                 database.foodMedTaskDao().deleteAll()
                 database.customCategoryDao().deleteAll()
                 database.customPromptDao().deleteAll()
+                // A4: wipe the six workout tables — sets/blocks before sessions, routine rows
+                // before routines, purely for readability (no FK to satisfy either way).
+                database.workoutDao().deleteAllSets()
+                database.workoutDao().deleteAllExercises()
+                database.workoutDao().deleteAllSessions()
+                database.routineDao().deleteAllRoutineExercises()
+                database.routineDao().deleteAllRoutines()
+                database.exerciseDao().deleteAll()
 
                 if (habits.isNotEmpty()) database.habitDao().insertAll(*habits.toTypedArray())
                 if (tasks.isNotEmpty()) database.foodMedTaskDao().insertAll(*tasks.toTypedArray())
@@ -369,6 +551,12 @@ class ExportImportRepository @Inject constructor(
                 if (foodMedOccurrences.isNotEmpty()) {
                     database.foodMedOccurrenceDao().insertAll(*foodMedOccurrences.toTypedArray())
                 }
+                if (customExercises.isNotEmpty()) database.exerciseDao().insertAll(customExercises)
+                if (routines.isNotEmpty()) database.routineDao().upsertRoutines(routines)
+                if (routineExercises.isNotEmpty()) database.routineDao().upsertRoutineExercises(routineExercises)
+                if (workoutSessions.isNotEmpty()) database.workoutDao().insertSessions(workoutSessions)
+                if (workoutExercises.isNotEmpty()) database.workoutDao().insertExercises(workoutExercises)
+                if (workoutSets.isNotEmpty()) database.workoutDao().insertSets(workoutSets)
             }
 
             ImportResult(
@@ -624,6 +812,26 @@ class ExportImportRepository @Inject constructor(
                 if (foodMedOccurrences.isNotEmpty()) {
                     database.foodMedOccurrenceDao().insertAll(*foodMedOccurrences.toTypedArray())
                 }
+
+                // A4 (§4.4 item 4): workout sessions merge by full delete-then-insert over this
+                // month's local_date range — a session is simply present or not (no PENDING/
+                // resolved concept like an occurrence has), so there is nothing to diff. Never
+                // touches workout_routines / workout_routine_exercises (§4.4 item 4b — routines
+                // carry no local_date and are not month data).
+                val (monthStartYmd, monthEndYmd) = monthLocalDateRange(monthKey)
+                val (incomingSessions, incomingExercises, incomingSets) = mapDaysToWorkouts(days)
+                val staleSessionIds = database.workoutDao()
+                    .getSessionsInLocalDateRange(monthStartYmd, monthEndYmd).map { it.id }
+                staleSessionIds.chunked(SQLITE_MAX_VARS).forEach {
+                    if (it.isNotEmpty()) {
+                        database.workoutDao().deleteSetsForSessions(it)
+                        database.workoutDao().deleteExercisesForSessions(it)
+                    }
+                }
+                database.workoutDao().deleteSessionsInLocalDateRange(monthStartYmd, monthEndYmd)
+                if (incomingSessions.isNotEmpty()) database.workoutDao().insertSessions(incomingSessions)
+                if (incomingExercises.isNotEmpty()) database.workoutDao().insertExercises(incomingExercises)
+                if (incomingSets.isNotEmpty()) database.workoutDao().insertSets(incomingSets)
             }
             ImportResult(success = true, message = "$monthKey: ${days.size} days")
         } catch (e: Exception) {
@@ -704,6 +912,12 @@ class ExportImportRepository @Inject constructor(
                 .filter { it.isNotBlank() }.distinct().map { CustomCategory(name = it) }
             val prompts = defs.customPrompts.map { it.trim() }
                 .filter { it.isNotBlank() }.distinct().map { CustomPrompt(name = it) }
+            // A4 (§4.4 item 5): custom exercises + routines are definitions too.
+            val remoteExercises = defs.customExercises.map { it.toEntity() }
+            val remoteExerciseIds = remoteExercises.mapTo(HashSet()) { it.id }
+            val remoteRoutines = defs.routines.map { it.toRoutineEntity() }
+            val remoteRoutineIds = remoteRoutines.mapTo(HashSet()) { it.id }
+            val remoteRoutineExercises = defs.routines.flatMap { it.toChildEntities() }
 
             database.withTransaction {
                 if (habits.isNotEmpty()) database.habitDao().insertAll(*habits.toTypedArray())
@@ -720,6 +934,26 @@ class ExportImportRepository @Inject constructor(
                 if (staleHabits.isNotEmpty()) database.habitDao().deleteByIds(staleHabits.toList())
                 val (_, staleTasks) = defsDelta(database.foodMedTaskDao().allIds().toSet(), remoteTaskIds)
                 if (staleTasks.isNotEmpty()) database.foodMedTaskDao().deleteByIds(staleTasks.toList())
+
+                // A4: upsert incoming custom exercises, delete local ones absent from the remote set.
+                if (remoteExercises.isNotEmpty()) database.exerciseDao().insertAll(remoteExercises)
+                val (_, staleExercises) = defsDelta(database.exerciseDao().allIds().toSet(), remoteExerciseIds)
+                staleExercises.chunked(SQLITE_MAX_VARS).forEach {
+                    if (it.isNotEmpty()) database.exerciseDao().deleteByIds(it)
+                }
+
+                // A4: a routine's child rows are replaced wholesale with its parent — delete by
+                // routine_id, then insert — the same rule `updateRoutine` uses (§4.4 item 5).
+                if (remoteRoutines.isNotEmpty()) database.routineDao().upsertRoutines(remoteRoutines)
+                remoteRoutines.forEach { database.routineDao().deleteRoutineExercises(it.id) }
+                if (remoteRoutineExercises.isNotEmpty()) {
+                    database.routineDao().upsertRoutineExercises(remoteRoutineExercises)
+                }
+                val (_, staleRoutines) = defsDelta(database.routineDao().allIds().toSet(), remoteRoutineIds)
+                if (staleRoutines.isNotEmpty()) {
+                    staleRoutines.forEach { database.routineDao().deleteRoutineExercises(it) }
+                    database.routineDao().deleteByIds(staleRoutines.toList())
+                }
             }
             ImportResult(
                 success = true,
@@ -754,6 +988,22 @@ class ExportImportRepository @Inject constructor(
                 database.foodMedEventDao().deleteForNullLocalDateInRange(start, end)
                 database.habitOccurrenceDao().deleteInRange(start, end)
                 database.foodMedOccurrenceDao().deleteInRange(start, end)
+
+                // A4 (§4.4 item 6 — "the easiest one to get wrong"): drop this month's workout
+                // rows too, sets -> blocks -> sessions, chunked, by local_date. Must NOT touch
+                // workout_routines / workout_routine_exercises — those are definitions, not month
+                // data; evicting them would delete the user's templates every time an old month
+                // was tidied up.
+                val (monthStartYmd, monthEndYmd) = monthLocalDateRange(monthKey)
+                val staleSessionIds = database.workoutDao()
+                    .getSessionsInLocalDateRange(monthStartYmd, monthEndYmd).map { it.id }
+                staleSessionIds.chunked(SQLITE_MAX_VARS).forEach {
+                    if (it.isNotEmpty()) {
+                        database.workoutDao().deleteSetsForSessions(it)
+                        database.workoutDao().deleteExercisesForSessions(it)
+                    }
+                }
+                database.workoutDao().deleteSessionsInLocalDateRange(monthStartYmd, monthEndYmd)
             }
         }.isSuccess
     }
@@ -974,3 +1224,15 @@ internal fun pushDeletesAllowed(
     changed: Map<String, List<DayEntry>?>,
     userInitiated: Boolean
 ): Boolean = userInitiated || changed.values.none { it == null }
+
+// ------------------------------------------------------------------ A4 pure helpers
+
+/**
+ * A4 (§4.4 items 4 and 6) — the `local_date` bounds of a `"yyyy-MM"` month key, as plain strings.
+ * `-31` as the upper bound is safe (not just for 31-day months): `local_date` values are always
+ * real calendar dates, and fixed-width ISO date strings compare lexicographically exactly like
+ * they compare chronologically, so `BETWEEN "$monthKey-01" AND "$monthKey-31"` catches every real
+ * day of the month regardless of how many days it actually has. Pure —
+ * [com.daybook.app.data.RangeImportNonDestructiveTest].
+ */
+internal fun monthLocalDateRange(monthKey: String): Pair<String, String> = "$monthKey-01" to "$monthKey-31"

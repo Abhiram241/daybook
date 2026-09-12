@@ -277,7 +277,30 @@ data class AppSettings(
     @ColumnInfo(name = "light_style", defaultValue = "PAPER")
     val lightStyle: String = com.daybook.app.ui.theme.LightStyle.DEFAULT.storageKey,
     @ColumnInfo(name = "corner_scale", defaultValue = "1.0")
-    val cornerScale: Float = com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE
+    val cornerScale: Float = com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE,
+
+    // ---------------------------------------------------------------------------------------------
+    // Round A (DB v22) — Beast Mode / workout mode. Five additive columns, all DEVICE-LOCAL: NOT
+    // synced, NOT in BackupModel, NOT in ContentHash — same treatment as every app_settings column
+    // since v16. Surfaced on Beast Mode's OWN settings screen (§3.8.2), never Daybook's main
+    // settings_* screens. Appended last, never reordered.
+    // ---------------------------------------------------------------------------------------------
+    /** "KG" / "LB" — storage is always kg; this is a render-time conversion only (§3.8.2). */
+    @ColumnInfo(name = "weight_unit", defaultValue = "KG") val weightUnit: String = "KG",
+    /** The accent for the whole Beast Mode subtree (§3.8.3). CORAL is an existing AccentColor. */
+    @ColumnInfo(name = "workout_accent_color", defaultValue = "CORAL") val workoutAccentColor: String = "CORAL",
+    /** Pre-filled into a new exercise block's rest timer. 0 == OFF. */
+    @ColumnInfo(name = "rest_timer_default_seconds", defaultValue = "0") val restTimerDefaultSeconds: Int = 0,
+    /** The long-press hint's lifecycle: 0 = never shown, 1 = coach-mark dismissed, 2 = gesture
+     *  used at least once (§3.6.3). Tri-state, one column, device-local. */
+    @ColumnInfo(name = "workout_hint_state", defaultValue = "0") val workoutHintState: Int = 0,
+    /** The visible "Beast Mode" row on Today (§3.6.4). Default ON. */
+    @ColumnInfo(name = "workout_today_card_enabled", defaultValue = "1") val workoutTodayCardEnabled: Boolean = true,
+    /** Feature addition (post-A6, same MIGRATION_21_22) — the Add-Exercise picker's default
+     *  active filter chip: a [com.daybook.app.data.workout.MuscleGroup] name, or null for "All".
+     *  Nullable, NO schema default (mirrors `profile_photo_path`) — "no preference" must not
+     *  collapse into a real MuscleGroup value. Set from Beast Mode's own settings screen. */
+    @ColumnInfo(name = "default_exercise_group") val defaultExerciseGroup: String? = null
 )
 
 /**

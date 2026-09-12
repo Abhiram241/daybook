@@ -31,8 +31,8 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25          // v0.5.7 build 25 — Round 0 fast-track fix: a mistakenly-logged intake entry can now be reset back to not-logged, from both the Respond screen ("Reset to not logged", confirm-first) and the Today card's overflow sheet ("Undo", alongside "Edit" instead of instead-of); undo()/revertItem() no longer swallow a failed revert (C9). Bumped per HOW_TO_PUSH_UPDATES.md so testers' installed apps detect this as newer.
-        versionName = "0.5.7"     // v0.5.7 — Round 0: fix a mistaken intake log (RespondScreen + Today card overflow sheet undo/reset), no schema or sync changes
+        versionCode = 33          // v0.6.1 build 33 — Beast Mode settings reorganized into Appearance/Preferences/Data sections with distinct row icons; accent swatch grid no longer stretches on wrap.
+        versionName = "0.6.1"     // v0.6.1 — Beast Mode UI redesign
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
