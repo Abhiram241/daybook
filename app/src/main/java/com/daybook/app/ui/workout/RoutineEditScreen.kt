@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,10 +64,14 @@ fun RoutineEditScreen(
     viewModel: RoutineEditViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     var overflowFor by remember { mutableStateOf<RoutineExerciseDraft?>(null) }
     var targetsFor by remember { mutableStateOf<RoutineExerciseDraft?>(null) }
 
-    if (state.done) onNavigateBack()
+    // §2.11 fix — `if (state.done) onNavigateBack()` used to run directly in the composable body,
+    // which re-runs on every recomposition while `state.done` stays true; two recompositions
+    // between the flip and the screen actually leaving the back stack could pop two entries.
+    LaunchedEffect(state.done) { if (state.done) onNavigateBack() }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -93,7 +99,7 @@ fun RoutineEditScreen(
                         )
                     }
                 } else {
-                    items(state.exercises, key = { it.id }) { draft ->
+                    itemsIndexed(state.exercises, key = { _, it -> it.id }) { index, draft ->
                         val (name, mode, muscle) = state.exerciseNames[draft.exerciseId]
                             ?: Triple("Exercise", "WEIGHT_REPS", MuscleGroup.OTHER)
                         RoutineExerciseRow(
@@ -101,8 +107,14 @@ fun RoutineEditScreen(
                             name = name,
                             trackingMode = mode,
                             muscle = muscle,
+                            weightUnit = weightUnit,
+                            canMoveUp = index > 0,
+                            canMoveDown = index < state.exercises.lastIndex,
                             onClick = { targetsFor = draft },
-                            onOverflow = { overflowFor = draft }
+                            onOverflow = { overflowFor = draft },
+                            // §2.9 — wires up the previously-dead `RoutineEditViewModel.moveExercise`.
+                            onMoveUp = { viewModel.moveExercise(index, index - 1) },
+                            onMoveDown = { viewModel.moveExercise(index, index + 1) }
                         )
                     }
                 }
@@ -153,8 +165,13 @@ private fun RoutineExerciseRow(
     name: String,
     trackingMode: String,
     muscle: MuscleGroup,
+    weightUnit: WeightUnit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
     onClick: () -> Unit,
-    onOverflow: () -> Unit
+    onOverflow: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
 ) {
     val tint = muscleTint(muscle)
     SoftCard(tint = tint, onClick = onClick, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -163,9 +180,21 @@ private fun RoutineExerciseRow(
                 Text(name, style = DaybookText.CardTitle, color = tint.onFill, maxLines = 1)
                 val summary = targetSummary(
                     draft.targetSets, draft.targetReps, draft.targetWeightKg,
-                    draft.targetDurationSeconds, draft.targetDistanceMeters, trackingMode, WeightUnit.KG
+                    draft.targetDurationSeconds, draft.targetDistanceMeters, trackingMode, weightUnit
                 )
                 Text(summary, style = DaybookText.Caption, color = tint.onFillMuted)
+            }
+            // §2.9 — simple up/down move buttons: no drag-and-drop primitive exists anywhere else
+            // in this codebase, so this reorder affordance matches that rather than introducing one.
+            Column {
+                CircleIconButton(
+                    icon = Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
+                    onClick = onMoveUp, enabled = canMoveUp, size = 28.dp
+                )
+                CircleIconButton(
+                    icon = Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
+                    onClick = onMoveDown, enabled = canMoveDown, size = 28.dp
+                )
             }
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
         }

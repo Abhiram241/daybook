@@ -1097,6 +1097,46 @@ class MigrationTest {
         )
     }
 
+    /** v22 -> v23 — only `workout_accent_color`'s schema DEFAULT changes (CORAL -> AMBER); a
+     *  pre-existing row's own stored value must come through untouched, and a row that never
+     *  touched the Beast Mode accent picker still reads whatever v22 had already defaulted it to
+     *  (CORAL) rather than retroactively becoming AMBER. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate22To23_preservesExistingWorkoutAccentColor() {
+        helper.createDatabase(TEST_DB, 22).apply {
+            execSQL(
+                "INSERT INTO app_settings (id,default_snooze_minutes,onboarding_completed,user_name," +
+                    "accent_color,notif_permission_asked,profile_photo_path,font_choice,habit_checkin_time," +
+                    "habits_accent_color,intake_accent_color,check_for_updates_enabled,theme_mode," +
+                    "dark_style,light_style,corner_scale,weight_unit,workout_accent_color," +
+                    "rest_timer_default_seconds,workout_hint_state,workout_today_card_enabled) " +
+                    "VALUES (1,15,1,'Alex','CORAL',1,'/tmp/p.jpg','LITERATA','08:30','CORAL','CORAL',0,'LIGHT'," +
+                    "'CHARCOAL','PAPER',1.0,'KG','CORAL',0,0,1)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 23, true, MIGRATION_22_23)
+        db.query("SELECT user_name, workout_accent_color FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+            assertEquals("CORAL", c.getString(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To23() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 23, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23
+        )
+    }
+
     @Test
     @Throws(IOException::class)
     fun migrateAll_3To8() {
@@ -1125,7 +1165,7 @@ class MigrationTest {
                 MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                 MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
                 MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22
+                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23
             )
             .fallbackToDestructiveMigrationFrom(1)
             .build()

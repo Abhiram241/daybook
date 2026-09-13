@@ -287,8 +287,10 @@ data class AppSettings(
     // ---------------------------------------------------------------------------------------------
     /** "KG" / "LB" — storage is always kg; this is a render-time conversion only (§3.8.2). */
     @ColumnInfo(name = "weight_unit", defaultValue = "KG") val weightUnit: String = "KG",
-    /** The accent for the whole Beast Mode subtree (§3.8.3). CORAL is an existing AccentColor. */
-    @ColumnInfo(name = "workout_accent_color", defaultValue = "CORAL") val workoutAccentColor: String = "CORAL",
+    /** The accent for the whole Beast Mode subtree (§3.8.3). User request — Beast Mode's default
+     *  accent is AMBER, not the original CORAL (still a selectable swatch, just no longer the
+     *  fresh-install default). */
+    @ColumnInfo(name = "workout_accent_color", defaultValue = "AMBER") val workoutAccentColor: String = "AMBER",
     /** Pre-filled into a new exercise block's rest timer. 0 == OFF. */
     @ColumnInfo(name = "rest_timer_default_seconds", defaultValue = "0") val restTimerDefaultSeconds: Int = 0,
     /** The long-press hint's lifecycle: 0 = never shown, 1 = coach-mark dismissed, 2 = gesture

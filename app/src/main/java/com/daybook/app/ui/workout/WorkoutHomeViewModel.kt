@@ -2,12 +2,15 @@ package com.daybook.app.ui.workout
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.local.RoutineSummary
 import com.daybook.app.data.model.WorkoutSession
 import com.daybook.app.data.workout.WeeklyStats
+import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.currentStreakDays
 import com.daybook.app.data.workout.isPersonalRecord
+import com.daybook.app.data.workout.parseWeightUnit
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
@@ -17,14 +20,21 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class WorkoutHomeViewModel @Inject constructor(
-    private val repo: WorkoutRepository
+    private val repo: WorkoutRepository,
+    appSettingsRepository: AppSettingsRepository
 ) : ViewModel() {
+
+    /** §2.7 fix — the "This week · Volume" tile used to hardcode `parseWeightUnit("KG")`. */
+    val weightUnit = appSettingsRepository.observeSettings()
+        .map { parseWeightUnit(it.weightUnit) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeightUnit.KG)
 
     val routines = repo.observeRoutineSummaries()
         .flowOn(Dispatchers.Default)
@@ -108,16 +118,29 @@ class WorkoutHomeViewModel @Inject constructor(
     val deletedToken = _deletedToken.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
+    private val _errorToken = MutableStateFlow(0)
+    val errorToken = _errorToken.asStateFlow()
 
-    fun startEmptyWorkout() = safeLaunch { _newSessionId.value = repo.startEmptySession() }
+    private fun reportError(t: Throwable, message: String) {
+        com.daybook.app.util.recordUnhandledException(t)
+        _errorMessage.value = message
+        _errorToken.value++
+    }
+
+    // Bug fix (BEAST_MODE_BUG_REPORT.md §1.2) — this used to be a bare `safeLaunch` with no
+    // `runCatching`: a failure fell through to safeLaunch's Crashlytics-only default handler,
+    // `_newSessionId` never got set, and the button just did nothing with zero on-screen
+    // feedback. Now mirrors [startRoutine]'s error path.
+    fun startEmptyWorkout() = safeLaunch {
+        runCatching { repo.startEmptySession() }
+            .onSuccess { _newSessionId.value = it }
+            .onFailure { reportError(it, "Couldn't start a workout. Try again.") }
+    }
 
     fun startRoutine(routineId: String) = safeLaunch {
         val result = runCatching { repo.startSessionFromRoutine(routineId) }
         result.onSuccess { _newSessionId.value = it }
-            .onFailure {
-                com.daybook.app.util.recordUnhandledException(it)
-                _errorMessage.value = "Couldn't start that routine. Try again."
-            }
+            .onFailure { reportError(it, "Couldn't start that routine. Try again.") }
     }
 
     /** Discard-and-start confirmation — permanently deletes the current active session's logged
@@ -129,16 +152,16 @@ class WorkoutHomeViewModel @Inject constructor(
     }
 
     fun duplicateRoutine(routineId: String) = safeLaunch {
+        // Bug fix (BEAST_MODE_BUG_REPORT.md §1.3) — this used to only report to Crashlytics on
+        // failure, with no `_errorMessage`/toast, so "Duplicate" from the overflow menu could
+        // silently fail with the user never knowing it didn't work.
         runCatching { repo.duplicateRoutine(routineId) }
-            .onFailure { com.daybook.app.util.recordUnhandledException(it) }
+            .onFailure { reportError(it, "Couldn't duplicate that routine. Try again.") }
     }
 
     fun deleteRoutine(routineId: String) = safeLaunch {
         val result = runCatching { repo.deleteRoutine(routineId) }
         if (result.isSuccess) _deletedToken.value++
-        else {
-            com.daybook.app.util.recordUnhandledException(result.exceptionOrNull()!!)
-            _errorMessage.value = "Couldn't delete that routine. Try again."
-        }
+        else reportError(result.exceptionOrNull()!!, "Couldn't delete that routine. Try again.")
     }
 }

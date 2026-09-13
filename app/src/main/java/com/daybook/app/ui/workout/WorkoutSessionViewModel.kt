@@ -3,6 +3,7 @@ package com.daybook.app.ui.workout
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.CatalogExercise
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.model.WorkoutExercise
@@ -10,6 +11,8 @@ import com.daybook.app.data.model.WorkoutSession
 import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.data.workout.MuscleGroup
 import com.daybook.app.data.workout.SessionStats
+import com.daybook.app.data.workout.WeightUnit
+import com.daybook.app.data.workout.parseWeightUnit
 import com.daybook.app.data.workout.sessionStats
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -55,10 +59,18 @@ data class SessionUiState(
 @HiltViewModel
 class WorkoutSessionViewModel @Inject constructor(
     private val repo: WorkoutRepository,
+    appSettingsRepository: AppSettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     val sessionId: String = checkNotNull(savedStateHandle["sessionId"])
+
+    /** §2.7 fix — the Volume tile/set-table used to hardcode "kg" regardless of
+     *  `app_settings.weight_unit`; now the same read-through `WorkoutDetailViewModel` already
+     *  used. */
+    val weightUnit = appSettingsRepository.observeSettings()
+        .map { parseWeightUnit(it.weightUnit) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeightUnit.KG)
 
     // P1: no `List<WorkoutSet>` of the VM's own — everything below is a read-through of Room.
     private val base = combine(
@@ -129,8 +141,10 @@ class WorkoutSessionViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------------------ rest timer (§3.7.2)
+    // §2.9/§3 fix — `restEndsAt` used to also be exposed publicly, but nothing ever collected it
+    // (only the derived `restRemainingSeconds` below is); `restRemainingSeconds` makes it fully
+    // redundant as a public surface, so only the private backing field remains.
     private val _restEndsAt = MutableStateFlow<Long?>(null)
-    val restEndsAt = _restEndsAt.asStateFlow()
     private val _restRemainingSeconds = MutableStateFlow<Long?>(null)
     val restRemainingSeconds = _restRemainingSeconds.asStateFlow()
 
@@ -156,33 +170,69 @@ class WorkoutSessionViewModel @Inject constructor(
 
     // ------------------------------------------------------------------------ actions (P1)
     fun addExercise(exerciseId: String) = safeLaunch { repo.addExerciseToSession(sessionId, exerciseId) }
+
+    /** §2.1 fix — the multi-select "Add (n)" call site used to fire one `safeLaunch` per exercise
+     *  id, so N coroutines raced each other's read of `maxExerciseOrderIndex` before any of them
+     *  had inserted. One coroutine, looping sequentially, guarantees each add sees the previous
+     *  one's write (on top of `WorkoutRepository.addExerciseToSession`'s own transaction, which
+     *  handles the case of two truly-concurrent callers). */
+    fun addExercises(exerciseIds: List<String>) = safeLaunch {
+        for (id in exerciseIds) repo.addExerciseToSession(sessionId, id)
+    }
     fun removeExercise(blockId: String) = safeLaunch { repo.removeExerciseFromSession(blockId) }
     fun setExerciseNotes(blockId: String, notes: String) = safeLaunch { repo.setExerciseNotes(blockId, notes) }
     fun setExerciseRest(blockId: String, restSeconds: Int?) = safeLaunch { repo.setExerciseRest(blockId, restSeconds) }
 
     /** Feature addition — "I forgot to end this on time": lets the duration ring be corrected
-     *  before Finish. Re-anchors the session's `startedAt`; the ticker keeps running afterwards. */
+     *  before Finish. Re-anchors the session's `startedAt`; the ticker keeps running afterwards.
+     *  §1.5 fix — only updates the local ticker state on a true result, matching
+     *  `WorkoutRepository.setSessionElapsedSeconds`'s new "false if the session is already gone"
+     *  contract, instead of always assuming the write landed. */
     fun setElapsedSeconds(newElapsedSeconds: Long) = safeLaunch {
-        repo.setSessionElapsedSeconds(sessionId, newElapsedSeconds)
-        _elapsedSeconds.value = newElapsedSeconds
+        if (repo.setSessionElapsedSeconds(sessionId, newElapsedSeconds)) {
+            _elapsedSeconds.value = newElapsedSeconds
+        } else {
+            _errorMessage.value = "This workout is no longer available."
+            _errorToken.value++
+        }
     }
 
     fun addSet(blockId: String, exerciseId: String) = safeLaunch {
-        val prevMatch = state.value.blocks.firstOrNull { it.block.id == blockId }
-            ?.let { it.previous[it.sets.size + 1] }
-        repo.addSet(blockId, sessionId, exerciseId, prevMatch)
+        val previous = state.value.blocks.firstOrNull { it.block.id == blockId }?.previous ?: emptyMap()
+        repo.addSet(blockId, sessionId, exerciseId, previous)
     }
 
-    fun updateSet(set: WorkoutSet) = safeLaunch { repo.updateSet(set) }
+    /** §2.9 — wires up the previously-dead `WorkoutRepository.reorderExercises`: the session
+     *  screen's per-block up/down move buttons pass the whole block list, reordered. */
+    fun reorderExercises(orderedBlockIds: List<String>) = safeLaunch { repo.reorderExercises(orderedBlockIds) }
+
+    // §2.13 fix — column-scoped commits instead of a whole-row `updateSet(set.copy(...))` built
+    // from a stale composition-time snapshot, so a set-cell commit can't clobber a concurrent
+    // `toggleSetComplete`.
+    fun updateSetWeight(id: String, weightKg: Float?) = safeLaunch { repo.setSetWeight(id, weightKg) }
+    fun updateSetReps(id: String, reps: Int?) = safeLaunch { repo.setSetReps(id, reps) }
+    fun updateSetDuration(id: String, durationSeconds: Int?) = safeLaunch { repo.setSetDuration(id, durationSeconds) }
+    fun updateSetDistance(id: String, distanceMeters: Float?) = safeLaunch { repo.setSetDistance(id, distanceMeters) }
     fun deleteSet(id: String) = safeLaunch { repo.deleteSet(id) }
     fun toggleSetComplete(id: String) = safeLaunch { repo.toggleSetComplete(id) }
 
     private val _finished = MutableStateFlow(false)
     val finished = _finished.asStateFlow()
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = _errorMessage.asStateFlow()
+    private val _errorToken = MutableStateFlow(0)
+    val errorToken = _errorToken.asStateFlow()
 
     fun finish() = safeLaunch {
-        repo.finishSession(sessionId)
-        _finished.value = true
+        // Bug fix (BEAST_MODE_BUG_REPORT.md §1.5) — `finishSession` silently no-ops if the
+        // session row is already gone (a race with a concurrent discard/sync eviction); only
+        // navigate away when it actually saved, instead of always reporting success.
+        if (repo.finishSession(sessionId)) {
+            _finished.value = true
+        } else {
+            _errorMessage.value = "This workout is no longer available."
+            _errorToken.value++
+        }
     }
 
     fun discard() = safeLaunch {

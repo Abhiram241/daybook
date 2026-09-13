@@ -34,7 +34,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daybook.app.R
 import com.daybook.app.data.local.RoutineSummary
 import com.daybook.app.data.workout.formatVolume
-import com.daybook.app.data.workout.parseWeightUnit
 import com.daybook.app.ui.components.BottomSheetMenu
 import com.daybook.app.ui.components.CircleIconButton
 import com.daybook.app.ui.components.ConfirmDeleteDialog
@@ -76,7 +75,10 @@ fun WorkoutHomeScreen(
     val elapsedSeconds by viewModel.elapsedSeconds.collectAsStateWithLifecycle()
     val newSessionId by viewModel.newSessionId.collectAsStateWithLifecycle()
     val deletedToken by viewModel.deletedToken.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val errorToken by viewModel.errorToken.collectAsStateWithLifecycle()
     val weeklyStats by viewModel.weeklyStats.collectAsStateWithLifecycle()
+    val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val workoutIcon: ImageVector = ImageVector.vectorResource(id = R.drawable.ic_workout)
 
     var overflowFor by remember { mutableStateOf<RoutineSummary?>(null) }
@@ -107,7 +109,7 @@ fun WorkoutHomeScreen(
                     // §3.3 item 3 / §4.1 — "This week" stat grid, above "My routines".
                     StatGrid(
                         items = listOf(
-                            StatGridItem(DaybookIcons.BarChart, formatVolume(weeklyStats.volumeKg, parseWeightUnit("KG")), "Volume", CardTints.Mint),
+                            StatGridItem(DaybookIcons.BarChart, formatVolume(weeklyStats.volumeKg, weightUnit), "Volume", CardTints.Mint),
                             StatGridItem(workoutIcon, "${weeklyStats.workouts}", "Workouts", CardTints.SlateBlue),
                             StatGridItem(DaybookIcons.Flame, "${weeklyStats.streakDays}", "Day streak", CardTints.Peach),
                             StatGridItem(DaybookIcons.Star, "${weeklyStats.prs}", "PRs this week", CardTints.Butter)
@@ -194,6 +196,10 @@ fun WorkoutHomeScreen(
             }
         }
         UndoSnack(token = deletedToken, text = "Routine deleted")
+        // Bug fix (BEAST_MODE_BUG_REPORT.md §1.1) — the ViewModel already produced
+        // `errorMessage` on a failed start/delete; this screen never collected or showed it, so
+        // a DB error left the user with no feedback at all.
+        UndoSnack(token = errorToken, text = errorMessage ?: "")
     }
 
     val overflowTarget = overflowFor

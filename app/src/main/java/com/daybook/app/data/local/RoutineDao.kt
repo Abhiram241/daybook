@@ -93,6 +93,12 @@ interface RoutineDao {
 
     @Query("DELETE FROM workout_routines WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
+
+    /** Feature addition — the same duplicate-exercise merge `WorkoutDao` does for logged
+     *  blocks/sets, applied to routine slots too, so a routine built against a since-merged
+     *  duplicate custom exercise keeps pointing at something real. */
+    @Query("UPDATE workout_routine_exercises SET exercise_id = :toId WHERE exercise_id = :fromId")
+    suspend fun reassignExerciseIdInRoutineExercises(fromId: String, toId: String)
 }
 
 /** Plain Room POJO for [RoutineDao.observeRoutineSummaries] — not an @Entity. */

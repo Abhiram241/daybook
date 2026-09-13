@@ -25,7 +25,12 @@ object CsvReader {
         if (rows.isEmpty()) return emptyList()
         val header = rows.first().map { it.removePrefix(BOM.toString()) }
         return rows.drop(1).map { row ->
-            header.indices.associate { i -> header[i] to (row.getOrElse(i) { "" }) }
+            // §3 fix — a plain `associate` keeps the LAST match on a duplicate header name; keeping
+            // the FIRST instead is the more predictable choice (matches how most CSV/spreadsheet
+            // tools resolve a duplicate column) for the low-risk one-line version of this fix.
+            val map = LinkedHashMap<String, String>()
+            header.indices.forEach { i -> map.putIfAbsent(header[i], row.getOrElse(i) { "" }) }
+            map
         }
     }
 
@@ -90,6 +95,10 @@ object CsvReader {
         }
         // A trailing newline leaves an empty pending row — don't emit it. A file with no
         // trailing newline still has a real last row to flush.
+        // Known edge case (§3, low risk / unreachable for a real Hevy export): a final line that is
+        // only an empty quoted field (`""`) also leaves `field`/`row` both empty here and is
+        // silently dropped rather than emitted as a one-empty-field row. Not worth guarding against
+        // for CSV this simple; Hevy's 10 required columns make it unreachable in practice.
         if (rows.size < limitRows && (field.isNotEmpty() || row.isNotEmpty())) {
             endRow()
         }

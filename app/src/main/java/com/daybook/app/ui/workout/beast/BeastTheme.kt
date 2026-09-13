@@ -41,7 +41,8 @@ enum class BeastAccentColor(val storageKey: String, val dark: Color, val light: 
     fun colorFor(dark: Boolean): Color = if (dark) this.dark else this.light
 
     companion object {
-        val DEFAULT = CORAL
+        // User request — Beast Mode's default accent is AMBER (was CORAL; still selectable).
+        val DEFAULT = AMBER
         fun fromKey(k: String?): BeastAccentColor = entries.firstOrNull { it.storageKey == k } ?: DEFAULT
     }
 }

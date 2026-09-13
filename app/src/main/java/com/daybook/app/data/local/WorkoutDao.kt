@@ -114,9 +114,6 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sets WHERE session_id = :sessionId ORDER BY workout_exercise_id, set_number ASC")
     fun observeSetsForSession(sessionId: String): Flow<List<WorkoutSet>>
 
-    @Query("SELECT * FROM workout_sets WHERE workout_exercise_id = :workoutExerciseId ORDER BY set_number ASC")
-    fun observeSetsForExercise(workoutExerciseId: String): Flow<List<WorkoutSet>>
-
     @Query("SELECT * FROM workout_sets WHERE session_id = :sessionId")
     suspend fun getSetsForSession(sessionId: String): List<WorkoutSet>
 
@@ -136,8 +133,19 @@ interface WorkoutDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSets(sets: List<WorkoutSet>)
 
-    @Update
-    suspend fun updateSet(set: WorkoutSet)
+    // §2.13 fix — column-scoped writes for the set-cell edit path, so a stale-snapshot commit
+    // can't clobber a concurrent `setCompletedAt` toggle the way a whole-row `@Update` can.
+    @Query("UPDATE workout_sets SET weight_kg = :weightKg WHERE id = :id")
+    suspend fun setWeightKg(id: String, weightKg: Float?)
+
+    @Query("UPDATE workout_sets SET reps = :reps WHERE id = :id")
+    suspend fun setReps(id: String, reps: Int?)
+
+    @Query("UPDATE workout_sets SET duration_seconds = :durationSeconds WHERE id = :id")
+    suspend fun setDurationSeconds(id: String, durationSeconds: Int?)
+
+    @Query("UPDATE workout_sets SET distance_meters = :distanceMeters WHERE id = :id")
+    suspend fun setDistanceMeters(id: String, distanceMeters: Float?)
 
     @Query("DELETE FROM workout_sets WHERE id = :id")
     suspend fun deleteSet(id: String)
@@ -153,6 +161,14 @@ interface WorkoutDao {
 
     @Query("UPDATE workout_sets SET completed_at = :completedAt WHERE id = :id")
     suspend fun setCompletedAt(id: String, completedAt: Long?)
+
+    /** §2.5 fix — History's per-row aggregates (`sessionAggregates`) are computed from this table,
+     *  but the History screen used to refresh them only when `workout_sessions` itself changed, so
+     *  editing a completed session's sets without re-finishing left stale numbers on the row. Room
+     *  invalidates a `@Query` `Flow` on ANY write to a table it reads, regardless of which column —
+     *  a plain `COUNT(*)` is a cheap re-emit signal, not a value anything actually reads. */
+    @Query("SELECT COUNT(*) FROM workout_sets")
+    fun observeSetsRevision(): Flow<Int>
 
     // ------------------------------------------------------------------ derived-value queries (§3.4)
     /**
@@ -173,13 +189,18 @@ interface WorkoutDao {
     )
     suspend fun previousSetsForExercise(exerciseId: String, excludeSessionId: String): List<WorkoutSet>
 
-    /** The pre-session personal best — read once when the exercise block is opened (§3.4, P3). */
+    /** The pre-session personal best — read once when the exercise block is opened (§3.4, P3).
+     *  Joins `workout_sessions` and excludes ACTIVE ones (aligned with
+     *  [bestSetForExerciseBefore]'s scoping) so a set logged in a different, still-in-progress
+     *  session doesn't count as "the best before this one". */
     @Query(
         "SELECT s.* FROM workout_sets s " +
+            "JOIN workout_sessions ws ON ws.id = s.session_id " +
             "WHERE s.exercise_id = :exerciseId " +
             "AND s.session_id != :excludeSessionId " +
             "AND s.completed_at IS NOT NULL " +
             "AND s.set_type = 'NORMAL' " +
+            "AND ws.status = 'COMPLETED' " +
             "ORDER BY COALESCE(s.weight_kg, 0) DESC, " +
             "COALESCE(s.reps, 0) DESC, " +
             "COALESCE(s.duration_seconds, 0) DESC, " +
@@ -224,11 +245,14 @@ interface WorkoutDao {
     )
     suspend fun setsHistoryForExercise(exerciseId: String): List<WorkoutSet>
 
-    /** Add-Exercise screen's "Recent" section (§3.7.3). */
+    /** Add-Exercise screen's "Recent" section (§3.7.3). Grouped rather than a plain `DISTINCT`
+     *  so `ORDER BY` (each exercise's most recent use) is a column actually in the projection —
+     *  a `SELECT DISTINCT ... ORDER BY <not-selected>` ordering is undefined in SQL. */
     @Query(
-        "SELECT DISTINCT we.exercise_id FROM workout_exercises we " +
+        "SELECT we.exercise_id FROM workout_exercises we " +
             "JOIN workout_sessions ws ON ws.id = we.session_id " +
-            "ORDER BY ws.started_at DESC LIMIT 12"
+            "GROUP BY we.exercise_id " +
+            "ORDER BY MAX(ws.started_at) DESC LIMIT 12"
     )
     suspend fun recentExerciseIds(): List<String>
 
@@ -282,6 +306,18 @@ interface WorkoutDao {
     /** History's exercise filter (open question 3) — every session that logged this exercise. */
     @Query("SELECT DISTINCT session_id FROM workout_exercises WHERE exercise_id = :exerciseId")
     suspend fun sessionIdsForExercise(exerciseId: String): List<String>
+
+    // ---------------------------------------------------------------------- catalog dedupe merge
+    // Feature addition (`WorkoutRepository.refreshExerciseCatalog`) — reassigning every block's/
+    // set's exercise reference away from a duplicate custom-exercise row BEFORE that row is
+    // deleted, so a merge never orphans real logged history (a plain delete would leave these
+    // pointing at a now-missing id, which `resolveExercise` renders as "Unknown exercise").
+
+    @Query("UPDATE workout_exercises SET exercise_id = :toId WHERE exercise_id = :fromId")
+    suspend fun reassignExerciseIdInBlocks(fromId: String, toId: String)
+
+    @Query("UPDATE workout_sets SET exercise_id = :toId WHERE exercise_id = :fromId")
+    suspend fun reassignExerciseIdInSets(fromId: String, toId: String)
 }
 
 /** Plain Room POJO for [WorkoutDao.mostLoggedExercises] — not an @Entity. */

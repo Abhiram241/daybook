@@ -20,30 +20,41 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,8 +64,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.data.workout.SetColumn
+import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.columnsFor
 import com.daybook.app.data.workout.formatElapsed
+import com.daybook.app.data.workout.formatVolume
 import com.daybook.app.data.workout.isPersonalRecord
 import com.daybook.app.ui.components.BackHeader
 import com.daybook.app.ui.components.BottomSheetMenu
@@ -68,7 +81,9 @@ import com.daybook.app.ui.components.SheetAction
 import com.daybook.app.ui.components.SoftCard
 import com.daybook.app.ui.components.SortOption
 import com.daybook.app.ui.components.SortSheet
+import com.daybook.app.ui.components.UndoSnack
 import com.daybook.app.ui.components.clickableImpl
+import com.daybook.app.ui.components.combinedClickableImpl
 import com.daybook.app.ui.icons.DaybookIcons
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.CardTints
@@ -86,6 +101,8 @@ import com.daybook.app.ui.workout.beast.RingStat
 import com.daybook.app.ui.workout.beast.StatGridTile
 import com.daybook.app.ui.workout.beast.muscleTint
 import com.daybook.app.ui.workout.beast.prCelebration
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val REST_OPTIONS = linkedMapOf(0 to "Off", 30 to "30s", 60 to "60s", 90 to "90s", 120 to "2m", 180 to "3m", 300 to "5m")
 
@@ -111,6 +128,9 @@ fun WorkoutSessionScreen(
     val elapsed by viewModel.elapsedSeconds.collectAsStateWithLifecycle()
     val restRemaining by viewModel.restRemainingSeconds.collectAsStateWithLifecycle()
     val finished by viewModel.finished.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val errorToken by viewModel.errorToken.collectAsStateWithLifecycle()
+    val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     var restSheetForBlock by remember { mutableStateOf<String?>(null) }
     var showDiscardConfirm by remember { mutableStateOf(false) }
     var blockOverflowFor by remember { mutableStateOf<String?>(null) }
@@ -118,6 +138,11 @@ fun WorkoutSessionScreen(
     // Feature addition — "I forgot to end this on time": the duration ring is tappable, opening
     // an editor that corrects the elapsed time before Finish (or any time mid-session).
     var showEditDuration by remember { mutableStateOf(false) }
+    // §2.12 fix — a set cell only commits on focus-loss; tapping Finish/Back/+Add Exercise while a
+    // cell is still focused could otherwise leave its typed-but-uncommitted value never written.
+    // Clearing focus here forces that commit (via `EditableSetCell`'s own `onFocusChanged`) before
+    // any of the three actions run.
+    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(finished) { if (finished) onFinished() }
 
@@ -146,7 +171,7 @@ fun WorkoutSessionScreen(
         // then a generic label — same fallback chain `WorkoutDetailScreen` already uses).
         BackHeader(
             title = state.session?.title ?: state.session?.localDate ?: "Workout",
-            onBack = onNavigateBack
+            onBack = { focusManager.clearFocus(force = true); onNavigateBack() }
         )
 
         // Bug fix (post-A6) — the stats card and the +Add Exercise/Discard actions used to live
@@ -211,7 +236,7 @@ fun WorkoutSessionScreen(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         StatGridTile(
                             icon = DaybookIcons.BarChart,
-                            value = "${state.stats.totalVolumeKg.toInt()} kg",
+                            value = formatVolume(state.stats.totalVolumeKg, weightUnit),
                             label = "Volume",
                             tint = CardTints.Mint
                         )
@@ -248,26 +273,53 @@ fun WorkoutSessionScreen(
             // Round 2 fix — "Discard" moved out of here into the bottom Discard/Finish bar below,
             // so it's always in the same place regardless of whether there are any blocks yet.
             Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.screenH)) {
-                GhostButton(text = "+ Add Exercise", onClick = onPickExercise, modifier = Modifier.fillMaxWidth())
+                GhostButton(
+                    text = "+ Add Exercise",
+                    onClick = { focusManager.clearFocus(force = true); onPickExercise() },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             Spacer(Modifier.weight(1f))
         } else {
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = Spacing.screenH)) {
-                items(state.blocks, key = { it.block.id }) { blockUi ->
+                itemsIndexed(state.blocks, key = { _, it -> it.block.id }) { index, blockUi ->
                     ExerciseBlockCard(
                         blockUi = blockUi,
                         onNotesChange = { viewModel.setExerciseNotes(blockUi.block.id, it) },
                         onRestClick = { restSheetForBlock = blockUi.block.id },
                         onAddSet = { viewModel.addSet(blockUi.block.id, blockUi.block.exerciseId) },
                         onToggleComplete = { viewModel.toggleSetComplete(it) },
-                        onUpdateSet = { viewModel.updateSet(it) },
+                        onUpdateWeight = { setId, v -> viewModel.updateSetWeight(setId, v) },
+                        onUpdateReps = { setId, v -> viewModel.updateSetReps(setId, v) },
+                        onUpdateDuration = { setId, v -> viewModel.updateSetDuration(setId, v) },
+                        onUpdateDistance = { setId, v -> viewModel.updateSetDistance(setId, v) },
+                        onDeleteSet = { viewModel.deleteSet(it) },
                         onOverflow = { blockOverflowFor = blockUi.block.id },
-                        onOpenHistory = { historyFor = Triple(blockUi.block.exerciseId, blockUi.exerciseName, blockUi.trackingMode) }
+                        onOpenHistory = { historyFor = Triple(blockUi.block.exerciseId, blockUi.exerciseName, blockUi.trackingMode) },
+                        // §2.9 — wires up the previously-dead `WorkoutRepository.reorderExercises`;
+                        // up/down move buttons, matching RoutineEditScreen's own reorder affordance
+                        // (no drag-and-drop primitive exists elsewhere in this codebase).
+                        canMoveUp = index > 0,
+                        canMoveDown = index < state.blocks.lastIndex,
+                        onMoveUp = {
+                            val ids = state.blocks.map { it.block.id }.toMutableList()
+                            ids.add(index - 1, ids.removeAt(index))
+                            viewModel.reorderExercises(ids)
+                        },
+                        onMoveDown = {
+                            val ids = state.blocks.map { it.block.id }.toMutableList()
+                            ids.add(index + 1, ids.removeAt(index))
+                            viewModel.reorderExercises(ids)
+                        }
                     )
                     Spacer(Modifier.height(12.dp))
                 }
                 item {
-                    GhostButton(text = "+ Add Exercise", onClick = onPickExercise, modifier = Modifier.fillMaxWidth())
+                    GhostButton(
+                        text = "+ Add Exercise",
+                        onClick = { focusManager.clearFocus(force = true); onPickExercise() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(Modifier.height(120.dp))
                 }
             }
@@ -287,17 +339,21 @@ fun WorkoutSessionScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             GhostButton(text = "Discard", onClick = { showDiscardConfirm = true }, filled = true)
-            FinishFab(onClick = viewModel::finish)
+            FinishFab(onClick = { focusManager.clearFocus(force = true); viewModel.finish() })
         }
     }
+    UndoSnack(token = errorToken, text = errorMessage ?: "")
     }
 
+    // §2.15 fix — this used to hardcode "0" ("Off"), so the sheet never reflected the block's
+    // actual rest setting (visible correctly on the card header just above it).
+    val restSheetBlockUi = state.blocks.firstOrNull { it.block.id == restSheetForBlock }
     SortSheet(
         visible = restSheetForBlock != null,
         onDismiss = { restSheetForBlock = null },
         title = "Rest timer",
         sortOptions = REST_OPTIONS.map { (k, v) -> SortOption(k.toString(), v) },
-        selectedSortKey = "0",
+        selectedSortKey = (restSheetBlockUi?.block?.restSeconds ?: 0).toString(),
         onSelectSort = { key ->
             val blockId = restSheetForBlock
             if (blockId != null) {
@@ -374,7 +430,9 @@ private fun EditDurationDialog(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     DaybookTextField(
                         value = hours,
-                        onValueChange = { v -> if (v.all { it.isDigit() } && v.length <= 3) hours = v },
+                        // §3 fix — no upper clamp meant a stray `999` (or a fat-fingered `500`)
+                        // was happily accepted as an hour count.
+                        onValueChange = { v -> if (v.all { it.isDigit() } && (v.toIntOrNull() ?: 0) <= 99) hours = v },
                         label = "Hours", placeholder = "0",
                         modifier = Modifier.weight(1f)
                     )
@@ -413,11 +471,23 @@ private fun ExerciseBlockCard(
     onRestClick: () -> Unit,
     onAddSet: () -> Unit,
     onToggleComplete: (String) -> Unit,
-    onUpdateSet: (WorkoutSet) -> Unit,
+    onUpdateWeight: (String, Float?) -> Unit,
+    onUpdateReps: (String, Int?) -> Unit,
+    onUpdateDuration: (String, Int?) -> Unit,
+    onUpdateDistance: (String, Float?) -> Unit,
+    onDeleteSet: (String) -> Unit,
     onOverflow: () -> Unit,
-    onOpenHistory: () -> Unit
+    onOpenHistory: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
 ) {
+    // §3 fix — this used to call `onNotesChange` (a DB write) on every keystroke, contradicting
+    // this composable's own stated "save on focus-loss, never per-keystroke" convention
+    // (`EditableSetCell`'s KDoc below). Now commits only on focus-loss, matching that cell.
     var notesText by remember(blockUi.block.id) { mutableStateOf(blockUi.block.notes.orEmpty()) }
+    var notesWasFocused by remember(blockUi.block.id) { mutableStateOf(false) }
     val nameInteraction = remember { MutableInteractionSource() }
     val restInteraction = remember { MutableInteractionSource() }
     // §3.7/§4.2 — the block picks up its exercise's muscle-group tint instead of always Neutral.
@@ -437,13 +507,27 @@ private fun ExerciseBlockCard(
                 color = tint.accent,
                 modifier = Modifier.weight(1f).clickableImpl(nameInteraction, onOpenHistory)
             )
+            // §2.9 — up/down move buttons: the previously-dead `WorkoutRepository.reorderExercises`
+            // wired up, matching RoutineEditScreen's own reorder affordance.
+            CircleIconButton(
+                icon = Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
+                onClick = onMoveUp, enabled = canMoveUp, size = 32.dp
+            )
+            CircleIconButton(
+                icon = Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
+                onClick = onMoveDown, enabled = canMoveDown, size = 32.dp
+            )
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
         }
         Spacer(Modifier.height(4.dp))
         DaybookTextField(
             value = notesText,
-            onValueChange = { notesText = it; onNotesChange(it) },
-            label = null, placeholder = "Add notes here…"
+            onValueChange = { notesText = it },
+            label = null, placeholder = "Add notes here…",
+            modifier = Modifier.onFocusChanged { state ->
+                if (notesWasFocused && !state.isFocused) onNotesChange(notesText)
+                notesWasFocused = state.isFocused
+            }
         )
         Spacer(Modifier.height(4.dp))
         Row(
@@ -451,12 +535,21 @@ private fun ExerciseBlockCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Rest Timer: ${blockUi.block.restSeconds?.let { "${it}s" } ?: "OFF"}",
+                // Bug fix — casing mismatch: this read "Rest Timer: OFF" (all-caps value) while
+                // the rest-timer picker sheet it opens labels the same state "Off" (sentence
+                // case) via REST_OPTIONS. Matching that here so the same setting isn't shown two
+                // different ways a tap apart.
+                "Rest Timer: ${blockUi.block.restSeconds?.let { "${it}s" } ?: "Off"}",
                 style = DaybookText.Caption, color = tint.onFillMuted
             )
         }
         Spacer(Modifier.height(8.dp))
-        SetTable(blockUi = blockUi, tint = tint, onToggleComplete = onToggleComplete, onUpdateSet = onUpdateSet)
+        SetTable(
+            blockUi = blockUi, tint = tint, onToggleComplete = onToggleComplete,
+            onUpdateWeight = onUpdateWeight, onUpdateReps = onUpdateReps,
+            onUpdateDuration = onUpdateDuration, onUpdateDistance = onUpdateDistance,
+            onDeleteSet = onDeleteSet
+        )
         Spacer(Modifier.height(8.dp))
         GhostButton(text = "+ Add Set", onClick = onAddSet, modifier = Modifier.fillMaxWidth())
     }
@@ -467,9 +560,19 @@ private fun SetTable(
     blockUi: BlockUi,
     tint: com.daybook.app.ui.theme.CardTint,
     onToggleComplete: (String) -> Unit,
-    onUpdateSet: (WorkoutSet) -> Unit
+    onUpdateWeight: (String, Float?) -> Unit,
+    onUpdateReps: (String, Int?) -> Unit,
+    onUpdateDuration: (String, Int?) -> Unit,
+    onUpdateDistance: (String, Float?) -> Unit,
+    onDeleteSet: (String) -> Unit
 ) {
     val columns = columnsFor(blockUi.trackingMode)
+    // Redesign — the per-row bin icon is gone: it was both a mis-tap hazard (sitting right next
+    // to the COMPLETE checkmark, same row height) and, since it had no matching header cell, the
+    // reason the header row and the data rows didn't line up column-for-column. Deleting a set is
+    // now a deliberate long-press on its SET number, opening the same bottom-sheet-menu pattern
+    // the block header's own "More" overflow already uses.
+    var deleteSetTarget by remember(blockUi.block.id) { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
             columns.forEach { c ->
@@ -485,6 +588,11 @@ private fun SetTable(
             }
         }
         blockUi.sets.forEach { s ->
+            // §3 fix — `prCelebration`'s internal `remember` used to be positional inside this
+            // plain `forEach` loop (not a keyed `items`), so once sets became deletable (§2.9) a
+            // deletion could shift every later row's position and mis-attribute its PR pulse to
+            // the wrong set. `key(s.id)` gives each row's subtree its own remembered slot.
+            key(s.id) {
             val isPr = s.completedAt != null && isPersonalRecord(s, blockUi.best, blockUi.trackingMode)
             val prevForSet = blockUi.previous[s.setNumber]
             Row(
@@ -501,34 +609,55 @@ private fun SetTable(
                 columns.forEach { c ->
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         when (c) {
-                            SetColumn.SET -> if (isPr) {
-                                PrBadge()
-                            } else {
-                                Text("${s.setNumber}", style = DaybookText.CardSubtitle, color = DaybookColors.TextPrimary)
+                            // Redesign — hold the SET number to delete this set, replacing the
+                            // old always-visible bin icon column. Same `combinedClickableImpl`
+                            // long-press pattern the bottom nav already uses; only this cell
+                            // carries the gesture so the editable WEIGHT/REPS/etc. cells keep
+                            // their normal tap-to-focus behaviour untouched.
+                            SetColumn.SET -> {
+                                val setInteraction = remember { MutableInteractionSource() }
+                                Box(
+                                    Modifier
+                                        .clip(CircleShape)
+                                        .combinedClickableImpl(
+                                            interaction = setInteraction,
+                                            onLongClickLabel = "Delete set",
+                                            onLongClick = { deleteSetTarget = s.id },
+                                            onClick = {}
+                                        )
+                                        .padding(6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isPr) {
+                                        PrBadge()
+                                    } else {
+                                        Text("${s.setNumber}", style = DaybookText.CardSubtitle, color = DaybookColors.TextPrimary)
+                                    }
+                                }
                             }
                             SetColumn.PREVIOUS -> Text(formatPrevious(prevForSet), style = DaybookText.Caption, color = DaybookColors.TextMuted)
                             // Item 4 (Workout UI fixes plan, LOCKED) — these four columns used to
                             // be plain read-only Text (the bug: a new set could only ever be
                             // marked complete, never actually filled in). Now a compact numeric
-                            // table-cell field, saving via `WorkoutSessionViewModel.updateSet` on
+                            // table-cell field, saving via column-scoped commits (§2.13) on
                             // focus-loss (not per-keystroke, per the decided fix).
                             SetColumn.WEIGHT -> EditableSetCell(
                                 initialValue = formatEditableNumber(s.weightKg),
                                 keyboardType = KeyboardType.Decimal,
                                 placeholder = "kg",
-                                onCommit = { text -> onUpdateSet(s.copy(weightKg = text.toFloatOrNull())) }
+                                onCommit = { text -> onUpdateWeight(s.id, text.toFloatOrNull()) }
                             )
                             SetColumn.REPS -> EditableSetCell(
                                 initialValue = s.reps?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "reps",
-                                onCommit = { text -> onUpdateSet(s.copy(reps = text.toIntOrNull())) }
+                                onCommit = { text -> onUpdateReps(s.id, text.toIntOrNull()) }
                             )
                             SetColumn.DURATION -> EditableSetCell(
                                 initialValue = s.durationSeconds?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "sec",
-                                onCommit = { text -> onUpdateSet(s.copy(durationSeconds = text.toIntOrNull())) }
+                                onCommit = { text -> onUpdateDuration(s.id, text.toIntOrNull()) }
                             )
                             SetColumn.DISTANCE -> EditableSetCell(
                                 // Displayed/edited in km (matches `formatPrevious`'s convention);
@@ -536,7 +665,7 @@ private fun SetTable(
                                 initialValue = formatEditableNumber(s.distanceMeters?.let { it / 1000f }),
                                 keyboardType = KeyboardType.Decimal,
                                 placeholder = "km",
-                                onCommit = { text -> onUpdateSet(s.copy(distanceMeters = text.toFloatOrNull()?.let { it * 1000f })) }
+                                onCommit = { text -> onUpdateDistance(s.id, text.toFloatOrNull()?.let { it * 1000f }) }
                             )
                             SetColumn.COMPLETE -> CircleIconButton(
                                 icon = Icons.Filled.Check, contentDescription = "Complete set",
@@ -548,8 +677,24 @@ private fun SetTable(
                     }
                 }
             }
+            }
         }
     }
+    // §2.9 — the previously-dead `WorkoutSessionViewModel.deleteSet` wired up: a mistyped or
+    // accidentally-added set is no longer permanent for the session. Now reached via long-press
+    // on the set's number (see the SET column above) rather than an always-visible bin icon.
+    BottomSheetMenu(
+        visible = deleteSetTarget != null,
+        onDismiss = { deleteSetTarget = null },
+        actions = listOfNotNull(
+            deleteSetTarget?.let { id ->
+                SheetAction(Icons.Filled.Delete, "Delete set", destructive = true) {
+                    onDeleteSet(id)
+                    deleteSetTarget = null
+                }
+            }
+        )
+    )
 }
 
 /** Item 4 — a compact "table-cell" numeric input, distinct from the full-width `DaybookTextField`
@@ -559,6 +704,7 @@ private fun SetTable(
  *  Local `text` is keyed on [initialValue] so a value pushed from Room (e.g. another device's
  *  sync, or "+ Add Set" seeding PREVIOUS) overwrites the field only when it's not the one
  *  currently being edited. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun EditableSetCell(
     initialValue: String,
@@ -572,6 +718,25 @@ private fun EditableSetCell(
 ) {
     var text by remember(initialValue) { mutableStateOf(initialValue) }
     var wasFocused by remember { mutableStateOf(false) }
+    // §2.12 fix — focus-loss is the only commit path; if this cell (and its focused BasicTextField)
+    // leaves composition without ever losing focus first — the block was removed, "+ Add Exercise"
+    // or Finish navigated away before a recomposition moved focus elsewhere — `onFocusChanged`
+    // never fires and the typed value is lost. Committing again on teardown, when still focused,
+    // is the belt to the screen-level `focusManager.clearFocus()` suspenders (WorkoutSessionScreen).
+    val onCommitState = rememberUpdatedState(onCommit)
+    val textState = rememberUpdatedState(text)
+    val wasFocusedState = rememberUpdatedState(wasFocused)
+    DisposableEffect(Unit) {
+        onDispose { if (wasFocusedState.value) onCommitState.value(textState.value) }
+    }
+    // Bug fix — this screen's cells had no bring-into-view request of their own; on a session
+    // with several sets, focusing one of the lower rows' KG/REPS/etc. cells left it sitting right
+    // under (or fully behind) the keyboard with no scroll to reveal it, since `imePadding()` on
+    // the root only reserves space, it doesn't reposition the focused child. Requesting it
+    // explicitly — after a short delay so the IME's own resize animation has settled — makes the
+    // list scroll the focused cell above the keyboard reliably.
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
     BasicTextField(
         value = text,
         onValueChange = { text = it },
@@ -586,6 +751,15 @@ private fun EditableSetCell(
             .clip(AppShapes.field)
             .background(DaybookColors.SurfaceElevated)
             .padding(horizontal = 6.dp, vertical = 6.dp)
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .onFocusEvent { state ->
+                if (state.isFocused) {
+                    scope.launch {
+                        delay(250)
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            }
             .onFocusChanged { state ->
                 if (wasFocused && !state.isFocused) onCommit(text)
                 wasFocused = state.isFocused
@@ -593,10 +767,14 @@ private fun EditableSetCell(
         decorationBox = { innerField ->
             Box(contentAlignment = Alignment.Center) {
                 if (text.isEmpty()) {
+                    // Bug fix — the unit placeholder ("kg"/"reps"/"sec"/"km") used to render at
+                    // the same size/weight as a real typed value, just in TextMuted — easy to
+                    // mistake for an already-filled cell at a glance in a dense table. Smaller +
+                    // lower alpha keeps it readable as a hint without competing with real digits.
                     Text(
                         placeholder,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = DaybookColors.TextMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DaybookColors.TextMuted.copy(alpha = 0.55f),
                         textAlign = TextAlign.Center
                     )
                 }
@@ -635,6 +813,10 @@ private fun formatPrevious(s: WorkoutSet?): String {
     return when {
         w != null && r != null -> "${w}kg × $r"
         r != null -> "$r"
+        // §3 fix — a weight-only PREVIOUS (weight logged, reps left blank — reachable from a Hevy
+        // import or from filling only the KG cell) used to fall through every branch to "–" even
+        // though the data was there.
+        w != null -> "${w}kg"
         s.durationSeconds != null -> "${s.durationSeconds}s"
         s.distanceMeters != null -> "${s.distanceMeters / 1000f}km"
         else -> "–"

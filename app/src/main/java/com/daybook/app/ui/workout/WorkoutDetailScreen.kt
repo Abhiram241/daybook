@@ -28,6 +28,7 @@ import com.daybook.app.ui.components.BackHeader
 import com.daybook.app.ui.components.GhostButton
 import com.daybook.app.ui.components.SectionHeader
 import com.daybook.app.ui.components.SoftCard
+import com.daybook.app.ui.components.UndoSnack
 import com.daybook.app.ui.theme.CardTints
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
@@ -50,9 +51,14 @@ fun WorkoutDetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val newSessionId by viewModel.newSessionId.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val errorToken by viewModel.errorToken.collectAsStateWithLifecycle()
 
-    LaunchedEffect(newSessionId) { newSessionId?.let(onSessionStarted) }
+    // §2.2 fix — used to never clear `newSessionId`, so returning to this (retained) screen after
+    // "Start this routine again" re-ran this effect and bounced straight back into the session.
+    LaunchedEffect(newSessionId) { newSessionId?.let { onSessionStarted(it); viewModel.clearNewSessionId() } }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().background(BeastPalette.groundBrush())) {
         BackHeader(title = state.session?.title ?: state.session?.localDate ?: "Workout", onBack = onNavigateBack) {
             GhostButton(text = "Edit", onClick = onEdit)
@@ -131,11 +137,13 @@ fun WorkoutDetailScreen(
                     }
                     val blockSets = state.sets.filter { it.workoutExerciseId == block.id }.sortedBy { it.setNumber }
                     blockSets.forEach { s ->
-                        Text(formatDetailSetLine(s), style = DaybookText.CardSubtitle, color = DaybookColors.TextPrimary)
+                        Text(formatDetailSetLine(s, weightUnit), style = DaybookText.CardSubtitle, color = DaybookColors.TextPrimary)
                     }
                 }
             }
         }
+    }
+    UndoSnack(token = errorToken, text = errorMessage ?: "")
     }
 }
 
@@ -158,12 +166,15 @@ private fun durationRingProgress(session: com.daybook.app.data.model.WorkoutSess
 // block's real `CatalogExercise` via `WorkoutRepository.resolveExercise`, the same source of
 // truth the picker and live session use.
 
-private fun formatDetailSetLine(s: com.daybook.app.data.model.WorkoutSet): String {
+private fun formatDetailSetLine(s: com.daybook.app.data.model.WorkoutSet, weightUnit: com.daybook.app.data.workout.WeightUnit): String {
     val parts = mutableListOf<String>()
-    if (s.weightKg != null) parts += "${s.weightKg} kg"
+    // §2.7/§3 fix — used to hardcode "kg" (ignoring `app_settings.weight_unit`) and print a raw
+    // `Float.toString()` ("60.0 kg") instead of trimming the trailing zero like every other
+    // per-set display in this feature does.
+    if (s.weightKg != null) parts += com.daybook.app.data.workout.formatWeight(s.weightKg, weightUnit)
     if (s.reps != null) parts += "${s.reps} reps"
     if (s.durationSeconds != null) parts += "${s.durationSeconds}s"
-    if (s.distanceMeters != null) parts += "${s.distanceMeters / 1000f} km"
+    if (s.distanceMeters != null) parts += "${com.daybook.app.data.workout.trimTrailingZero(s.distanceMeters / 1000f)} km"
     val prefix = "Set ${s.setNumber}: "
     return if (parts.isEmpty()) "${prefix}—" else prefix + parts.joinToString(" × ")
 }

@@ -50,6 +50,7 @@ import com.daybook.app.ui.components.SheetAction
 import com.daybook.app.ui.components.SortOption
 import com.daybook.app.ui.components.SortSheet
 import com.daybook.app.ui.components.StickySaveBar
+import com.daybook.app.ui.components.UndoSnack
 import com.daybook.app.ui.icons.DaybookIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -60,7 +61,6 @@ import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.LocalAccent
 import com.daybook.app.ui.theme.Spacing
 import com.daybook.app.ui.workout.beast.muscleTint
-import kotlinx.coroutines.launch
 
 /** Which mode the one `AddExerciseScreen` composable is in (§3.7.3). */
 enum class ExercisePickerMode { PICK, BROWSE }
@@ -91,10 +91,13 @@ fun AddExerciseScreen(
     val catalog by viewModel.catalog.collectAsStateWithLifecycle()
     val selectedGroup by viewModel.selectedGroup.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
+    val errorToken by viewModel.errorToken.collectAsStateWithLifecycle()
+    val recentExercises by viewModel.recentExercises.collectAsStateWithLifecycle()
+    val frequentlyLogged by viewModel.frequentlyLogged.collectAsStateWithLifecycle()
     var overflowFor by remember { mutableStateOf<CatalogExercise?>(null) }
     var historyFor by remember { mutableStateOf<CatalogExercise?>(null) }
     var showGroupSheet by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScopeCompat()
 
     // Item 6 (Workout UI fixes plan, LOCKED) — the Cardio/Muscle Groups filter buttons moved off
     // the scrolling list onto a bar docked to the bottom of the screen, so the whole screen is now
@@ -161,6 +164,36 @@ fun AddExerciseScreen(
                         )
                     }
                 } else {
+                    // §2.9 — the picker's KDoc has always described a "Recent"/"Frequently logged"
+                    // default view, but both `WorkoutDao.recentExerciseIds` and
+                    // `WorkoutRepository.frequentlyLoggedExercises` had zero call sites; a flat
+                    // alphabetical list showed regardless of state. Shown only when idle (no search,
+                    // no group filter) — search/filter results should stay exactly what they match.
+                    val idle = query.isBlank() && selectedGroup == null
+                    if (idle && recentExercises.isNotEmpty()) {
+                        item { SectionHeader("Recent") }
+                        items(recentExercises, key = { "recent_${it.id}" }) { ex ->
+                            ExerciseRow(
+                                exercise = ex, mode = mode, selected = ex.id in selectedIds,
+                                showOverflow = mode == ExercisePickerMode.BROWSE,
+                                onOverflow = { overflowFor = ex },
+                                onClick = { if (mode == ExercisePickerMode.PICK) viewModel.toggleSelected(ex.id) else historyFor = ex },
+                                onTrend = { historyFor = ex; onOpenHistory(ex.id) }
+                            )
+                        }
+                    }
+                    if (idle && frequentlyLogged.isNotEmpty()) {
+                        item { SectionHeader("Frequently logged") }
+                        items(frequentlyLogged, key = { "frequent_${it.id}" }) { ex ->
+                            ExerciseRow(
+                                exercise = ex, mode = mode, selected = ex.id in selectedIds,
+                                showOverflow = mode == ExercisePickerMode.BROWSE,
+                                onOverflow = { overflowFor = ex },
+                                onClick = { if (mode == ExercisePickerMode.PICK) viewModel.toggleSelected(ex.id) else historyFor = ex },
+                                onTrend = { historyFor = ex; onOpenHistory(ex.id) }
+                            )
+                        }
+                    }
                     item { SectionHeader("All exercises") }
                     items(catalog, key = { it.id }) { ex ->
                         ExerciseRow(
@@ -206,6 +239,7 @@ fun AddExerciseScreen(
                 }
             }
         }
+        UndoSnack(token = errorToken, text = errorMessage ?: "")
     }
 
     val overflowTarget = overflowFor
@@ -218,7 +252,7 @@ fun AddExerciseScreen(
             },
             overflowTarget?.let {
                 SheetAction(Icons.Filled.MoreVert, "Archive") {
-                    scope.launch { viewModel.archive(it.id, true) }
+                    viewModel.archive(it.id, true)
                     overflowFor = null
                 }
             }
@@ -344,9 +378,6 @@ private fun ExerciseRow(
         }
     }
 }
-
-@Composable
-private fun rememberCoroutineScopeCompat() = androidx.compose.runtime.rememberCoroutineScope()
 
 /**
  * Item 6 (Workout UI fixes plan, LOCKED) — Round 2's inline row moved into a small bar docked to

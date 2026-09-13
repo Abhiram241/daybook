@@ -42,7 +42,9 @@ class WorkoutDetailViewModel @Inject constructor(
         .map { parseWeightUnit(it.weightUnit) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeightUnit.KG)
 
-    val sessionId: String = savedStateHandle["sessionId"] ?: ""
+    // §3 fix — a missing `sessionId` used to default to "" (a permanently blank detail screen with
+    // no signal anything was wrong) instead of failing loudly like `WorkoutSessionViewModel` does.
+    val sessionId: String = checkNotNull(savedStateHandle["sessionId"])
 
     data class DetailState(
         val session: WorkoutSession? = null,
@@ -53,9 +55,7 @@ class WorkoutDetailViewModel @Inject constructor(
         // (name, trackingMode, imageId, hasStartPeak), replacing the old id-shape-guessing
         // fallback so custom exercises show their real name and every exercise can show its
         // real RepDB thumbnail.
-        val exerciseInfo: Map<String, CatalogExercise> = emptyMap(),
-        val routineStillExists: Boolean = false,
-        val newSessionId: String? = null
+        val exerciseInfo: Map<String, CatalogExercise> = emptyMap()
     )
 
     private val base = combine(
@@ -84,8 +84,27 @@ class WorkoutDetailViewModel @Inject constructor(
     private val _newSessionId = MutableStateFlow<String?>(null)
     val newSessionId = _newSessionId.asStateFlow()
 
+    /** §2.2 fix — mirrors `WorkoutHomeViewModel.clearNewSessionId()`. Without this, returning to
+     *  Detail (its `NavBackStackEntry`/ViewModel retained) after starting a routine again re-ran
+     *  the screen's `LaunchedEffect(newSessionId)` and bounced straight back into the new session,
+     *  making Detail unreachable until the back-stack entry was destroyed. */
+    fun clearNewSessionId() { _newSessionId.value = null }
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = _errorMessage.asStateFlow()
+    private val _errorToken = MutableStateFlow(0)
+    val errorToken = _errorToken.asStateFlow()
+
+    /** §3 fix — this used to swallow a failure entirely via `.getOrNull()` (not even a Crashlytics
+     *  report), so "Start this routine again" could silently do nothing. Now matches every sibling
+     *  action's `reportError` shape. */
     fun startRoutineAgain(routineId: String) = safeLaunch {
-        val newId = runCatching { repo.startSessionFromRoutine(routineId) }.getOrNull()
-        if (newId != null) _newSessionId.value = newId
+        runCatching { repo.startSessionFromRoutine(routineId) }
+            .onSuccess { _newSessionId.value = it }
+            .onFailure {
+                com.daybook.app.util.recordUnhandledException(it)
+                _errorMessage.value = "Couldn't start that routine. Try again."
+                _errorToken.value++
+            }
     }
 }

@@ -1,17 +1,22 @@
 package com.daybook.app.ui.workout
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -22,14 +27,17 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,6 +45,8 @@ import com.daybook.app.R
 import com.daybook.app.data.CatalogExercise
 import com.daybook.app.data.local.SessionAggregate
 import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.workout.MuscleGroup
+import com.daybook.app.data.workout.MuscleGroupLabels
 import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.formatVolume
 import com.daybook.app.ui.components.BottomSheetMenu
@@ -56,6 +66,8 @@ import com.daybook.app.ui.theme.CardTints
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.LocalAccent
+import com.daybook.app.ui.theme.LocalReduceMotion
+import com.daybook.app.ui.theme.Motion
 import com.daybook.app.ui.workout.beast.BeastPalette
 import com.daybook.app.ui.workout.beast.BeastText
 import com.daybook.app.ui.workout.beast.muscleTint
@@ -86,11 +98,16 @@ fun WorkoutHistoryScreen(
     val deletedToken by viewModel.deletedToken.collectAsStateWithLifecycle()
     val actionToken by viewModel.actionToken.collectAsStateWithLifecycle()
     val actionText by viewModel.actionText.collectAsStateWithLifecycle()
+    val newSessionId by viewModel.newSessionId.collectAsStateWithLifecycle()
 
     var overflowFor by remember { mutableStateOf<WorkoutSession?>(null) }
     var renaming by remember { mutableStateOf<WorkoutSession?>(null) }
     var showFilterSheet by remember { mutableStateOf(false) }
     val workoutIcon: ImageVector = ImageVector.vectorResource(id = R.drawable.ic_workout)
+
+    LaunchedEffect(newSessionId) {
+        newSessionId?.let { onOpenSession(it); viewModel.clearNewSessionId() }
+    }
 
     Box(Modifier.fillMaxSize().background(BeastPalette.groundBrush())) {
         Column(Modifier.fillMaxSize()) {
@@ -102,7 +119,8 @@ fun WorkoutHistoryScreen(
                     body = "Start a workout to log your first session, or bring your history over from Hevy — " +
                         "that's in Beast Mode settings (the gear on Routines).",
                     actionLabel = "Start an empty workout",
-                    onAction = { /* landing owns starting a session */ },
+                    // §2.14 fix — this used to be a no-op; the CTA now actually starts a session.
+                    onAction = { viewModel.startEmptyWorkout() },
                     modifier = Modifier.padding(contentPadding)
                 )
             } else {
@@ -289,13 +307,19 @@ private fun SessionRow(
     // §4.5 — tinted card instead of Neutral, keyed off the session's first exercise's muscle
     // group (falls back to Neutral for an active/instant session with no thumbnail resolved yet).
     val tint = row.thumbnail?.primaryMuscle?.let { muscleTint(it) } ?: CardTints.Neutral
-    SoftCard(tint = tint, onClick = onClick, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    SoftCard(tint = tint, onClick = onClick, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+        // Bug fix (scaling) — this Row used to center the 44dp thumbnail against the whole text
+        // column, so once that column grew past two lines (volume line, and now the muscle-group
+        // chart below) the thumbnail read as small and adrift in the middle of a much taller
+        // card instead of anchoring it. Top-aligned, slightly larger (52dp) thumbnail reads as a
+        // proper avatar for a card whose content now varies in height.
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
             ExerciseThumbnail(
                 imageId = row.thumbnail?.imageId,
                 hasStartPeak = row.thumbnail?.hasStartPeak ?: false,
                 fallbackIcon = icon,
-                tint = tint
+                tint = tint,
+                size = 52.dp
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -325,11 +349,94 @@ private fun SessionRow(
                                 modifier = Modifier.padding(bottom = 2.dp)
                             )
                         }
+                        if (row.muscleVolume.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            MuscleVolumeChart(
+                                breakdown = row.muscleVolume,
+                                weightUnit = weightUnit,
+                                tint = tint
+                            )
+                        }
                     }
                 }
             }
+            Spacer(Modifier.width(4.dp))
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
         }
+    }
+}
+
+/**
+ * Feature addition — "what muscle groups were worked on that day and how much": a compact
+ * horizontal bar per muscle group, heaviest first, inside the workout card itself (this screen's
+ * `HistoryRow.muscleVolume`, one batched query per page — see
+ * `WorkoutRepository.muscleGroupVolumeForSessions`). Capped at the top 4 groups so a session
+ * touching many muscles still fits a list card instead of turning it into a full chart screen.
+ */
+@Composable
+private fun MuscleVolumeChart(
+    breakdown: List<Pair<MuscleGroup, Float>>,
+    weightUnit: WeightUnit,
+    tint: com.daybook.app.ui.theme.CardTint,
+    modifier: Modifier = Modifier
+) {
+    val top = remember(breakdown) { breakdown.take(4) }
+    val maxVolume = top.first().second
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        top.forEach { (group, volume) ->
+            MuscleVolumeBar(group = group, volume = volume, maxVolume = maxVolume, weightUnit = weightUnit, tint = tint)
+        }
+    }
+}
+
+@Composable
+private fun MuscleVolumeBar(
+    group: MuscleGroup,
+    volume: Float,
+    maxVolume: Float,
+    weightUnit: WeightUnit,
+    tint: com.daybook.app.ui.theme.CardTint
+) {
+    val rm = LocalReduceMotion.current
+    // A floor fraction keeps a much-smaller-but-still-worked group visible as a sliver rather
+    // than an invisible zero-width bar.
+    val targetFraction = (volume / maxVolume).coerceIn(0.06f, 1f)
+    val fraction by animateFloatAsState(
+        targetFraction, if (rm) snap() else Motion.softSpring(), label = "muscleVolumeBar"
+    )
+    val barColor = muscleTint(group).accent
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            MuscleGroupLabels[group].orEmpty(),
+            style = DaybookText.Caption,
+            color = tint.onFillMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(74.dp)
+        )
+        Box(
+            Modifier
+                .weight(1f)
+                .height(8.dp)
+                .clip(AppShapes.pill)
+                .background(tint.fillRaised)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction)
+                    .clip(AppShapes.pill)
+                    .background(barColor)
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            formatVolume(volume, weightUnit),
+            style = DaybookText.Caption,
+            color = tint.onFillMuted,
+            maxLines = 1,
+            modifier = Modifier.widthIn(min = 52.dp)
+        )
     }
 }
 

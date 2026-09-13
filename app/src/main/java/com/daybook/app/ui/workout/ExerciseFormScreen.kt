@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,7 +58,9 @@ fun ExerciseFormScreen(
     var showEquipmentSheet by remember { mutableStateOf(false) }
     var showModeSheet by remember { mutableStateOf(false) }
 
-    if (state.done) onNavigateBack()
+    // §2.11 fix — used to run directly in the composable body, which re-runs on every
+    // recomposition while `state.done` stays true; an effect only fires once per flip.
+    LaunchedEffect(state.done) { if (state.done) onNavigateBack() }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {

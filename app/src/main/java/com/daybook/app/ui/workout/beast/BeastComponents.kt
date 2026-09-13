@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -228,6 +227,12 @@ fun Modifier.prCelebration(trigger: Boolean): Modifier {
  * [com.daybook.app.ui.components.StickySaveBar]'s scrim-gradient/inset/trailing-space recipe, but
  * fades to [BeastPalette.ground] instead of the shared [DaybookColors.Bg] so the seam matches this
  * screen's own (darker) ground instead of the app-wide one.
+ *
+ * §2.16 fix — this used to also call `.imePadding()` here, doubling up with the root `Box`'s own
+ * `.imePadding()` at this component's only call site (`WorkoutSessionScreen`), which floated the
+ * bar a whole keyboard-height above the keyboard instead of resting on top of it.
+ * `StickySaveBar` — the shared component this mirrors — leaves `imePadding()` to its caller; this
+ * now does the same, for the same reason.
  */
 @Composable
 fun BeastStickyBar(
@@ -241,7 +246,6 @@ fun BeastStickyBar(
             .background(Brush.verticalGradient(0f to Color.Transparent, 0.5f to ground))
             .padding(start = Spacing.screenH, end = Spacing.screenH, top = 24.dp)
             .navigationBarsPadding()
-            .imePadding()
     ) {
         content()
         Spacer(Modifier.height(12.dp))

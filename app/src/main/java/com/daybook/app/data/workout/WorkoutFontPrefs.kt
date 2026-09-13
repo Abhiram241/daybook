@@ -28,19 +28,26 @@ class WorkoutFontPrefs @Inject constructor(@ApplicationContext context: Context)
     val fontChoice: StateFlow<FontChoice?> = _fontChoice
 
     fun setFontChoice(choice: FontChoice?) {
-        prefs.edit().apply {
-            if (choice == null) remove(KEY) else putString(KEY, choice.storageKey)
-        }.apply()
+        // User request — Beast Mode's default font is GROTESK (Space Grotesk), not "match app
+        // font". An explicit "Match app font" pick has to stay distinguishable from a fresh
+        // install that never touched this setting (both used to collapse to "key absent"), so
+        // that choice is now stored as its own sentinel instead of just removing the key.
+        prefs.edit().putString(KEY, choice?.storageKey ?: MATCH_APP_SENTINEL).apply()
         _fontChoice.value = choice
     }
 
-    private fun readStored(): FontChoice? =
-        runCatching {
-            prefs.getString(KEY, null)?.let { key -> FontChoice.entries.firstOrNull { it.storageKey == key } }
-        }.getOrNull()
+    private fun readStored(): FontChoice? = runCatching {
+        when (val stored = prefs.getString(KEY, null)) {
+            null -> DEFAULT // never set on this device — fresh-install default
+            MATCH_APP_SENTINEL -> null // user explicitly chose "Match app font"
+            else -> FontChoice.entries.firstOrNull { it.storageKey == stored } ?: DEFAULT
+        }
+    }.getOrDefault(DEFAULT)
 
     companion object {
         private const val FILE = "beast_mode_prefs"
         private const val KEY = "workout_font_choice"
+        private const val MATCH_APP_SENTINEL = "APP"
+        private val DEFAULT = FontChoice.GROTESK
     }
 }

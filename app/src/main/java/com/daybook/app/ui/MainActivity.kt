@@ -1086,7 +1086,9 @@ class MainActivity : FragmentActivity() {
                     val pendingPick by pickedExerciseId.collectAsStateWithLifecycle()
                     LaunchedEffect(pendingPick) {
                         pendingPick?.let { ids ->
-                            ids.forEach { sessionViewModel.addExercise(it) }
+                            // Bug fix (§2.1) — used to fire one `addExercise` coroutine per id,
+                            // which raced itself on `maxExerciseOrderIndex`. One sequential call.
+                            sessionViewModel.addExercises(ids)
                             pickedExerciseId.value = null
                         }
                     }

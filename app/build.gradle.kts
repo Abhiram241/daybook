@@ -31,8 +31,8 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 33          // v0.6.1 build 33 — Beast Mode settings reorganized into Appearance/Preferences/Data sections with distinct row icons; accent swatch grid no longer stretches on wrap.
-        versionName = "0.6.1"     // v0.6.1 — Beast Mode UI redesign
+        versionCode = 34          // v0.6.2 build 34 — Beast Mode bug-fix pass (session/routine error feedback, exercise picker, history, Hevy import) + DB v23 migration for the workout accent default.
+        versionName = "0.6.2"     // v0.6.2 — Beast Mode fixes
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         

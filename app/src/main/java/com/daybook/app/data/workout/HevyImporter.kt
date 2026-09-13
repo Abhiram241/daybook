@@ -99,12 +99,10 @@ class HevyImporter @Inject constructor(
     private fun recordException(t: Throwable) = com.daybook.app.util.recordUnhandledException(t)
 
     private suspend fun doImport(parsed: ParseResult): HevyImportOutcome {
+        // §3 fix — both branches of this used to return the identical string (dead/copy-paste
+        // branch); collapsed to one.
         if (parsed.sessions.isEmpty()) {
-            return if (parsed.skippedRows > 0) {
-                HevyImportOutcome.Failure("Couldn't import: no workouts were found in that file.")
-            } else {
-                HevyImportOutcome.Failure("Couldn't import: no workouts were found in that file.")
-            }
+            return HevyImportOutcome.Failure("Couldn't import: no workouts were found in that file.")
         }
 
         // §3.9.7 — hydrate every touched month first; abort with nothing written if any can't be
@@ -186,6 +184,10 @@ class HevyImporter @Inject constructor(
 
         var sessionCount = 0
         var setCount = 0
+        // §3 fix — a block whose name never resolved to an exercise id used to just vanish via
+        // `return@forEachIndexed`, with no count of what was dropped; now folded into the reported
+        // skipped-rows total, one per CSV row (set) the unresolved block would have contributed.
+        var unresolvedRows = 0
         database.withTransaction {
             if (newExercisesToInsert.isNotEmpty()) database.exerciseDao().insertAll(newExercisesToInsert)
             for (session in toImport) {
@@ -201,7 +203,10 @@ class HevyImporter @Inject constructor(
                 )
                 session.exercises.forEachIndexed { index, block ->
                     val blockId = UUID.randomUUID().toString()
-                    val exerciseId = nameToId[block.exerciseTitle] ?: return@forEachIndexed
+                    val exerciseId = nameToId[block.exerciseTitle] ?: run {
+                        unresolvedRows += block.sets.size
+                        return@forEachIndexed
+                    }
                     database.workoutDao().insertExercise(
                         WorkoutExercise(
                             id = blockId, sessionId = sessionId, exerciseId = exerciseId, orderIndex = index,
@@ -228,7 +233,7 @@ class HevyImporter @Inject constructor(
 
         val result = HevyImportResult(
             sessions = sessionCount, sets = setCount, newExercises = newExercisesToInsert.size,
-            skippedDuplicates = skippedDuplicates, skippedRows = parsed.skippedRows,
+            skippedDuplicates = skippedDuplicates, skippedRows = parsed.skippedRows + unresolvedRows,
             newExerciseNames = newExercisesToInsert.map { it.name }
         )
         return HevyImportOutcome.Success(summarise(result))

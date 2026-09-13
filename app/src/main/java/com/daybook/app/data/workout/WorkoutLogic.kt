@@ -331,12 +331,15 @@ private fun formatDistanceKm(meters: Float): String {
     return "${if (rounded == rounded.toLong().toFloat()) rounded.toLong().toString() else rounded.toString()} km"
 }
 
-private fun formatWeight(kg: Float, unit: WeightUnit): String = when (unit) {
+/** Public (was `private` to this file) — §2.7/§3 reuse this for every other per-set/per-value
+ *  weight display (`WorkoutDetailScreen.formatDetailSetLine`, `ExerciseHistorySheet.formatSetLine`)
+ *  instead of each hardcoding "kg" or duplicating its own trim-trailing-zero helper. */
+fun formatWeight(kg: Float, unit: WeightUnit): String = when (unit) {
     WeightUnit.KG -> "${trimTrailingZero(kg)} kg"
     WeightUnit.LB -> "${trimTrailingZero(kgToLb(kg))} lb"
 }
 
-private fun trimTrailingZero(v: Float): String =
+fun trimTrailingZero(v: Float): String =
     if (v == v.toLong().toFloat()) v.toLong().toString() else v.toString()
 
 /**

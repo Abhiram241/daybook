@@ -106,7 +106,13 @@ object HevyCsvParser {
             }
 
             for (row in rowsForSession) {
-                val exerciseTitle = blankToNull(row["exercise_title"]) ?: continue
+                // §3 fix — this used to `continue` without counting the row, so the import
+                // summary under-reported what it ignored.
+                val exerciseTitle = blankToNull(row["exercise_title"])
+                if (exerciseTitle == null) {
+                    skipped++
+                    continue
+                }
                 if (exerciseTitle != blockTitle) {
                     flushBlock()
                     blockTitle = exerciseTitle

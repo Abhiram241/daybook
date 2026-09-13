@@ -37,7 +37,7 @@ import com.daybook.app.util.enums.Converters
     WorkoutSet::class,
     WorkoutRoutine::class,
     WorkoutRoutineExercise::class
-], version = 22, exportSchema = true)
+], version = 23, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun habitDao(): HabitDao

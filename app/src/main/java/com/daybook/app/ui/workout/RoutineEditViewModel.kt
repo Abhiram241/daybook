@@ -3,9 +3,12 @@ package com.daybook.app.ui.workout
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.RoutineExerciseDraft
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.workout.MuscleGroup
+import com.daybook.app.data.workout.WeightUnit
+import com.daybook.app.data.workout.parseWeightUnit
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -23,8 +27,14 @@ import javax.inject.Inject
 @HiltViewModel
 class RoutineEditViewModel @Inject constructor(
     private val repo: WorkoutRepository,
+    appSettingsRepository: AppSettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    /** §2.7 fix — the target summary line used to hardcode `WeightUnit.KG`. */
+    val weightUnit = appSettingsRepository.observeSettings()
+        .map { parseWeightUnit(it.weightUnit) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeightUnit.KG)
 
     data class State(
         val isEdit: Boolean = false,

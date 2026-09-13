@@ -608,3 +608,94 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN default_exercise_group TEXT")
     }
 }
+
+/**
+ * v22 -> v23 — user request: Beast Mode's fresh-install accent default changes from CORAL to
+ * AMBER (CORAL stays a selectable swatch). This is ONLY a change to `workout_accent_color`'s
+ * schema `DEFAULT`, which SQLite's `ALTER TABLE ... ADD COLUMN` cannot retarget on an
+ * already-created column — hence the standard create-copy-drop-rename rebuild (same recipe as
+ * MIGRATION_4_5 / MIGRATION_11_12), not a plain `ALTER TABLE`. No existing row's stored value
+ * changes: every app_settings row already has an explicit `workout_accent_color` (NOT NULL, no
+ * prior row was ever missing it), so an upgrader who never touched the Beast Mode accent picker
+ * keeps reading whatever literal value their row already has (CORAL, unless they'd already
+ * picked something else) — only a fresh v23 install (or a row that somehow lacked the column,
+ * which cannot happen via any prior migration) ever sees AMBER. The new table statement mirrors
+ * Room's generated v23 schema for `app_settings` exactly.
+ */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `app_settings_new` (" +
+                "`id` INTEGER NOT NULL, " +
+                "`default_snooze_minutes` INTEGER NOT NULL, " +
+                "`onboarding_completed` INTEGER NOT NULL, " +
+                "`user_name` TEXT NOT NULL DEFAULT '', " +
+                "`accent_color` TEXT NOT NULL DEFAULT 'LAVENDER', " +
+                "`notif_permission_asked` INTEGER NOT NULL DEFAULT 0, " +
+                "`profile_photo_path` TEXT, " +
+                "`font_choice` TEXT NOT NULL DEFAULT 'LITERATA', " +
+                "`habit_checkin_time` TEXT NOT NULL DEFAULT '21:00', " +
+                "`week_start` TEXT NOT NULL DEFAULT 'MONDAY', " +
+                "`clock_24h` INTEGER NOT NULL DEFAULT 0, " +
+                "`calendar_default_expanded` INTEGER NOT NULL DEFAULT 0, " +
+                "`greeting_tone` TEXT NOT NULL DEFAULT 'WARM', " +
+                "`greeting_time_word` INTEGER NOT NULL DEFAULT 1, " +
+                "`hero_style` TEXT NOT NULL DEFAULT 'COUNT_LEFT', " +
+                "`habit_sort` TEXT NOT NULL DEFAULT 'ADDED', " +
+                "`intake_sort` TEXT NOT NULL DEFAULT 'ADDED', " +
+                "`habit_show_archived` INTEGER NOT NULL DEFAULT 0, " +
+                "`intake_show_archived` INTEGER NOT NULL DEFAULT 0, " +
+                "`home_hide_resolved` INTEGER NOT NULL DEFAULT 0, " +
+                "`reduce_motion` INTEGER NOT NULL DEFAULT 0, " +
+                "`quiet_hours_enabled` INTEGER NOT NULL DEFAULT 0, " +
+                "`quiet_start` TEXT NOT NULL DEFAULT '22:00', " +
+                "`quiet_end` TEXT NOT NULL DEFAULT '07:00', " +
+                "`streak_mode` TEXT NOT NULL DEFAULT 'STRICT', " +
+                "`show_streaks` INTEGER NOT NULL DEFAULT 1, " +
+                "`streak_rest_days` TEXT NOT NULL DEFAULT '', " +
+                "`default_landing_tab` TEXT NOT NULL DEFAULT 'home', " +
+                "`nav_tabs` TEXT NOT NULL DEFAULT 'home,routines,foodmed', " +
+                "`habits_accent_color` TEXT NOT NULL DEFAULT 'LAVENDER', " +
+                "`intake_accent_color` TEXT NOT NULL DEFAULT 'LAVENDER', " +
+                "`check_for_updates_enabled` INTEGER NOT NULL DEFAULT 1, " +
+                "`theme_mode` TEXT NOT NULL DEFAULT 'DARK', " +
+                "`dark_style` TEXT NOT NULL DEFAULT 'CHARCOAL', " +
+                "`light_style` TEXT NOT NULL DEFAULT 'PAPER', " +
+                "`corner_scale` REAL NOT NULL DEFAULT 1.0, " +
+                "`weight_unit` TEXT NOT NULL DEFAULT 'KG', " +
+                "`workout_accent_color` TEXT NOT NULL DEFAULT 'AMBER', " +
+                "`rest_timer_default_seconds` INTEGER NOT NULL DEFAULT 0, " +
+                "`workout_hint_state` INTEGER NOT NULL DEFAULT 0, " +
+                "`workout_today_card_enabled` INTEGER NOT NULL DEFAULT 1, " +
+                "`default_exercise_group` TEXT, " +
+                "PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "INSERT INTO `app_settings_new` (" +
+                "`id`, `default_snooze_minutes`, `onboarding_completed`, `user_name`, `accent_color`, " +
+                "`notif_permission_asked`, `profile_photo_path`, `font_choice`, `habit_checkin_time`, " +
+                "`week_start`, `clock_24h`, `calendar_default_expanded`, `greeting_tone`, " +
+                "`greeting_time_word`, `hero_style`, `habit_sort`, `intake_sort`, `habit_show_archived`, " +
+                "`intake_show_archived`, `home_hide_resolved`, `reduce_motion`, `quiet_hours_enabled`, " +
+                "`quiet_start`, `quiet_end`, `streak_mode`, `show_streaks`, `streak_rest_days`, " +
+                "`default_landing_tab`, `nav_tabs`, `habits_accent_color`, `intake_accent_color`, " +
+                "`check_for_updates_enabled`, `theme_mode`, `dark_style`, `light_style`, `corner_scale`, " +
+                "`weight_unit`, `workout_accent_color`, `rest_timer_default_seconds`, " +
+                "`workout_hint_state`, `workout_today_card_enabled`, `default_exercise_group`) " +
+                "SELECT " +
+                "`id`, `default_snooze_minutes`, `onboarding_completed`, `user_name`, `accent_color`, " +
+                "`notif_permission_asked`, `profile_photo_path`, `font_choice`, `habit_checkin_time`, " +
+                "`week_start`, `clock_24h`, `calendar_default_expanded`, `greeting_tone`, " +
+                "`greeting_time_word`, `hero_style`, `habit_sort`, `intake_sort`, `habit_show_archived`, " +
+                "`intake_show_archived`, `home_hide_resolved`, `reduce_motion`, `quiet_hours_enabled`, " +
+                "`quiet_start`, `quiet_end`, `streak_mode`, `show_streaks`, `streak_rest_days`, " +
+                "`default_landing_tab`, `nav_tabs`, `habits_accent_color`, `intake_accent_color`, " +
+                "`check_for_updates_enabled`, `theme_mode`, `dark_style`, `light_style`, `corner_scale`, " +
+                "`weight_unit`, `workout_accent_color`, `rest_timer_default_seconds`, " +
+                "`workout_hint_state`, `workout_today_card_enabled`, `default_exercise_group` " +
+                "FROM `app_settings`"
+        )
+        db.execSQL("DROP TABLE `app_settings`")
+        db.execSQL("ALTER TABLE `app_settings_new` RENAME TO `app_settings`")
+    }
+}

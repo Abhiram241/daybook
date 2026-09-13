@@ -11,6 +11,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -29,11 +31,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -43,6 +47,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.daybook.app.data.model.DayOfWeek
 import com.daybook.app.data.model.RedFlag
 import com.daybook.app.ui.theme.AppShapes
@@ -94,6 +100,7 @@ fun FormLoadingState(modifier: Modifier = Modifier) {
  * - [tint] — when non-null the box uses `tint.fillRaised` / `tint.onFill` / `tint.accent`
  *   (cursor); for the Home inline reply that currently hand-rolls the field twice.
  */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DaybookTextField(
     value: String,
@@ -112,6 +119,14 @@ fun DaybookTextField(
     val boxBg = tint?.fillRaised ?: DaybookColors.SurfaceElevated
     val textColor = tint?.onFill ?: DaybookColors.TextPrimary
     val cursorColor = tint?.accent ?: DaybookColors.TextPrimary
+    // Bug fix — a focused field near the bottom of a scrolling screen (e.g. this screen's last
+    // form field, or a card's notes field low in a list) could end up entirely covered by the
+    // IME with no automatic scroll to reveal it: `imePadding()` alone shrinks the scrollable
+    // area but doesn't reposition it, and Compose's built-in bring-into-view can lose the race
+    // against the keyboard's own resize animation. Requesting it explicitly, after a short delay
+    // for that animation to settle, makes the field reliably scroll into view on focus.
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
     Column(modifier) {
         if (label != null) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = DaybookColors.TextMuted)
@@ -127,9 +142,15 @@ fun DaybookTextField(
             contentAlignment = Alignment.CenterStart
         ) {
             if (value.isEmpty() && placeholder != null) {
-                // finding 12 / LD14 — placeholder ships to TextMuted (3.95:1 dark / 3.10:1
-                // light was under AA). Still clearly below TextPrimary so "empty" still reads.
-                Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = DaybookColors.TextMuted)
+                // Bug fix — placeholder text used to render at full body-text size/weight in
+                // TextMuted, close enough to real content's contrast that an empty field could
+                // be misread as already filled in. A lower alpha (still legible, clearly
+                // secondary) keeps it from competing with actual values.
+                Text(
+                    placeholder,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = DaybookColors.TextMuted.copy(alpha = 0.55f)
+                )
             }
             BasicTextField(
                 value = value,
@@ -144,7 +165,17 @@ fun DaybookTextField(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = if (singleLine) ImeAction.Done else ImeAction.Default
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bringIntoViewRequester(bringIntoViewRequester)
+                    .onFocusEvent { state ->
+                        if (state.isFocused) {
+                            scope.launch {
+                                delay(250)
+                                bringIntoViewRequester.bringIntoView()
+                            }
+                        }
+                    }
             )
         }
         if (supportingText != null) {

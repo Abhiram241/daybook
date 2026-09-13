@@ -56,18 +56,21 @@ fun RoutineTargetSheet(
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
             Text("Targets", style = DaybookText.SectionTitle, color = DaybookColors.TextPrimary)
             Spacer(Modifier.height(12.dp))
-            NumField("Sets", sets) { sets = it }
+            // §2.10 fix — Sets/Reps/Time are integer targets parsed with `toIntOrNull()`; letting
+            // the field accept "." meant a stray decimal point (e.g. a fat-fingered "12.") silently
+            // discarded the whole value on save instead of being rejected at entry.
+            NumField("Sets", sets, allowDecimal = false) { sets = it }
             if (trackingMode == "WEIGHT_REPS" || trackingMode == "REPS_ONLY") {
-                NumField("Reps", reps) { reps = it }
+                NumField("Reps", reps, allowDecimal = false) { reps = it }
             }
             if (trackingMode == "WEIGHT_REPS") {
-                NumField("Weight (kg)", weight) { weight = it }
+                NumField("Weight (kg)", weight, allowDecimal = true) { weight = it }
             }
             if (trackingMode == "DURATION" || trackingMode == "DISTANCE_DURATION") {
-                NumField("Time (s)", duration) { duration = it }
+                NumField("Time (s)", duration, allowDecimal = false) { duration = it }
             }
             if (trackingMode == "DISTANCE_DURATION") {
-                NumField("Distance (km)", distance) { distance = it }
+                NumField("Distance (km)", distance, allowDecimal = true) { distance = it }
             }
             DaybookTextField(value = note, onValueChange = { note = it }, label = "Note", placeholder = "Optional")
             Spacer(Modifier.height(16.dp))
@@ -93,10 +96,13 @@ fun RoutineTargetSheet(
 }
 
 @Composable
-private fun NumField(label: String, value: String, onChange: (String) -> Unit) {
+private fun NumField(label: String, value: String, allowDecimal: Boolean, onChange: (String) -> Unit) {
     DaybookTextField(
         value = value,
-        onValueChange = { v -> if (v.all { it.isDigit() || it == '.' }) onChange(v) },
+        onValueChange = { v ->
+            val valid = if (allowDecimal) v.all { it.isDigit() || it == '.' } else v.all { it.isDigit() }
+            if (valid) onChange(v)
+        },
         label = label,
         placeholder = "—"
     )

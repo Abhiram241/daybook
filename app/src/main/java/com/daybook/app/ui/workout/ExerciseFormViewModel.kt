@@ -65,18 +65,23 @@ class ExerciseFormViewModel @Inject constructor(
         safeLaunch {
             val result = runCatching {
                 if (exerciseId != null) {
-                    val existing = repo.resolveExercise(exerciseId)
-                    if (existing != null) {
-                        repo.updateExercise(
-                            com.daybook.app.data.model.Exercise(
-                                id = exerciseId, name = s.name.trim(),
-                                primaryMuscle = s.primaryMuscle.name, equipment = s.equipment.name,
-                                trackingMode = s.trackingMode, isArchived = false,
-                                source = existing.source, createdAt = System.currentTimeMillis(),
-                                notes = existing.notes
-                            )
+                    // §2.8 fix — read the real Room row (not a CatalogExercise projection, which
+                    // doesn't carry isArchived/createdAt) and preserve everything the form doesn't
+                    // itself edit. §2.3 fix — a builtin has no Room row yet; its first edit forks
+                    // one in place (same id — see WorkoutRepository.updateExercise's KDoc) using
+                    // its current catalog values as the base instead of no-oping.
+                    val base = repo.getExerciseRow(exerciseId) ?: com.daybook.app.data.model.Exercise(
+                        id = exerciseId, name = s.name, primaryMuscle = s.primaryMuscle.name,
+                        equipment = s.equipment.name, trackingMode = s.trackingMode,
+                        isArchived = false, source = "USER", createdAt = System.currentTimeMillis(),
+                        notes = null
+                    )
+                    repo.updateExercise(
+                        base.copy(
+                            name = s.name.trim(), primaryMuscle = s.primaryMuscle.name,
+                            equipment = s.equipment.name, trackingMode = s.trackingMode
                         )
-                    }
+                    )
                 } else {
                     repo.createCustomExercise(s.name, s.primaryMuscle, s.equipment, s.trackingMode)
                 }
