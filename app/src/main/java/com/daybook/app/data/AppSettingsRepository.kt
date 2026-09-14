@@ -137,6 +137,16 @@ class AppSettingsRepository @Inject constructor(
 
     suspend fun setHealthHiddenCards(v: String) { ensureRow(); database.appSettingsDao().updateHealthHiddenCards(v) }
 
+    // Hydration habit (DB v31). Turning it on stamps today as the start date so earlier days never
+    // count as missed; turning it off keeps the stamp (re-enabling re-stamps).
+    suspend fun setHydrationEnabled(enabled: Boolean) {
+        ensureRow()
+        val since = if (enabled) java.time.LocalDate.now().toString() else getSettings().hydrationEnabledSince
+        database.appSettingsDao().updateHydrationEnabled(enabled, since)
+    }
+    suspend fun setHydrationGoalMl(ml: Int) { ensureRow(); database.appSettingsDao().updateHydrationGoalMl(ml) }
+    suspend fun setHydrationUnit(unit: String) { ensureRow(); database.appSettingsDao().updateHydrationUnit(unit) }
+
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =
         database.appSettingsDao().observeSettings().map { it ?: AppSettings() }

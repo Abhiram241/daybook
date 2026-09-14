@@ -289,6 +289,8 @@ class CloudSyncRepository @Inject constructor(
             // account's habits/entries; a second account signing in on this device must not
             // inherit them.
             database.aiExclusionDao().deleteAll()
+            // Hydration habit — one account's water log must not carry into another's.
+            database.hydrationDao().deleteAll()
         }
         syncState.reset()
         hydrationAttempted.clear()
@@ -1542,7 +1544,10 @@ class CloudSyncRepository @Inject constructor(
             // wake, not a correctness bug, and the only way a Room `InvalidationTracker` can
             // distinguish "did something in this table change" (there's no per-column granularity).
             // `ai_exclusions` (the Hide-from-AI lists) has no other device-local content at all.
-            "app_settings", "ai_exclusions"
+            "app_settings", "ai_exclusions",
+            // Hydration habit (DB v31) — per-day amounts travel in the month docs
+            // (`DayEntry.hydrationMl`). Same manual-step caveat as above.
+            "hydration_days"
         )
 
         // Parent doc.

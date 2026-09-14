@@ -161,7 +161,7 @@ class ExportImportRepository @Inject constructor(
                 .filter { it.workouts.isNotEmpty() || it.health != null }
                 // DAILY_REPORT_PLAN.md §3.6 — the AI summary is a main-app Daybook artifact, not a
                 // workout/health one; it never travels in the Beast Mode file.
-                .map { it.copy(habitLogs = emptyList(), intakeLogs = emptyList(), aiSummary = null) }
+                .map { it.copy(habitLogs = emptyList(), intakeLogs = emptyList(), aiSummary = null, hydrationMl = null) }
         )
     }
 
@@ -303,6 +303,8 @@ class ExportImportRepository @Inject constructor(
         val healthByDate = exportHealthByLocalDate()
         // DAILY_REPORT_PLAN.md §3.6 — at most one cached AI summary per day, no definitions either.
         val aiSummaryByDate = exportAiSummaryByLocalDate()
+        // Hydration habit (DB v31) — one amount per day.
+        val hydrationByDate = database.hydrationDao().getAll().associate { it.localDate to it.amountMl }
 
         val habitIds = habits.mapTo(HashSet()) { it.id }
         val taskIds = tasks.mapTo(HashSet()) { it.id }
@@ -359,7 +361,7 @@ class ExportImportRepository @Inject constructor(
 
         // ISO "yyyy-MM-dd" strings sort chronologically as plain text. A4/B5: a day with ONLY a
         // workout or ONLY health data must still appear, so both keys join the union.
-        val days = (habitByDate.keys + intakeByDate.keys + workoutByDate.keys + healthByDate.keys + aiSummaryByDate.keys)
+        val days = (habitByDate.keys + intakeByDate.keys + workoutByDate.keys + healthByDate.keys + aiSummaryByDate.keys + hydrationByDate.keys)
             .sorted().map { date ->
             DayEntry(
                 date = date,
@@ -367,7 +369,8 @@ class ExportImportRepository @Inject constructor(
                 intakeLogs = intakeByDate[date].orEmpty().sortedBy { it.scheduledTime },
                 workouts = workoutByDate[date].orEmpty(),
                 health = healthByDate[date],
-                aiSummary = aiSummaryByDate[date]
+                aiSummary = aiSummaryByDate[date],
+                hydrationMl = hydrationByDate[date]
             )
         }
 
@@ -603,6 +606,15 @@ class ExportImportRepository @Inject constructor(
 
     /** DAILY_REPORT_PLAN.md §3.6 — the inverse of [exportAiSummaryByLocalDate]: `DayEntry.aiSummary`
      *  -> flat entity list, ready to upsert. */
+    private fun mapDaysToHydration(days: List<DayEntry>): List<com.daybook.app.data.model.HydrationDay> {
+        val now = System.currentTimeMillis()
+        return days.mapNotNull { day ->
+            day.hydrationMl?.takeIf { it > 0 }?.let {
+                com.daybook.app.data.model.HydrationDay(localDate = day.date, amountMl = it, updatedAt = now)
+            }
+        }
+    }
+
     private fun mapDaysToAiSummary(days: List<DayEntry>): List<DailyReportAiSummary> {
         val out = ArrayList<DailyReportAiSummary>()
         for (day in days) {
@@ -798,6 +810,7 @@ class ExportImportRepository @Inject constructor(
             val (healthDays, healthSessions, healthWeightReadings) = mapDaysToHealth(backup.days)
             // DAILY_REPORT_PLAN.md §3.6 — full-replace also covers the cached AI summaries.
             val aiSummaries = mapDaysToAiSummary(backup.days)
+            val hydrationDays = mapDaysToHydration(backup.days)
 
             database.withTransaction {
                 // Order matters only for readability — there are no FK constraints.
@@ -823,6 +836,7 @@ class ExportImportRepository @Inject constructor(
                 database.healthDao().deleteAllWeightReadings()
                 // DAILY_REPORT_PLAN.md §3.6 — full-replace wipe also covers the AI summary cache.
                 database.dailyReportAiSummaryDao().deleteAll()
+                database.hydrationDao().deleteAll()
 
                 if (habits.isNotEmpty()) database.habitDao().insertAll(*habits.toTypedArray())
                 if (tasks.isNotEmpty()) database.foodMedTaskDao().insertAll(*tasks.toTypedArray())
@@ -844,6 +858,7 @@ class ExportImportRepository @Inject constructor(
                 if (healthSessions.isNotEmpty()) database.healthDao().upsertSessions(healthSessions)
                 if (healthWeightReadings.isNotEmpty()) database.healthDao().upsertWeightReadings(healthWeightReadings)
                 if (aiSummaries.isNotEmpty()) database.dailyReportAiSummaryDao().upsertAll(aiSummaries)
+                if (hydrationDays.isNotEmpty()) database.hydrationDao().upsertAll(hydrationDays)
             }
 
             ImportResult(
@@ -1143,6 +1158,11 @@ class ExportImportRepository @Inject constructor(
                 val incomingAiSummaries = mapDaysToAiSummary(days)
                 database.dailyReportAiSummaryDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
                 if (incomingAiSummaries.isNotEmpty()) database.dailyReportAiSummaryDao().upsertAll(incomingAiSummaries)
+
+                // Hydration habit — same delete-then-insert over this month's range.
+                val incomingHydration = mapDaysToHydration(days)
+                database.hydrationDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
+                if (incomingHydration.isNotEmpty()) database.hydrationDao().upsertAll(incomingHydration)
             }
             ImportResult(success = true, message = "$monthKey: ${days.size} days")
         } catch (e: Exception) {
@@ -1326,6 +1346,8 @@ class ExportImportRepository @Inject constructor(
                 // DAILY_REPORT_PLAN.md §3.6/R2 — the exact same trap, named again: forgetting this
                 // here means an evicted month's cached AI summary re-pushes forever.
                 database.dailyReportAiSummaryDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
+                // Hydration habit — the same trap again.
+                database.hydrationDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
             }
         }.isSuccess
     }

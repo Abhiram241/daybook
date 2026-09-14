@@ -250,6 +250,20 @@ fun HomeScreen(
                         if (item.occurrenceId != null) onNavigateToHabitJournalChat(item.occurrenceId)
                         else onNavigateToHabitJournalBackfill(item.detailId, item.scheduledEpoch)
                     }
+                    if (item.hydration != null) {
+                        HydrationCard(
+                            item = item,
+                            tint = CardTints.resolve(null, index),
+                            onSave = { ml -> viewModel.setHydration(item.hydration.date, ml) },
+                            onUnitChange = viewModel::setHydrationUnit,
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = if (reduceMotion) snap() else Motion.medium(),
+                                fadeOutSpec = if (reduceMotion) snap() else Motion.fast(),
+                                placementSpec = if (calendarAnimating || reduceMotion) snap() else Motion.placementSpring()
+                            )
+                        )
+                        return@itemsIndexed
+                    }
                     ReminderCard(
                         item = item,
                         tint = CardTints.resolve(ColorTag.fromNameOrAuto(item.colorTag).name.takeIf { it != "AUTO" }, index),

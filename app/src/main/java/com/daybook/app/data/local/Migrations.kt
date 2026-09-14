@@ -848,3 +848,21 @@ val MIGRATION_29_30 = object : Migration(29, 30) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN health_hidden_cards TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/**
+ * v30 -> v31 — Hydration habit. 100% additive: one new table (one row per local date, amount always
+ * in ml) and four device-local `app_settings` columns. Nothing existing is read or rewritten.
+ * Each DEFAULT byte-matches the entity's @ColumnInfo(defaultValue).
+ */
+val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `hydration_days` (`local_date` TEXT NOT NULL, " +
+                "`amount_ml` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`local_date`))"
+        )
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_enabled INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_goal_ml INTEGER NOT NULL DEFAULT 2000")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_unit TEXT NOT NULL DEFAULT 'L'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_enabled_since TEXT NOT NULL DEFAULT ''")
+    }
+}

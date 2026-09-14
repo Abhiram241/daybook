@@ -263,8 +263,8 @@ private fun WorkoutSectionBody(workout: WorkoutSectionData) {
 
 @Composable
 private fun HealthSectionBody(health: com.daybook.app.data.HealthSectionData) {
-    val d = health.day
-    if (d == null) {
+    val d = health.day ?: com.daybook.app.data.model.HealthDay(localDate = "", updatedAt = 0L)
+    if (health.day == null && health.sleepEntries.isEmpty()) {
         Text("Tracked sessions: ${health.sessions.size}", style = DaybookText.Caption, color = DaybookColors.TextMuted)
         return
     }
@@ -274,7 +274,9 @@ private fun HealthSectionBody(health: com.daybook.app.data.HealthSectionData) {
         if (d.avgHeartRate != null || d.minHeartRate != null || d.maxHeartRate != null) {
             add("Heart rate" to "avg ${d.avgHeartRate ?: "–"} (${d.minHeartRate ?: "–"}-${d.maxHeartRate ?: "–"})")
         }
-        d.sleepMinutes?.let { add("Sleep" to com.daybook.app.util.formatHealthDuration(it)) }
+        health.sleepEntries.forEach { e ->
+            e.row.sleepMinutes?.let { add("Sleep ${e.label}" to com.daybook.app.util.formatHealthDuration(it)) }
+        }
         d.spo2Percent?.let { add("SpO2" to "${it}%") }
         d.weightKg?.let { add("Weight" to formatWeight(it, com.daybook.app.data.workout.WeightUnit.KG)) }
         d.hydrationMl?.let { add("Hydration" to "${it.toInt()} ml") }

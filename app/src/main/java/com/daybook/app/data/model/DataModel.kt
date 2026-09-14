@@ -361,7 +361,20 @@ data class AppSettings(
     // ---------------------------------------------------------------------------------------------
     /** CSV of [com.daybook.app.data.health.HealthCardKind] names the user has chosen to hide from
      *  the Health tab. Blank means "nothing hidden" (every card with data shows). */
-    @ColumnInfo(name = "health_hidden_cards", defaultValue = "") val healthHiddenCards: String = ""
+    @ColumnInfo(name = "health_hidden_cards", defaultValue = "") val healthHiddenCards: String = "",
+
+    // ---------------------------------------------------------------------------------------------
+    // Hydration habit (DB v31, MIGRATION_30_31). Device-local settings, NOT synced (the per-day
+    // amounts in `hydration_days` are). Each default byte-matches the migration's SQL DEFAULT.
+    // ---------------------------------------------------------------------------------------------
+    /** Settings > Reminders & notifications > Hydration — shows the habit on Today. */
+    @ColumnInfo(name = "hydration_enabled", defaultValue = "0") val hydrationEnabled: Boolean = false,
+    /** Daily goal, always ml. The habit counts as done for a day once that day's amount reaches it. */
+    @ColumnInfo(name = "hydration_goal_ml", defaultValue = "2000") val hydrationGoalMl: Int = 2000,
+    /** Display unit, "ML" or "L". */
+    @ColumnInfo(name = "hydration_unit", defaultValue = "L") val hydrationUnit: String = "L",
+    /** "yyyy-MM-dd" the habit was (last) turned on; days before it never count as missed. */
+    @ColumnInfo(name = "hydration_enabled_since", defaultValue = "") val hydrationEnabledSince: String = ""
 )
 
 /**

@@ -25,3 +25,6 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+
+# tools/firestore_dump.py output — personal data, never commit
+firestore_dump/

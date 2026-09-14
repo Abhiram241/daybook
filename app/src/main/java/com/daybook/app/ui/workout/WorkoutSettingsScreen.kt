@@ -78,6 +78,8 @@ fun WorkoutSettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val fontChoice by viewModel.fontChoice.collectAsStateWithLifecycle()
     val beastTheme by viewModel.beastTheme.collectAsStateWithLifecycle()
+    val sleepCountDay by viewModel.sleepCountDay.collectAsStateWithLifecycle()
+    var showSleepCountSheet by remember { mutableStateOf(false) }
     var showRestSheet by remember { mutableStateOf(false) }
     var showGroupSheet by remember { mutableStateOf(false) }
     var showFontSheet by remember { mutableStateOf(false) }
@@ -369,6 +371,15 @@ fun WorkoutSettingsScreen(
                         title = "Which data is shared",
                         onClick = { showWhichDataSheet = true }
                     )
+                    SettingsRowDivider()
+                    // User request — a night that crosses midnight shows on both dates; this picks
+                    // which date its hours COUNT toward in range totals.
+                    SettingsRow(
+                        icon = DaybookIcons.Bedtime,
+                        title = "Count sleep hours on",
+                        subtitle = sleepCountDay.label,
+                        onClick = { showSleepCountSheet = true }
+                    )
                 }
                 if (healthActionResult != null) {
                     Box(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(top = 6.dp)) {
@@ -455,6 +466,17 @@ fun WorkoutSettingsScreen(
             )
         )
     }
+
+    SortSheet(
+        visible = showSleepCountSheet,
+        onDismiss = { showSleepCountSheet = false },
+        title = "Count sleep hours on",
+        sortOptions = com.daybook.app.data.health.SleepCountDay.entries.map { SortOption(it.storageKey, it.label) },
+        selectedSortKey = sleepCountDay.storageKey,
+        onSelectSort = { viewModel.setSleepCountDay(com.daybook.app.data.health.SleepCountDay.fromKey(it)) },
+        dismissOnSelect = true,
+        neutralHeader = true
+    )
 
     SortSheet(
         visible = showRestSheet,

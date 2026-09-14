@@ -42,7 +42,12 @@ data class HealthAggregate(
 private fun avgOf(values: List<Double>): Double? = if (values.isEmpty()) null else values.average()
 
 /** Pure — no I/O, no Health Connect call. §7.4/R31. */
-fun aggregateHealthDays(days: List<HealthDay>): HealthAggregate {
+fun aggregateHealthDays(
+    days: List<HealthDay>,
+    // User request — sleep totals come from the rows that COUNT in the range under the Beast Mode
+    // "Count sleep hours on" setting (see `sleepRowsCountedInRange`); defaults to [days] (wake-up day).
+    sleepDays: List<HealthDay> = days
+): HealthAggregate {
     fun doubles(sel: (HealthDay) -> Number?): List<Double> = days.mapNotNull { sel(it)?.toDouble() }
 
     val daysWithAnyData = days.count { d ->
@@ -70,12 +75,12 @@ fun aggregateHealthDays(days: List<HealthDay>): HealthAggregate {
         nutritionCarbsGramsAvg = avgOf(doubles { it.nutritionCarbsGrams }),
         nutritionFatGramsAvg = avgOf(doubles { it.nutritionFatGrams }),
         nutritionSourceApp = days.firstNotNullOfOrNull { it.nutritionSourceApp },
-        sleepMinutesTotal = days.sumOf { it.sleepMinutes ?: 0 },
-        sleepDeepMinutesTotal = days.sumOf { it.sleepDeepMinutes ?: 0 },
-        sleepLightMinutesTotal = days.sumOf { it.sleepLightMinutes ?: 0 },
-        sleepRemMinutesTotal = days.sumOf { it.sleepRemMinutes ?: 0 },
-        sleepAwakeMinutesTotal = days.sumOf { it.sleepAwakeMinutes ?: 0 },
-        hasAnySleep = days.any { it.sleepMinutes != null },
+        sleepMinutesTotal = sleepDays.sumOf { it.sleepMinutes ?: 0 },
+        sleepDeepMinutesTotal = sleepDays.sumOf { it.sleepDeepMinutes ?: 0 },
+        sleepLightMinutesTotal = sleepDays.sumOf { it.sleepLightMinutes ?: 0 },
+        sleepRemMinutesTotal = sleepDays.sumOf { it.sleepRemMinutes ?: 0 },
+        sleepAwakeMinutesTotal = sleepDays.sumOf { it.sleepAwakeMinutes ?: 0 },
+        hasAnySleep = sleepDays.any { it.sleepMinutes != null },
         daysWithAnyData = daysWithAnyData,
         totalDays = days.size
     )

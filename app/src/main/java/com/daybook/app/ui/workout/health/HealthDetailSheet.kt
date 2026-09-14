@@ -126,19 +126,31 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
         }
         HealthCardKind.SLEEP -> {
             if (isDay) {
-                DetailRow("Went to bed", day?.sleepStartMillis?.let { millisToTime(it) })
-                DetailRow("Woke up", day?.sleepEndMillis?.let { millisToTime(it) })
-                DetailRow("Total", day?.sleepMinutes?.let { formatHealthDuration(it) })
-                DetailRow("Deep", day?.sleepDeepMinutes?.let { formatHealthDuration(it) })
-                DetailRow("Light", day?.sleepLightMinutes?.let { formatHealthDuration(it) })
-                DetailRow("REM", day?.sleepRemMinutes?.let { formatHealthDuration(it) })
-                DetailRow("Awake", day?.sleepAwakeMinutes?.let { formatHealthDuration(it) })
+                // User request — every sleep touching this day gets its own block, morning first.
+                state.sleepEntries.forEachIndexed { i, entry ->
+                    val row = entry.row
+                    if (i > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider(color = DaybookColors.Hairline)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Text(entry.label, style = DaybookText.CardTitle, color = DaybookColors.TextPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    DetailRow("Went to bed", row.sleepStartMillis?.let { millisToTime(it) })
+                    DetailRow("Woke up", row.sleepEndMillis?.let { millisToTime(it) })
+                    DetailRow("Total", row.sleepMinutes?.let { formatHealthDuration(it) })
+                    DetailRow("Deep", row.sleepDeepMinutes?.let { formatHealthDuration(it) })
+                    DetailRow("Light", row.sleepLightMinutes?.let { formatHealthDuration(it) })
+                    DetailRow("REM", row.sleepRemMinutes?.let { formatHealthDuration(it) })
+                    DetailRow("Awake", row.sleepAwakeMinutes?.let { formatHealthDuration(it) })
+                }
             } else {
                 DetailRow("Total", formatHealthDuration(agg.sleepMinutesTotal))
                 DetailRow("Deep", formatHealthDuration(agg.sleepDeepMinutesTotal))
                 DetailRow("Light", formatHealthDuration(agg.sleepLightMinutesTotal))
                 DetailRow("REM", formatHealthDuration(agg.sleepRemMinutesTotal))
                 DetailRow("Awake", formatHealthDuration(agg.sleepAwakeMinutesTotal))
+                HelpCaption("A night is counted on the ${state.sleepCountDay.label.lowercase()}. Change this in Beast Mode settings.")
             }
         }
         HealthCardKind.SPO2 -> {

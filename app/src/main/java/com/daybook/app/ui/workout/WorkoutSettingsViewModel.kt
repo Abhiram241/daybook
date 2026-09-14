@@ -32,6 +32,7 @@ class WorkoutSettingsViewModel @Inject constructor(
     private val repo: AppSettingsRepository,
     private val fontPrefs: WorkoutFontPrefs,
     private val themePrefs: WorkoutThemePrefs,
+    private val sleepCountPrefs: com.daybook.app.data.workout.SleepCountPrefs,
     private val healthRepository: HealthRepository,
     private val exportImportRepository: ExportImportRepository,
     private val storageUtils: StorageUtils,
@@ -57,6 +58,10 @@ class WorkoutSettingsViewModel @Inject constructor(
     fun setBeastThemeMode(mode: ThemeMode?) = themePrefs.setThemeMode(mode)
     fun setBeastDarkStyle(style: DarkStyle) = themePrefs.setDarkStyle(style)
     fun setBeastLightStyle(style: LightStyle) = themePrefs.setLightStyle(style)
+
+    /** "Count sleep hours on" — which date a night's hours count toward in Health totals. */
+    val sleepCountDay = sleepCountPrefs.mode
+    fun setSleepCountDay(mode: com.daybook.app.data.health.SleepCountDay) = sleepCountPrefs.setMode(mode)
 
     // ------------------------------------------------------------------- Round B (Health Connect)
 

@@ -42,8 +42,24 @@ fun buildDailyReportPrompt(
 
     appendDaySections(sb, workout, health, intake, todo, weightUnit, categories)
 
+    // User request — estimated macros per food, AI Summary only (never Chat). Only when there is
+    // actually food text for the model to estimate from.
+    if (ReportCategory.INTAKE in categories && intake.any { it.taskType == com.daybook.app.data.model.TaskType.FOOD && it.responseText.isNotBlank() }) {
+        sb.append(FOOD_MACROS_INSTRUCTION)
+    }
+
     return sb.toString()
 }
+
+/** Appended to the one-shot AI Summary prompt when the day has logged food. */
+internal const val FOOD_MACROS_INSTRUCTION =
+    "## Food macros\n" +
+    "After the summary, add a section titled \"Estimated macros\". For each food item logged " +
+    "under Intake above (use the Logged text; split a meal into its separate foods), give the " +
+    "estimated calories (kcal), protein, carbs, fat and fibre (grams) for one average serving, as " +
+    "a short bulleted list (no tables). Then give an estimated total for the day. Label every number as an " +
+    "estimate for an average serving, don't guess portion sizes that weren't mentioned, and skip " +
+    "medicines and non-food entries.\n"
 
 /**
  * DAILY_REPORT_REDESIGN_PLAN.md §7.2 — chat's configurable multi-day context. [days] must already
@@ -137,10 +153,10 @@ private fun appendDaySections(
 
     if (ReportCategory.HEALTH in categories) {
         sb.append("## Health\n")
-        if (health == null || health.day == null) {
+        if (health == null || (health.day == null && health.sleepEntries.isEmpty())) {
             sb.append("No health data logged.\n\n")
         } else {
-            val d = health.day
+            val d = health.day ?: com.daybook.app.data.model.HealthDay(localDate = "", updatedAt = 0L)
             val lines = buildList {
                 d.steps?.let { add("Steps: ${formatHealthCount(it)}") }
                 (d.activeCalories ?: d.totalCalories)?.let { add("Calories: ${formatHealthCalories(it)}") }
@@ -148,7 +164,10 @@ private fun appendDaySections(
                 if (d.avgHeartRate != null || d.minHeartRate != null || d.maxHeartRate != null) {
                     add("Heart rate: avg ${d.avgHeartRate ?: "?"}, range ${d.minHeartRate ?: "?"}-${d.maxHeartRate ?: "?"} bpm")
                 }
-                d.sleepMinutes?.let { add("Sleep: ${formatHealthDuration(it)}") }
+                // A night touching two dates is listed on both, labelled with its span.
+                health.sleepEntries.forEach { e ->
+                    e.row.sleepMinutes?.let { add("Sleep (${e.label}): ${formatHealthDuration(it)}") }
+                }
                 d.spo2Percent?.let { add("SpO2: ${it}%") }
                 d.weightKg?.let { add("Weight: ${formatWeight(it, weightUnit)}") }
                 d.hydrationMl?.let { add("Hydration: ${it.toInt()} ml") }

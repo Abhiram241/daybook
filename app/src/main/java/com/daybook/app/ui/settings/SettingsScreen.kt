@@ -963,6 +963,9 @@ fun NotificationSettingsScreen(
             SnoozeStepper(minutes = snoozeMin, onChange = viewModel::setDefaultSnoozeMinutes)
         }
 
+        // ---- Hydration habit ------------------------------------------------------------
+        HydrationSettingsSection()
+
         // UX overhaul item 5 / 8.4 / 8.5 — "Updates" (Check for updates) and "Diagnostics"
         // (Send test notification, Re-arm all reminders) moved to About & help.
     }

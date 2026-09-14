@@ -94,7 +94,12 @@ data class HealthTabUiState(
     // (mirrors HomeViewModel's `UndoFeedback` — token bumped only when a toast should actually
     // show, never on every recomposition, so the toast doesn't re-fire on an unrelated state change).
     val refreshToastToken: Int = 0,
-    val refreshToastMessage: String = ""
+    val refreshToastMessage: String = "",
+    /** User request — the sleeps listed on [selectedDate] (its own night + one that STARTED that
+     *  evening), morning first. */
+    val sleepEntries: List<com.daybook.app.data.health.SleepEntry> = emptyList(),
+    /** Beast Mode settings > "Count sleep hours on" — drives Range totals. */
+    val sleepCountDay: com.daybook.app.data.health.SleepCountDay = com.daybook.app.data.health.SleepCountDay.DEFAULT
 ) {
 }
 
@@ -108,7 +113,8 @@ class HealthTabViewModel @Inject constructor(
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: Context,
     private val database: AppDatabase,
     private val healthRepository: HealthRepository,
-    private val appSettingsRepository: AppSettingsRepository
+    private val appSettingsRepository: AppSettingsRepository,
+    private val sleepCountPrefs: com.daybook.app.data.workout.SleepCountPrefs
 ) : ViewModel() {
 
     private val zoneId: ZoneId = ZoneId.systemDefault()
@@ -171,6 +177,18 @@ class HealthTabViewModel @Inject constructor(
         database.healthDao().observeDaysInRange(r.start.format(ymd), r.end.format(ymd))
     }.flowOn(Dispatchers.Default).catch { recordUnhandledException(it); emit(emptyList()) }
 
+    // User request (sleep on both dates) — the row AFTER the selected day, whose sleep may have
+    // started on the selected day's evening.
+    private val nextDayFlow = _selectedDate.flatMapLatest { date ->
+        database.healthDao().observeDay(date.plusDays(1).format(ymd))
+    }.flowOn(Dispatchers.Default).catch { recordUnhandledException(it); emit(null) }
+
+    // The range padded one day either side, so bedtime-day / both-days counting sees nights that
+    // cross the range edges.
+    private val paddedRangeDaysFlow = _range.flatMapLatest { r ->
+        database.healthDao().observeDaysInRange(r.start.minusDays(1).format(ymd), r.end.plusDays(1).format(ymd))
+    }.flowOn(Dispatchers.Default).catch { recordUnhandledException(it); emit(emptyList()) }
+
     private val rangeSessionsFlow = _range.flatMapLatest { r ->
         database.healthDao().observeSessionsInRange(r.start.format(ymd), r.end.format(ymd))
     }.flowOn(Dispatchers.Default).catch { recordUnhandledException(it); emit(emptyList()) }
@@ -204,8 +222,9 @@ class HealthTabViewModel @Inject constructor(
             hiddenCardsFlow,
             _showCardVisibilitySheet,
             combine(_refreshToastToken, _refreshToastMessage) { token, msg -> token to msg }
-        ) { quad, hidden, sheetOpen, toast -> arrayOf(quad[0], quad[1], quad[2], quad[3], hidden, sheetOpen, toast) }
-    ) { a, b, c ->
+        ) { quad, hidden, sheetOpen, toast -> arrayOf(quad[0], quad[1], quad[2], quad[3], hidden, sheetOpen, toast) },
+        combine(nextDayFlow, paddedRangeDaysFlow, sleepCountPrefs.mode) { nd, padded, sleepMode -> Triple(nd, padded, sleepMode) }
+    ) { a, b, c, sleep ->
         @Suppress("UNCHECKED_CAST")
         val wsToday = a[4] as Triple<String, LocalDate, String>
         @Suppress("UNCHECKED_CAST")
@@ -232,7 +251,15 @@ class HealthTabViewModel @Inject constructor(
             hiddenCards = c[4] as Set<com.daybook.app.data.health.HealthCardKind>,
             showCardVisibilitySheet = c[5] as Boolean,
             refreshToastToken = toast.first,
-            refreshToastMessage = toast.second
+            refreshToastMessage = toast.second,
+            sleepEntries = com.daybook.app.data.health.sleepEntriesForDay(a[2] as LocalDate, b[0] as HealthDay?, sleep.first, zoneId),
+            sleepCountDay = sleep.third,
+            rangeAggregate = (b[2] as HealthRangeSelection).let { r ->
+                aggregateHealthDays(
+                    b[3] as List<HealthDay>,
+                    com.daybook.app.data.health.sleepRowsCountedInRange(sleep.second, r.start, r.end, sleep.third, zoneId)
+                )
+            }
         )
     }.catch { recordUnhandledException(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HealthTabUiState())

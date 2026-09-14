@@ -227,7 +227,13 @@ data class DayEntry(
      *  `@EncodeDefault(NEVER)` so a day with no summary is byte-identical to before this build,
      *  same rule as [health]. The API key used to generate it never travels here (§3.2/§3.6). */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
-    val aiSummary: DailyReportAiSummaryLog? = null
+    val aiSummary: DailyReportAiSummaryLog? = null,
+
+    /** Hydration habit (DB v31) — that local date's logged water, in ml. `@EncodeDefault(NEVER)` +
+     *  null default so a day without it is byte-identical to before this build (same rule as
+     *  [aiSummary]); an older client simply ignores the key. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val hydrationMl: Int? = null
 )
 
 /** DAILY_REPORT_PLAN.md §3.6 — one cached AI summary per day; regenerating replaces it in place,

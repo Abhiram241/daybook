@@ -120,7 +120,9 @@ fun DaybookTextField(
     isError: Boolean = false,
     supportingText: String? = null,
     minLines: Int = 1,
-    tint: CardTint? = null
+    tint: CardTint? = null,
+    /** Overrides the default sentence-capitalised text keyboard (e.g. a numeric amount field). */
+    keyboardOptions: KeyboardOptions? = null
 ) {
     val boxBg = tint?.fillRaised ?: DaybookColors.SurfaceElevated
     val textColor = tint?.onFill ?: DaybookColors.TextPrimary
@@ -167,7 +169,7 @@ fun DaybookTextField(
                     MaterialTheme.typography.bodyLarge
                 ).copy(color = textColor),
                 cursorBrush = SolidColor(cursorColor),
-                keyboardOptions = KeyboardOptions(
+                keyboardOptions = keyboardOptions ?: KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = if (singleLine) ImeAction.Done else ImeAction.Default
                 ),

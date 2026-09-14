@@ -170,4 +170,14 @@ interface AppSettingsDao {
     // ---------------------------------------------- Health tab card visibility (DB v30)
     @Query("UPDATE app_settings SET health_hidden_cards = :v WHERE id = 1")
     suspend fun updateHealthHiddenCards(v: String)
+
+    // Hydration habit (DB v31).
+    @Query("UPDATE app_settings SET hydration_enabled = :enabled, hydration_enabled_since = :since WHERE id = 1")
+    suspend fun updateHydrationEnabled(enabled: Boolean, since: String)
+
+    @Query("UPDATE app_settings SET hydration_goal_ml = :ml WHERE id = 1")
+    suspend fun updateHydrationGoalMl(ml: Int)
+
+    @Query("UPDATE app_settings SET hydration_unit = :unit WHERE id = 1")
+    suspend fun updateHydrationUnit(unit: String)
 }

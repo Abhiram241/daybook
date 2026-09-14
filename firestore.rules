@@ -16,7 +16,10 @@ service cloud.firestore {
       allow create, update: if request.auth != null && request.auth.uid == uid &&
         request.resource.data.keys().hasOnly([
           'definitions', 'definitionsHash', 'revision', 'deviceId', 'updatedAt',
-          'formatVersion', 'appVersion', 'monthHashes'
+          'formatVersion', 'appVersion', 'monthHashes',
+          // Firestore sync for AI settings + privacy lists (CloudSyncRepository.parentData).
+          // Missing from this list, every parent-doc write would be PERMISSION_DENIED once deployed.
+          'aiSettings', 'aiExclusions', 'healthHiddenCards', 'aiSettingsHash'
         ]) &&
         request.resource.data.definitions is bytes &&
         request.resource.data.definitions.size() < 1048576;

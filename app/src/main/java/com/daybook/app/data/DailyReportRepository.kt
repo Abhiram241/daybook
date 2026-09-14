@@ -77,7 +77,9 @@ data class WorkoutExerciseSummary(val name: String, val setCount: Int, val bestS
 data class HealthSectionData(
     val day: HealthDay?,
     val visibleCards: Set<HealthCardKind>,
-    val sessions: List<HealthSession>
+    val sessions: List<HealthSession>,
+    /** User request — every sleep touching this date ("13–14 Sep", "14–15 Sep"), morning first. */
+    val sleepEntries: List<com.daybook.app.data.health.SleepEntry> = emptyList()
 )
 
 /**
@@ -183,6 +185,9 @@ class DailyReportRepository @Inject constructor(
             .catch { recordUnhandledException(it); emit(null) }
         val healthSessionsFlow = database.healthDao().observeSessionsForDay(dateStr)
             .catch { recordUnhandledException(it); emit(emptyList()) }
+        // The next day's row — its sleep may have started on this date's evening.
+        val nextHealthDayFlow = database.healthDao().observeDay(date.plusDays(1).toString())
+            .catch { recordUnhandledException(it); emit(null) }
 
         val intakeFlow = combine(
             database.foodMedOccurrenceDao().getAllOccurrencesInTimeRange(start, end),
@@ -213,19 +218,23 @@ class DailyReportRepository @Inject constructor(
             .distinctUntilChanged()
             .catch { recordUnhandledException(it); emit(WeightUnit.KG) }
 
-        val slice1 = combine(workoutFlow, healthDayFlow, healthSessionsFlow) { w, hd, hs ->
-            Triple(w, hd, hs)
+        val slice1 = combine(workoutFlow, healthDayFlow, healthSessionsFlow, nextHealthDayFlow) { w, hd, hs, next ->
+            Triple(w, hd, hs to com.daybook.app.data.health.sleepEntriesForDay(date, hd, next))
         }
         val slice2 = combine(intakeFlow, todoFlow, aiSummaryFlow, weightUnitFlow) { i, t, ai, wu ->
             RestSlice(i, t, ai, wu)
         }
 
-        return combine(slice1, slice2) { (workout, healthDay, healthSessions), rest ->
-            val health = if (healthDay != null || healthSessions.isNotEmpty()) {
+        return combine(slice1, slice2) { (workout, healthDay, sessionsAndSleep), rest ->
+            val (healthSessions, sleepEntries) = sessionsAndSleep
+            val health = if (healthDay != null || healthSessions.isNotEmpty() || sleepEntries.isNotEmpty()) {
                 HealthSectionData(
                     day = healthDay,
-                    visibleCards = visibleHealthCards(healthDay, healthSessions.isNotEmpty()),
-                    sessions = healthSessions
+                    visibleCards = visibleHealthCards(healthDay, healthSessions.isNotEmpty()).let {
+                        if (sleepEntries.isNotEmpty()) it + HealthCardKind.SLEEP else it - HealthCardKind.SLEEP
+                    },
+                    sessions = healthSessions,
+                    sleepEntries = sleepEntries
                 )
             } else null
             DailyReportData(

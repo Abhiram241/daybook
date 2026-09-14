@@ -111,8 +111,85 @@ data class HomeItem(
     /** v0.5.2 build 8: the "outside food" marker recorded on this log (resolved rows only). */
     val loggedOutsideFood: Boolean? = null,
     /** v0.5.2 build 8: the FOOD reminder's default "outside food" marker, used to pre-fill. */
-    val defaultOutsideFood: Boolean? = null
+    val defaultOutsideFood: Boolean? = null,
+    /** Hydration habit — non-null only for the synthetic Hydration row, which renders its own card. */
+    val hydration: HydrationUi? = null
 )
+
+/** Hydration habit — what the Today card needs. [amountMl] is 0 when nothing is logged yet. */
+@Immutable
+data class HydrationUi(val date: LocalDate, val amountMl: Int, val goalMl: Int, val unit: String) {
+    val goalMet: Boolean get() = amountMl >= goalMl
+    val progress: Float get() = if (goalMl <= 0) 0f else (amountMl.toFloat() / goalMl).coerceIn(0f, 1f)
+}
+
+/** Is the Hydration habit active on [date]? On from its enable date (blank = today) up to [today]. */
+internal fun hydrationActiveOn(date: LocalDate, today: LocalDate, enabled: Boolean, enabledSince: String): Boolean {
+    if (!enabled || date.isAfter(today)) return false
+    val since = runCatching { LocalDate.parse(enabledSince) }.getOrNull() ?: today
+    return !date.isBefore(since)
+}
+
+/** Hydration habit — the synthetic Today row for [date] (see [hydrationActiveOn]). */
+internal fun hydrationHomeItem(ui: HydrationUi, today: LocalDate): HomeItem {
+    val endOfDay = DateTimeUtils.endOfDay(ui.date)
+    val amount = com.daybook.app.data.hydration.HydrationUnits.format(ui.amountMl, ui.unit)
+    val goal = com.daybook.app.data.hydration.HydrationUnits.format(ui.goalMl, ui.unit)
+    return HomeItem(
+        id = "hydration-${ui.date}",
+        title = "Hydration",
+        subtitle = "$amount of $goal",
+        iconKey = com.daybook.app.ui.icons.Icons.WATER,
+        colorTag = "AUTO",
+        scheduledTime = "All day",
+        scheduledEpoch = endOfDay,
+        isHabit = true,
+        detailId = "",
+        occurrenceId = null,
+        canComplete = false,
+        canSkip = false,
+        canSnooze = false,
+        canReply = false,
+        responseText = null,
+        statusLabel = when {
+            ui.goalMet -> "Done"
+            ui.date.isBefore(today) -> MISSED_LABEL
+            else -> null
+        },
+        isPast = ui.date.isBefore(today),
+        isFuture = false,
+        hydration = ui
+    )
+}
+
+/** Hydration habit — synthetic habit occurrences so the Habits streak counts the goal like any
+ *  other habit: COMPLETED when met, PENDING otherwise, for each active day in [from]..[to]. */
+internal fun hydrationStreakOccurrences(
+    from: LocalDate,
+    to: LocalDate,
+    amountsByDate: Map<String, Int>,
+    goalMl: Int
+): List<com.daybook.app.data.model.HabitOccurrence> {
+    if (from.isAfter(to)) return emptyList()
+    val out = ArrayList<com.daybook.app.data.model.HabitOccurrence>()
+    var d = from
+    while (!d.isAfter(to)) {
+        val key = d.toString()
+        val met = (amountsByDate[key] ?: 0) >= goalMl
+        out += com.daybook.app.data.model.HabitOccurrence(
+            id = "hydration-$key",
+            habitId = HYDRATION_HABIT_ID,
+            scheduledFor = DateTimeUtils.endOfDay(d),
+            status = if (met) Occurrence.Status.COMPLETED else Occurrence.Status.PENDING,
+            notificationId = 0,
+            localDate = key
+        )
+        d = d.plusDays(1)
+    }
+    return out
+}
+
+internal const val HYDRATION_HABIT_ID = "builtin-hydration"
 
 /** v0.5.3 item 7: Home "Reminders" filter buckets. UI-only, never persisted — keep order stable. */
 enum class ReminderFilter { HABITS, INTAKE, JOURNAL }
@@ -222,7 +299,9 @@ class HomeViewModel @Inject constructor(
     private val cloudSync: CloudSyncRepository,
     // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 7 (N-2) — surfaces notificationBlockReason() for the
     // Today-screen banner below. Also a @Singleton already in the graph.
-    private val notificationUtils: NotificationUtils
+    private val notificationUtils: NotificationUtils,
+    // Hydration habit — the synthetic daily water row + its streak contribution.
+    private val hydrationRepository: com.daybook.app.data.hydration.HydrationRepository
 ) : ViewModel() {
 
     /** Null when notifications can actually be posted; otherwise why they can't (Phase 7, N-2). */
@@ -366,7 +445,7 @@ class HomeViewModel @Inject constructor(
         streakCfg.map { it.show }
             .catch { com.daybook.app.util.recordUnhandledException(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
-    val homeItems: StateFlow<List<HomeItem>> =
+    private val baseHomeItems: kotlinx.coroutines.flow.Flow<List<HomeItem>> =
         combine(_selectedDate, _now.map { it.toLocalDate() }.distinctUntilChanged()) { date, today ->
             date to today
         }.flatMapLatest { (date, today) ->
@@ -382,8 +461,46 @@ class HomeViewModel @Inject constructor(
                 buildItems(date, today, hOccs, fOccs, habits, tasks, cfg.checkin, cfg.clock24h)
             }
         }
+
+    // Hydration habit settings, folded off the shared settings flow.
+    private data class HydrationCfg(val enabled: Boolean, val since: String, val goalMl: Int, val unit: String)
+    private val hydrationCfg =
+        settings.map { HydrationCfg(it.hydrationEnabled, it.hydrationEnabledSince, it.hydrationGoalMl, it.hydrationUnit) }
+            .distinctUntilChanged()
+
+    /** Hydration habit — the selected day's water row, or null when the habit isn't active that day. */
+    private val hydrationItem: kotlinx.coroutines.flow.Flow<HomeItem?> =
+        combine(_selectedDate, _now.map { it.toLocalDate() }.distinctUntilChanged(), hydrationCfg) { date, today, cfg ->
+            Triple(date, today, cfg)
+        }.flatMapLatest { (date, today, cfg) ->
+            if (!hydrationActiveOn(date, today, cfg.enabled, cfg.since)) {
+                kotlinx.coroutines.flow.flowOf(null)
+            } else {
+                hydrationRepository.observeDay(date).map { day ->
+                    hydrationHomeItem(HydrationUi(date, day?.amountMl ?: 0, cfg.goalMl, cfg.unit), today)
+                }
+            }
+        }
+
+    val homeItems: StateFlow<List<HomeItem>> =
+        combine(baseHomeItems, hydrationItem) { base, hydration -> if (hydration == null) base else base + hydration }
             .flowOn(Dispatchers.Default)
             .catch { com.daybook.app.util.recordUnhandledException(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Hydration habit — sets the selected day's single water entry (0 clears it). */
+    fun setHydration(date: LocalDate, amountMl: Int) = safeLaunch {
+        val result = hydrationRepository.setDay(date, amountMl)
+        when (result) {
+            com.daybook.app.data.health.HealthConnectHydrationWriter.Result.WRITTEN -> postUndoFeedback("Saved · copied to Health Connect")
+            com.daybook.app.data.health.HealthConnectHydrationWriter.Result.NO_PERMISSION ->
+                postUndoFeedback("Saved · allow Health Connect in Settings to copy it there")
+            com.daybook.app.data.health.HealthConnectHydrationWriter.Result.UNAVAILABLE -> postUndoFeedback("Saved")
+            com.daybook.app.data.health.HealthConnectHydrationWriter.Result.FAILED ->
+                postUndoFeedback("Saved · couldn't write to Health Connect")
+        }
+    }
+
+    fun setHydrationUnit(unit: String) = safeLaunch { settingsRepository.setHydrationUnit(unit) }
 
     // v0.5.3 item 7: Home "Reminders" filter — session-scoped, resets on process death.
     private val _typeFilter = MutableStateFlow<Set<ReminderFilter>>(emptySet())   // empty = All
@@ -467,9 +584,20 @@ class HomeViewModel @Inject constructor(
             .flatMapLatest { (date, cfg) ->
                 val start = DateTimeUtils.startOfDay(date.minusDays(STREAK_WINDOW_DAYS))
                 val end = DateTimeUtils.startOfDay(date.plusDays(1))
-                habitRepository.database.habitOccurrenceDao()
-                    .getAllOccurrencesInTimeRange(start, end)
-                    .map { occs -> calculateHabitStreaks(occs, date, cfg.mode, cfg.restDays).currentStreak }
+                val today = LocalDate.now()
+                combine(
+                    habitRepository.database.habitOccurrenceDao().getAllOccurrencesInTimeRange(start, end),
+                    hydrationCfg,
+                    hydrationRepository.observeRange(date.minusDays(STREAK_WINDOW_DAYS), date)
+                ) { occs, hyd, waterDays ->
+                    // Hydration habit — counts toward the Habits streak like any other habit.
+                    val water = if (!hyd.enabled) emptyList() else {
+                        val since = runCatching { LocalDate.parse(hyd.since) }.getOrNull() ?: today
+                        val from = maxOf(since, date.minusDays(STREAK_WINDOW_DAYS))
+                        hydrationStreakOccurrences(from, minOf(date, today), waterDays.associate { it.localDate to it.amountMl }, hyd.goalMl)
+                    }
+                    calculateHabitStreaks(occs + water, date, cfg.mode, cfg.restDays).currentStreak
+                }
             }
             .distinctUntilChanged()
             .flowOn(Dispatchers.Default)

@@ -53,8 +53,10 @@ import com.daybook.app.util.enums.Converters
     // (MIGRATION_27_28).
     // AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §2.2: one new table, 100% additive
     // (MIGRATION_28_29). Device-only — never in DATA_TABLES/BackupModel/ContentHash (S2).
-    AiExclusion::class
-], version = 30, exportSchema = true)
+    AiExclusion::class,
+    // Hydration habit: one new table + four app_settings columns, 100% additive (MIGRATION_30_31).
+    com.daybook.app.data.model.HydrationDay::class
+], version = 31, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun habitDao(): HabitDao
@@ -72,4 +74,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun healthDao(): HealthDao
     abstract fun dailyReportAiSummaryDao(): DailyReportAiSummaryDao
     abstract fun aiExclusionDao(): AiExclusionDao
+    abstract fun hydrationDao(): HydrationDao
 }

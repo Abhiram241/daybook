@@ -19,7 +19,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Round B (Health Connect, §6.1.8/§6.2) — the 12-type MVP read set, requested in one call.
-         Read-only: no health.WRITE_* permission is ever declared (§6.1.9/§6.3). None of §6.1.5's
+         Read-only except WRITE_HYDRATION (hydration habit, declared below). None of §6.1.5's
          seven cycle-tracking permissions are declared. -->
     <uses-permission android:name="android.permission.health.READ_STEPS"/>
     <uses-permission android:name="android.permission.health.READ_SLEEP"/>
@@ -32,6 +32,8 @@
     <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION"/>
     <uses-permission android:name="android.permission.health.READ_WEIGHT"/>
     <uses-permission android:name="android.permission.health.READ_HYDRATION"/>
+    <!-- Hydration habit: the app's only Health Connect write (one HydrationRecord per day). -->
+    <uses-permission android:name="android.permission.health.WRITE_HYDRATION"/>
     <uses-permission android:name="android.permission.health.READ_NUTRITION"/>
     <!-- Optional, requested separately (§5.1/§6.3); degrade gracefully if refused or rejected by
          the alpha08 client (R4). -->

@@ -361,7 +361,12 @@ private fun HealthContent(
     // the existing has-data gate, so a hidden card never re-appears just because it started
     // having data again — the hide is a deliberate user choice, not a data-presence toggle.
     val visible = (if (state.mode == HealthTabMode.DAY) {
-        visibleHealthCards(state.day, state.daySessions.isNotEmpty())
+        // User request — a night that STARTED this evening shows here too, even when this day's
+        // own row has no sleep (or no row at all yet).
+        visibleHealthCards(state.day, state.daySessions.isNotEmpty()).let { cards ->
+            if (state.sleepEntries.isNotEmpty()) cards + HealthCardKind.SLEEP
+            else cards - HealthCardKind.SLEEP
+        }
     } else {
         visibleHealthCards(state.rangeAggregate, state.rangeSessions.isNotEmpty())
     }) - state.hiddenCards
@@ -373,9 +378,20 @@ private fun HealthContent(
     val weightUnit = com.daybook.app.data.workout.parseWeightUnit(state.weightUnit)
     val agg = state.rangeAggregate
     fun metrics(kind: HealthCardKind) =
-        com.daybook.app.data.health.metricsFor(kind, state.day, agg, displayMode, weightUnit)
+        if (kind == HealthCardKind.SLEEP && state.mode == HealthTabMode.DAY) {
+            // One line per sleep touching this day, morning first: "13–14 Sep · 7h 20m".
+            state.sleepEntries.mapNotNull { e ->
+                e.row.sleepMinutes?.let { com.daybook.app.data.health.HealthMetric(e.label, com.daybook.app.util.formatHealthDuration(it)) }
+            }
+        } else {
+            com.daybook.app.data.health.metricsFor(kind, state.day, agg, displayMode, weightUnit)
+        }
     val rangeSubtitle = { kind: HealthCardKind ->
-        if (state.mode == HealthTabMode.DAY) null else com.daybook.app.data.health.rangeSubtitleFor(kind)
+        when {
+            state.mode == HealthTabMode.DAY -> null
+            kind == HealthCardKind.SLEEP -> "Total · counted on ${state.sleepCountDay.label.lowercase()}"
+            else -> com.daybook.app.data.health.rangeSubtitleFor(kind)
+        }
     }
 
     val tileCards = buildList {
@@ -387,7 +403,13 @@ private fun HealthContent(
         if (HealthCardKind.WEIGHT in visible) add(HealthCardSpec(HealthCardKind.WEIGHT, "Weight", DaybookIcons.BarChart, CardTints.Neutral, metrics(HealthCardKind.WEIGHT), rangeSubtitle(HealthCardKind.WEIGHT)))
         if (HealthCardKind.HYDRATION in visible) add(HealthCardSpec(HealthCardKind.HYDRATION, "Hydration", DaybookIcons.WaterDrop, CardTints.Mint, metrics(HealthCardKind.HYDRATION), rangeSubtitle(HealthCardKind.HYDRATION)))
     }
-    val tilePairs = tileCards.chunked(2)
+    // User request — an odd number of cards used to leave a half-width orphan with an empty slot
+    // at the end. Now the FIRST card spans the full row and the rest pair up evenly.
+    val tilePairs = if (tileCards.size % 2 == 1) {
+        listOf(tileCards.take(1)) + tileCards.drop(1).chunked(2)
+    } else {
+        tileCards.chunked(2)
+    }
     val nutritionVisible = HealthCardKind.NUTRITION in visible
     val sessions = if (state.mode == HealthTabMode.DAY) state.daySessions else state.rangeSessions
 
@@ -440,7 +462,7 @@ private fun HealthContent(
 
         // §3.2 — equal heights per grid row: each pair is a Row(IntrinsicSize.Min) with two
         // weight(1f).fillMaxHeight() cards, so the pair matches the taller card and grows with
-        // font scale instead of clipping. An odd last card keeps half width with an empty Spacer.
+        // font scale instead of clipping. A lone (first) card fills the whole row.
         items(tilePairs) { pair ->
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(IntrinsicSize.Min),
@@ -457,7 +479,6 @@ private fun HealthContent(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
 

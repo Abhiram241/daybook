@@ -31,10 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 43          // v0.7.3 build 43 — new appearance defaults (Light/Sepia/Amber/
-                                   // 0.75× corners), Beast Mode's own theme, reorganized Beast Mode
-                                   // settings.
-        versionName = "0.7.3"     // v0.7.3 — appearance defaults + Beast Mode theme
+        versionCode = 45          // v0.7.4 build 45 — hydration habit (+ Health Connect write, DB v31),
+                                   // sleep shown on both dates + "Count sleep hours on" setting,
+                                   // AI Summary food macros, Health grid odd-count layout.
+        versionName = "0.7.4"     // v0.7.4 — hydration habit, sleep attribution, food macros
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
