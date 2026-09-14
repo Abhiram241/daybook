@@ -39,8 +39,8 @@ class AccentColorThemeTest {
     }
 
     @Test
-    fun `default is LAVENDER and keys are the enum names`() {
-        assertTrue(AccentColor.DEFAULT == AccentColor.LAVENDER)
+    fun `default is AMBER and keys are the enum names`() {
+        assertTrue(AccentColor.DEFAULT == AccentColor.AMBER)
         AccentColor.entries.forEach { assertEquals(it.name, it.storageKey) }
         assertEquals(AccentColor.CORAL, AccentColor.fromKey("CORAL"))
         assertEquals(AccentColor.DEFAULT, AccentColor.fromKey("bogus"))

@@ -31,11 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 42          // v0.7.2 build 42 — keyboard-cover fix #3: bring-into-view now
-                                   // targets the whole field / whole reply card (+16dp margin)
-                                   // instead of the bare inner BasicTextField, whose bounds left
-                                   // the box padding + send button under the keyboard.
-        versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter + keyboard-cover fixes
+        versionCode = 43          // v0.7.3 build 43 — new appearance defaults (Light/Sepia/Amber/
+                                   // 0.75× corners), Beast Mode's own theme, reorganized Beast Mode
+                                   // settings.
+        versionName = "0.7.3"     // v0.7.3 — appearance defaults + Beast Mode theme
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

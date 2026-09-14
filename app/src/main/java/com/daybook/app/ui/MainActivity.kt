@@ -115,6 +115,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var authRepository: AuthRepository
     @Inject lateinit var appLockRepository: AppLockRepository
     @Inject lateinit var workoutFontPrefs: com.daybook.app.data.workout.WorkoutFontPrefs
+    @Inject lateinit var workoutThemePrefs: com.daybook.app.data.workout.WorkoutThemePrefs
     @Inject lateinit var healthRepository: com.daybook.app.data.HealthRepository
 
     /** (occurrenceId, isHabit) from a tapped notification, consumed once by [MainApp]. */
@@ -470,11 +471,11 @@ class MainActivity : FragmentActivity() {
      */
     private fun applyWindowTheme() {
         val dark = when (com.daybook.app.data.ThemePrefs.read(this)) {
-            "LIGHT" -> false
+            "DARK" -> true
             "SYSTEM" -> (resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
                 android.content.res.Configuration.UI_MODE_NIGHT_YES
-            else -> true
+            else -> false
         }
         val groundBg =
             if (dark) {
@@ -766,7 +767,30 @@ class MainActivity : FragmentActivity() {
 
         // A5 (§3.8.3) — the current APP accent, already resolved by the outer DaybookTheme; only
         // the Beast Mode branch needs its own colorFor(dark) resolution.
+        // Beast Mode's own theme (Beast Mode settings > Theme). Every field null = same as the app,
+        // in which case the override just re-provides the app's values. Always composed, never
+        // conditionally wrapped — see DaybookModeOverride's KDoc.
+        val beastTheme by workoutThemePrefs.theme.collectAsStateWithLifecycle()
+        val appThemeMode = com.daybook.app.ui.theme.ThemeMode.fromKeyOrDefault(appSettings.themeMode)
+        com.daybook.app.ui.theme.DaybookModeOverride(
+            enabled = inBeast && !beastTheme.followsApp,
+            themeMode = beastTheme.themeMode ?: appThemeMode,
+            darkStyle = beastTheme.darkStyle
+                ?: com.daybook.app.ui.theme.DarkStyle.fromKeyOrDefault(appSettings.darkStyle),
+            lightStyle = beastTheme.lightStyle
+                ?: com.daybook.app.ui.theme.LightStyle.fromKeyOrDefault(appSettings.lightStyle),
+            accentFor = { dark -> workoutAccent.colorFor(dark) }
+        ) {
         val isDark = com.daybook.app.ui.theme.LocalIsDark.current
+        // Status/nav bar icon polarity follows the theme actually on screen (Beast Mode can differ
+        // from the app, and the Activity XML theme is only picked once at cold start).
+        val barsView = androidx.compose.ui.platform.LocalView.current
+        androidx.compose.runtime.SideEffect {
+            WindowCompat.getInsetsController(window, barsView).apply {
+                isAppearanceLightStatusBars = !isDark
+                isAppearanceLightNavigationBars = !isDark
+            }
+        }
         val appAccentColor = LocalAccent.current
         val modeAccentColor = if (inBeast) workoutAccent.colorFor(isDark) else appAccentColor
 
@@ -1165,6 +1189,7 @@ class MainActivity : FragmentActivity() {
                     )
                 }
             }
+        }
         }
         }
         }

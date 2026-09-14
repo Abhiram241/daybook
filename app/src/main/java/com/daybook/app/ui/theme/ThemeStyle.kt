@@ -164,7 +164,7 @@ enum class LightStyle(val storageKey: String, val label: String, internal val gr
     SEPIA("SEPIA", "Sepia", GroundSepia);
 
     companion object {
-        val DEFAULT = PAPER
+        val DEFAULT = SEPIA
         fun fromKeyOrDefault(k: String?): LightStyle = entries.firstOrNull { it.storageKey == k } ?: DEFAULT
     }
 }

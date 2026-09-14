@@ -26,7 +26,7 @@ enum class AccentColor(val storageKey: String, val dark: Color, val light: Color
     fun colorFor(dark: Boolean): Color = if (dark) this.dark else this.light
 
     companion object {
-        val DEFAULT = LAVENDER
+        val DEFAULT = AMBER
         fun fromKey(k: String?): AccentColor = entries.firstOrNull { it.storageKey == k } ?: DEFAULT
     }
 }

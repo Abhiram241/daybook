@@ -430,7 +430,7 @@ fun AppearanceSettingsScreen(
     val cornerScale by viewModel.cornerScale.collectAsStateWithLifecycle()
     val hapticsEnabled by viewModel.hapticsEnabled.collectAsStateWithLifecycle()
     SettingsSubScreen("Appearance", onNavigateBack) {
-        // UX overhaul item 4 — app theme. Dark is the default for every install.
+        // UX overhaul item 4 — app theme. Light is the fresh-install default (build 43).
         SectionHeader("Theme", subtitle = "Choose a dark or light look, or follow your system setting.")
         SettingsGroup {
             Column(Modifier.padding(Spacing.cardInner)) {
@@ -473,7 +473,7 @@ fun AppearanceSettingsScreen(
             Column(Modifier.padding(Spacing.cardInner)) {
                 val valueCaption = when {
                     cornerScale <= 0f -> "Square"
-                    cornerScale == 1f -> "1.0× · Default"
+                    cornerScale == com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE -> "${cornerScale}× · Default"
                     else -> "${cornerScale}×"
                 }
                 Row(

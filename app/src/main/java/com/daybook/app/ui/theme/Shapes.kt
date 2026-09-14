@@ -13,7 +13,7 @@ import androidx.compose.ui.unit.dp
  */
 const val MIN_CORNER_SCALE = 0f
 const val MAX_CORNER_SCALE = 1.75f
-const val DEFAULT_CORNER_SCALE = 1f
+const val DEFAULT_CORNER_SCALE = 0.75f
 const val CORNER_SCALE_STEP = 0.25f
 
 /** Interior steps for the M3 Slider: 8 positions -> 6 interior. */

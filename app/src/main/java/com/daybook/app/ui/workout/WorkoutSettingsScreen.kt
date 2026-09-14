@@ -52,6 +52,10 @@ import com.daybook.app.ui.theme.FontChoice
 import com.daybook.app.ui.theme.LocalAccent
 import com.daybook.app.ui.theme.LocalIsDark
 import com.daybook.app.ui.theme.Spacing
+import com.daybook.app.ui.theme.DarkStyle
+import com.daybook.app.ui.theme.LightStyle
+import com.daybook.app.ui.theme.ThemeMode
+import com.daybook.app.ui.components.StyleSwatchRow
 import com.daybook.app.ui.workout.beast.BeastAccentColor
 
 private val REST_OPTIONS = linkedMapOf(
@@ -73,6 +77,7 @@ fun WorkoutSettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val fontChoice by viewModel.fontChoice.collectAsStateWithLifecycle()
+    val beastTheme by viewModel.beastTheme.collectAsStateWithLifecycle()
     var showRestSheet by remember { mutableStateOf(false) }
     var showGroupSheet by remember { mutableStateOf(false) }
     var showFontSheet by remember { mutableStateOf(false) }
@@ -132,14 +137,61 @@ fun WorkoutSettingsScreen(
     Column(Modifier.fillMaxSize()) {
         BackHeader(title = "Beast Mode settings", onBack = onNavigateBack)
         LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.screenH)) {
-            // Bug fix (organization) — this used to be five separate single/double-row
-            // `SettingsGroup` cards stacked with equal 12dp gaps, so nothing distinguished "these
-            // three rows are one topic" from "these two cards are unrelated" — the accent swatch
-            // grid in particular floated as its own bare card with no row above it. Regrouped by
-            // topic with a `SectionHeader` per group (the same pattern the main app's own
-            // Settings screen uses for "Font"), so the hierarchy reads as: Appearance ->
-            // Preferences -> Data -> leave.
-            item { SectionHeader("Appearance") }
+            // Reorganized (build 43) — nothing removed, only regrouped: how the mode looks (theme,
+            // then accent & font) -> how workouts behave -> Today -> Health Connect -> imports &
+            // backup -> leave.
+            item { SectionHeader("Theme", subtitle = "Beast Mode can look different from the rest of the app.") }
+            item {
+                SettingsGroup {
+                    Column(Modifier.padding(Spacing.cardInner)) {
+                        SegmentedControl(
+                            options = listOf(
+                                SegmentSpec("APP", "Match app"),
+                                SegmentSpec("DARK", "Dark"),
+                                SegmentSpec("LIGHT", "Light"),
+                                SegmentSpec("SYSTEM", "System")
+                            ),
+                            selectedKey = beastTheme.themeMode?.storageKey ?: "APP",
+                            onSelect = { key ->
+                                viewModel.setBeastThemeMode(
+                                    key.takeIf { it != "APP" }?.let { ThemeMode.fromKeyOrDefault(it) }
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(Spacing.listGap))
+                SectionHeader("Dark style", subtitle = "Background palette used when Beast Mode is dark.")
+                SettingsGroup {
+                    Column(Modifier.padding(Spacing.cardInner)) {
+                        StyleSwatchRow(
+                            DarkStyle.entries,
+                            // Unset = the app's own dark style, shown as the current pick.
+                            current = beastTheme.darkStyle ?: DarkStyle.fromKeyOrDefault(settings.darkStyle),
+                            onPick = viewModel::setBeastDarkStyle
+                        )
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(Spacing.listGap))
+                SectionHeader("Light style", subtitle = "Background palette used when Beast Mode is light.")
+                SettingsGroup {
+                    Column(Modifier.padding(Spacing.cardInner)) {
+                        StyleSwatchRow(
+                            LightStyle.entries,
+                            current = beastTheme.lightStyle ?: LightStyle.fromKeyOrDefault(settings.lightStyle),
+                            onPick = viewModel::setBeastLightStyle
+                        )
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(Spacing.sectionGap))
+                SectionHeader("Accent & font")
+            }
             item {
                 SettingsGroup {
                     val isDark = LocalIsDark.current
@@ -181,7 +233,7 @@ fun WorkoutSettingsScreen(
             }
             item {
                 Spacer(Modifier.height(Spacing.sectionGap))
-                SectionHeader("Preferences")
+                SectionHeader("Workout")
             }
             item {
                 SettingsGroup {
@@ -214,7 +266,14 @@ fun WorkoutSettingsScreen(
                             ?: "All",
                         onClick = { showGroupSheet = true }
                     )
-                    SettingsRowDivider()
+                }
+            }
+            item {
+                Spacer(Modifier.height(Spacing.sectionGap))
+                SectionHeader("Today screen")
+            }
+            item {
+                SettingsGroup {
                     SettingsRow(
                         icon = Icons.Filled.DateRange,
                         title = "Show Beast Mode on Today",
@@ -231,24 +290,6 @@ fun WorkoutSettingsScreen(
                     )
                 }
             }
-            item {
-                Spacer(Modifier.height(Spacing.sectionGap))
-                SectionHeader("Data")
-            }
-            item {
-                SettingsGroup {
-                    // Moved here from the History tab's empty state — a data-management action
-                    // belongs in Settings, not floating in the middle of a list screen.
-                    SettingsRow(
-                        icon = DaybookIcons.ImportExport,
-                        title = "Import from Hevy",
-                        subtitle = "Bring your workout history over from a Hevy CSV export",
-                        onClick = onImportFromHevy
-                    )
-                }
-            }
-            // Round B (§7.4) — the entirety of Round B's user-facing settings surface: five rows,
-            // one new SettingsGroup, sitting below Hevy import and above Leave Beast Mode.
             item {
                 Spacer(Modifier.height(Spacing.sectionGap))
                 SectionHeader("Health Connect")
@@ -342,10 +383,19 @@ fun WorkoutSettingsScreen(
             }
             item {
                 Spacer(Modifier.height(Spacing.sectionGap))
-                SectionHeader("Backup & data")
+                SectionHeader("Import & backup")
             }
             item {
                 SettingsGroup {
+                    // Moved here from the History tab's empty state — a data-management action
+                    // belongs in Settings, not floating in the middle of a list screen.
+                    SettingsRow(
+                        icon = DaybookIcons.ImportExport,
+                        title = "Import from Hevy",
+                        subtitle = "Bring your workout history over from a Hevy CSV export",
+                        onClick = onImportFromHevy
+                    )
+                    SettingsRowDivider()
                     SettingsRow(
                         icon = DaybookIcons.ImportExport,
                         title = if (isImportingBeast) "Importing…" else "Import Beast Mode backup",

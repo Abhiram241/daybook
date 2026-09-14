@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -269,6 +270,7 @@ class OnboardingViewModel @Inject constructor(
      * first composition in `MainActivity.setContent` is already the correct theme — zero flash.
      */
     val themeMode: StateFlow<ThemeMode> = settingsRepository.observeSettings()
+        .onEach { settingsRepository.syncThemeMirrors(it) }
         .map { ThemeMode.fromKeyOrDefault(it.themeMode) }
         .stateIn(
             viewModelScope,

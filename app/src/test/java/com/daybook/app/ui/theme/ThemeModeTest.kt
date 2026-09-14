@@ -8,8 +8,8 @@ import org.junit.Test
 class ThemeModeTest {
 
     @Test
-    fun `default is DARK`() {
-        assertSame(ThemeMode.DARK, ThemeMode.DEFAULT)
+    fun `default is LIGHT`() {
+        assertSame(ThemeMode.LIGHT, ThemeMode.DEFAULT)
     }
 
     @Test
@@ -20,11 +20,11 @@ class ThemeModeTest {
     }
 
     @Test
-    fun `null, blank and unknown keys fall back to DARK`() {
-        assertSame(ThemeMode.DARK, ThemeMode.fromKeyOrDefault(null))
-        assertSame(ThemeMode.DARK, ThemeMode.fromKeyOrDefault(""))
-        assertSame(ThemeMode.DARK, ThemeMode.fromKeyOrDefault("dark"))
-        assertSame(ThemeMode.DARK, ThemeMode.fromKeyOrDefault("SEPIA"))
+    fun `null, blank and unknown keys fall back to LIGHT`() {
+        assertSame(ThemeMode.LIGHT, ThemeMode.fromKeyOrDefault(null))
+        assertSame(ThemeMode.LIGHT, ThemeMode.fromKeyOrDefault(""))
+        assertSame(ThemeMode.LIGHT, ThemeMode.fromKeyOrDefault("dark"))
+        assertSame(ThemeMode.LIGHT, ThemeMode.fromKeyOrDefault("SEPIA"))
     }
 
     @Test

@@ -72,7 +72,7 @@ class ScaledAppShapesTest {
         assertEquals(scaledAppShapes(1f).card, scaledM3Shapes(1f).medium)
     }
 
-    @Test fun `default constant is 1_0`() {
-        assertTrue(DEFAULT_CORNER_SCALE == 1f)
+    @Test fun `default constant is 0_75`() {
+        assertTrue(DEFAULT_CORNER_SCALE == 0.75f)
     }
 }

@@ -1,6 +1,7 @@
 package com.daybook.app.data
 
 import android.content.Context
+import com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE
 import com.daybook.app.ui.theme.clampCornerScale
 
 /**
@@ -23,11 +24,11 @@ object ThemePrefs {
     private const val KEY_LIGHT_STYLE = "light_style"
     private const val KEY_CORNER_SCALE = "corner_scale"
 
-    /** The stored key ("DARK" / "LIGHT" / "SYSTEM"), or "DARK" when nothing has been written yet. */
+    /** The stored key ("DARK" / "LIGHT" / "SYSTEM"), or "LIGHT" when nothing has been written yet. */
     fun read(context: Context): String =
         runCatching {
-            context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_THEME_MODE, "DARK") ?: "DARK"
-        }.getOrDefault("DARK")
+            context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_THEME_MODE, "LIGHT") ?: "LIGHT"
+        }.getOrDefault("LIGHT")
 
     fun write(context: Context, value: String) {
         runCatching {
@@ -49,11 +50,11 @@ object ThemePrefs {
         }
     }
 
-    /** The stored light-style key, or "PAPER" (the default) when nothing has been written yet. */
+    /** The stored light-style key, or "SEPIA" (the default) when nothing has been written yet. */
     fun readLightStyle(context: Context): String =
         runCatching {
-            context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_LIGHT_STYLE, "PAPER") ?: "PAPER"
-        }.getOrDefault("PAPER")
+            context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(KEY_LIGHT_STYLE, "SEPIA") ?: "SEPIA"
+        }.getOrDefault("SEPIA")
 
     fun writeLightStyle(context: Context, value: String) {
         runCatching {
@@ -62,12 +63,12 @@ object ThemePrefs {
         }
     }
 
-    /** The stored corner-scale, clamped, or `1.0f` (the default) when nothing has been written yet. */
+    /** The stored corner-scale, clamped, or [DEFAULT_CORNER_SCALE] when nothing has been written yet. */
     fun readCornerScale(context: Context): Float =
         clampCornerScale(
             runCatching {
-                context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getFloat(KEY_CORNER_SCALE, 1.0f)
-            }.getOrDefault(1.0f)
+                context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getFloat(KEY_CORNER_SCALE, DEFAULT_CORNER_SCALE)
+            }.getOrDefault(DEFAULT_CORNER_SCALE)
         )
 
     fun writeCornerScale(context: Context, value: Float) {

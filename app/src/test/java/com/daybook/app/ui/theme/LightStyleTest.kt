@@ -34,14 +34,14 @@ class LightStyleTest {
         onSolid = Color(0xFFFFFFFF)
     )
 
-    @Test fun `fromKeyOrDefault falls back to PAPER for null or garbage`() {
-        assertEquals(LightStyle.PAPER, LightStyle.fromKeyOrDefault(null))
-        assertEquals(LightStyle.PAPER, LightStyle.fromKeyOrDefault("nonsense"))
-        assertEquals(LightStyle.PAPER, LightStyle.fromKeyOrDefault(""))
+    @Test fun `fromKeyOrDefault falls back to SEPIA for null or garbage`() {
+        assertEquals(LightStyle.SEPIA, LightStyle.fromKeyOrDefault(null))
+        assertEquals(LightStyle.SEPIA, LightStyle.fromKeyOrDefault("nonsense"))
+        assertEquals(LightStyle.SEPIA, LightStyle.fromKeyOrDefault(""))
     }
 
-    @Test fun `DEFAULT is PAPER`() {
-        assertEquals(LightStyle.PAPER, LightStyle.DEFAULT)
+    @Test fun `DEFAULT is SEPIA`() {
+        assertEquals(LightStyle.SEPIA, LightStyle.DEFAULT)
     }
 
     @Test fun `fromKeyOrDefault resolves every storage key`() {

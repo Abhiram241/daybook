@@ -94,6 +94,19 @@ class AppSettingsRepository @Inject constructor(
         ThemePrefs.writeCornerScale(context, v)
     }
 
+    /**
+     * Build 43 — the fresh-install theme defaults changed (Light/Sepia/0.75×), so the mirror's
+     * "nothing written yet" fallback no longer matches an upgrader's untouched Room row (still
+     * DARK/PAPER/1.0). Re-mirror the Room row whenever it's observed so the pre-setContent window
+     * background matches from the next cold start on. No-op writes when already in sync.
+     */
+    fun syncThemeMirrors(s: AppSettings) {
+        if (ThemePrefs.read(context) != s.themeMode) ThemePrefs.write(context, s.themeMode)
+        if (ThemePrefs.readDarkStyle(context) != s.darkStyle) ThemePrefs.writeDarkStyle(context, s.darkStyle)
+        if (ThemePrefs.readLightStyle(context) != s.lightStyle) ThemePrefs.writeLightStyle(context, s.lightStyle)
+        if (ThemePrefs.readCornerScale(context) != s.cornerScale) ThemePrefs.writeCornerScale(context, s.cornerScale)
+    }
+
     fun readDarkStyleMirror(): String = ThemePrefs.readDarkStyle(context)
     fun readLightStyleMirror(): String = ThemePrefs.readLightStyle(context)
     fun readCornerScaleMirror(): Float = ThemePrefs.readCornerScale(context)

@@ -19,7 +19,8 @@ enum class ThemeMode(val storageKey: String) {
     SYSTEM("SYSTEM");
 
     companion object {
-        val DEFAULT = DARK
+        // User request (build 43) — fresh installs start Light (Sepia, Amber, 0.75× corners).
+        val DEFAULT = LIGHT
         fun fromKeyOrDefault(k: String?): ThemeMode =
             entries.firstOrNull { it.storageKey == k } ?: DEFAULT
     }
@@ -131,21 +132,7 @@ fun DaybookTheme(
     // re-key on darkStyle/lightStyle and copy the resolved ground roles across, so a non-default
     // style is fully applied to M3 too (not just the fixed Charcoal/Paper constants).
     val scheme = remember(dark, accent, darkStyle, lightStyle) {
-        (if (dark) DarkScheme else LightScheme).copy(
-            primary = accentColor,
-            onPrimary = onAccent,
-            secondary = accentColor,
-            tertiary = accentColor,
-            background = colors.bg,
-            onBackground = colors.textPrimary,
-            surface = colors.surface,
-            onSurface = colors.textPrimary,
-            surfaceVariant = colors.surfaceElevated,
-            onSurfaceVariant = colors.textMuted,
-            outline = colors.outline,
-            outlineVariant = colors.outline,
-            scrim = colors.bg
-        )
+        materialSchemeFor(dark, colors, accentColor, onAccent)
     }
     val appShapes = remember(cornerScale) { scaledAppShapes(cornerScale) }
     val m3Shapes = remember(cornerScale) { scaledM3Shapes(cornerScale) }
@@ -163,6 +150,77 @@ fun DaybookTheme(
             colorScheme = scheme,
             typography = typography,
             shapes = m3Shapes,
+            content = content
+        )
+    }
+}
+
+private fun materialSchemeFor(dark: Boolean, colors: DaybookColorScheme, accentColor: Color, onAccent: Color) =
+    (if (dark) DarkScheme else LightScheme).copy(
+        primary = accentColor,
+        onPrimary = onAccent,
+        secondary = accentColor,
+        tertiary = accentColor,
+        background = colors.bg,
+        onBackground = colors.textPrimary,
+        surface = colors.surface,
+        onSurface = colors.textPrimary,
+        surfaceVariant = colors.surfaceElevated,
+        onSurfaceVariant = colors.textMuted,
+        outline = colors.outline,
+        outlineVariant = colors.outline,
+        scrim = colors.bg
+    )
+
+/**
+ * Beast Mode's own theme — re-resolves dark/light + background style for a subtree that sits
+ * inside the app-wide [DaybookTheme], keeping its typography, shapes, motion and haptics. When
+ * [enabled] is false it re-provides the current values unchanged; the composable is always called
+ * (never conditionally wrapped) so entering/leaving Beast Mode doesn't restructure — and reset —
+ * the NavHost subtree beneath it. [accentFor] resolves the subtree's accent for the chosen mode.
+ */
+@Composable
+fun DaybookModeOverride(
+    enabled: Boolean,
+    themeMode: ThemeMode,
+    darkStyle: DarkStyle,
+    lightStyle: LightStyle,
+    accentFor: (dark: Boolean) -> Color,
+    content: @Composable () -> Unit
+) {
+    // One call site for `content` in both states — an if/else around it would give the subtree a
+    // different composition group and discard its state on every Beast Mode enter/leave.
+    val systemDark = isSystemInDarkTheme()
+    val outerColors = LocalDaybookColors.current
+    val outerDark = LocalIsDark.current
+    val outerAccent = LocalAccent.current
+    val outerOnAccent = LocalOnAccent.current
+    val outerScheme = MaterialTheme.colorScheme
+    val dark = if (!enabled) outerDark else when (themeMode) {
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+        ThemeMode.SYSTEM -> systemDark
+    }
+    val colors = remember(enabled, dark, darkStyle, lightStyle, outerColors) {
+        if (!enabled) outerColors else if (dark) darkSchemeFor(darkStyle) else lightSchemeFor(lightStyle)
+    }
+    val accentColor = if (enabled) accentFor(dark) else outerAccent
+    val onAccent = remember(enabled, accentColor, outerOnAccent) {
+        if (enabled) onAccentInk(accentColor) else outerOnAccent
+    }
+    val scheme = remember(enabled, dark, colors, accentColor, outerScheme) {
+        if (enabled) materialSchemeFor(dark, colors, accentColor, onAccent) else outerScheme
+    }
+    CompositionLocalProvider(
+        LocalDaybookColors provides colors,
+        LocalIsDark provides dark,
+        LocalAccent provides accentColor,
+        LocalOnAccent provides onAccent
+    ) {
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes,
             content = content
         )
     }

@@ -9,6 +9,10 @@ import com.daybook.app.data.health.HealthPermissions
 import com.daybook.app.data.model.AppSettings
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.data.workout.WorkoutFontPrefs
+import com.daybook.app.data.workout.WorkoutThemePrefs
+import com.daybook.app.ui.theme.DarkStyle
+import com.daybook.app.ui.theme.LightStyle
+import com.daybook.app.ui.theme.ThemeMode
 import com.daybook.app.ui.theme.FontChoice
 import com.daybook.app.util.StorageUtils
 import com.daybook.app.util.safeLaunch
@@ -27,6 +31,7 @@ import javax.inject.Inject
 class WorkoutSettingsViewModel @Inject constructor(
     private val repo: AppSettingsRepository,
     private val fontPrefs: WorkoutFontPrefs,
+    private val themePrefs: WorkoutThemePrefs,
     private val healthRepository: HealthRepository,
     private val exportImportRepository: ExportImportRepository,
     private val storageUtils: StorageUtils,
@@ -46,6 +51,12 @@ class WorkoutSettingsViewModel @Inject constructor(
     /** Feature addition (post-A6) — the Add-Exercise picker's default active filter chip. */
     fun setDefaultExerciseGroup(v: String?) = safeLaunch { repo.setDefaultExerciseGroup(v) }
     fun setFontChoice(choice: FontChoice?) = fontPrefs.setFontChoice(choice)
+
+    /** Beast Mode's own theme; every field `null` = same as the app. */
+    val beastTheme = themePrefs.theme
+    fun setBeastThemeMode(mode: ThemeMode?) = themePrefs.setThemeMode(mode)
+    fun setBeastDarkStyle(style: DarkStyle) = themePrefs.setDarkStyle(style)
+    fun setBeastLightStyle(style: LightStyle) = themePrefs.setLightStyle(style)
 
     // ------------------------------------------------------------------- Round B (Health Connect)
 
