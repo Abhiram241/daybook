@@ -33,15 +33,22 @@ class NotificationActionReceiver : BroadcastReceiver() {
                     CoroutineExceptionHandler { _, t -> Log.e(TAG, "batch action $action failed", t) }
             )
             scope.launch {
+                var batchSucceeded = false
                 try {
                     withTimeout(8_000) {
                         if (action == ACTION_BATCH_DONE) scheduler.completeAllBatchToday()
                         else scheduler.snoozeBatchCheckIn()
                     }
+                    batchSucceeded = true
                 } catch (t: Throwable) {
                     Log.e(TAG, "batch action $action failed", t)
+                    com.daybook.app.util.recordUnhandledException(t)
                 } finally {
-                    runCatching { notificationUtils.cancelNotification(NotificationUtils.BATCH_NOTIFICATION_ID) }
+                    // BUG_AUDIT_REPORT.md §1.5: only dismiss on success — cancelling on a failure
+                    // path made the reminder vanish from the shade exactly as if it had worked.
+                    if (batchSucceeded) {
+                        runCatching { notificationUtils.cancelNotification(NotificationUtils.BATCH_NOTIFICATION_ID) }
+                    }
                     pending.finish()
                 }
             }
@@ -68,6 +75,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         // whichever of those the user was supposed to see.
         val isFoodMedReply = action == ACTION_REPLY && !isHabit
         scope.launch {
+            var succeeded = false
             try {
                 // goAsync() gives ~10s before the system considers the receiver hung; cap the work
                 // below that so a stuck Room/Hilt call can't blow the budget and ANR.
@@ -93,20 +101,27 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         }
                     }
                 }
+                succeeded = true
             } catch (t: Throwable) {
                 Log.e(TAG, "action $action failed", t)
+                // BUG_AUDIT_REPORT.md §1.5: log to Crashlytics too — this receiver handles every
+                // user action on a notification, and a failing Skip/Snooze/Complete previously
+                // never reached the dashboard.
+                com.daybook.app.util.recordUnhandledException(t)
                 // A timeout/exception on the reply path must not silently vanish the notification
                 // with the reply lost — post a distinct "couldn't save" notification.
                 if (isFoodMedReply && notificationId != 0) {
                     runCatching { notificationUtils.postReplyFailed(occurrenceId, notificationId, title, null) }
                 }
             } finally {
-                // Dismiss unconditionally and outside the scheduler's mutex: guarantees the
-                // notification goes away even if the occurrence was already resolved (so the
-                // scheduler early-returned before its own cancel) or a syncAll() sweep holds the
-                // lock. (Bug_Fixes item 6) Skipped for a food/med Reply — see the comment above
-                // `isFoodMedReply`.
-                if (notificationId != 0 && !isFoodMedReply) {
+                // Dismiss outside the scheduler's mutex: guarantees the notification goes away
+                // even if the occurrence was already resolved (so the scheduler early-returned
+                // before its own cancel) or a syncAll() sweep holds the lock. (Bug_Fixes item 6)
+                // Skipped for a food/med Reply — see the comment above `isFoodMedReply`.
+                // BUG_AUDIT_REPORT.md §1.5: also skipped when the action itself failed — cancelling
+                // unconditionally made a failed Skip/Snooze/Complete disappear from the shade
+                // exactly as if it had worked, with no way for the user to notice or retry.
+                if (notificationId != 0 && !isFoodMedReply && succeeded) {
                     runCatching { notificationUtils.cancelNotification(notificationId) }
                 }
                 pending.finish()

@@ -115,6 +115,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var authRepository: AuthRepository
     @Inject lateinit var appLockRepository: AppLockRepository
     @Inject lateinit var workoutFontPrefs: com.daybook.app.data.workout.WorkoutFontPrefs
+    @Inject lateinit var healthRepository: com.daybook.app.data.HealthRepository
 
     /** (occurrenceId, isHabit) from a tapped notification, consumed once by [MainApp]. */
     private val deepLinkOccurrence = MutableStateFlow<Pair<String, Boolean>?>(null)
@@ -311,6 +312,7 @@ class MainActivity : FragmentActivity() {
             val darkStyle by onboardingViewModel.darkStyle.collectAsStateWithLifecycle()
             val lightStyle by onboardingViewModel.lightStyle.collectAsStateWithLifecycle()
             val cornerScale by onboardingViewModel.cornerScale.collectAsStateWithLifecycle()
+            val hapticsEnabled by onboardingViewModel.hapticsEnabled.collectAsStateWithLifecycle()
             DaybookTheme(
                 accent = accent,
                 fontChoice = fontChoice,
@@ -318,7 +320,8 @@ class MainActivity : FragmentActivity() {
                 darkStyle = darkStyle,
                 lightStyle = lightStyle,
                 cornerScale = cornerScale,
-                reduceMotion = reduceMotion
+                reduceMotion = reduceMotion,
+                hapticsEnabled = hapticsEnabled
             ) {
                 val onboardingCompleted by onboardingViewModel.onboardingCompleted.collectAsStateWithLifecycle()
                 val locked by appLockRepository.isLocked.collectAsStateWithLifecycle()
@@ -448,6 +451,13 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+        // Round B (§6.3 cadence 1) — on-resume pull, throttled to at most once every 15 minutes
+        // inside HealthRepository itself. Failure-inert (C6): a Health Connect hiccup here must
+        // never affect app resume, so this is fire-and-forget on the activity's own lifecycleScope,
+        // fully `runCatching`-wrapped inside HealthRepository already.
+        lifecycleScope.launch {
+            runCatching { healthRepository.pullOnResume() }
+        }
     }
 
     /**
@@ -563,11 +573,15 @@ class MainActivity : FragmentActivity() {
         val homeIcon: ImageVector = ImageVector.vectorResource(R.drawable.ic_nav_home)
         val habitsIcon: ImageVector = ImageVector.vectorResource(R.drawable.ic_nav_habits)
         val intakeIcon: ImageVector = ImageVector.vectorResource(R.drawable.ic_nav_intake)
-        val navItems = remember(visibleRoutes, homeIcon, habitsIcon, intakeIcon) {
+        // DAILY_REPORT_PLAN.md §2 — the fourth tab reuses an existing DaybookIcons glyph rather
+        // than inflating a new vector drawable.
+        val reportIcon: ImageVector = com.daybook.app.ui.icons.DaybookIcons.BarChart
+        val navItems = remember(visibleRoutes, homeIcon, habitsIcon, intakeIcon, reportIcon) {
             val specByRoute = mapOf(
                 "home" to NavItemSpec("home", homeIcon, "Today"),
                 "routines" to NavItemSpec("routines", habitsIcon, "Habits"),
-                "foodmed" to NavItemSpec("foodmed", intakeIcon, "Intake")
+                "foodmed" to NavItemSpec("foodmed", intakeIcon, "Intake"),
+                "report" to NavItemSpec("report", reportIcon, "Report")
             )
             visibleRoutes.mapNotNull { specByRoute[it] }
         }
@@ -667,9 +681,6 @@ class MainActivity : FragmentActivity() {
         val goToBeastPage: (Int) -> Unit = remember(beastPagerState, scope) {
             { idx -> scope.launch { beastPagerState.scrollToPage(idx) }; Unit }
         }
-        val onSelectBeastRoute: (String) -> Unit = remember(goToBeastPage) {
-            { route -> goToBeastPage(WorkoutRoutes.NAV.indexOf(route).coerceAtLeast(0)) }
-        }
         val goWorkout: () -> Unit = remember(navController, goToBeastPage) {
             {
                 // Always land on Routines for a fresh entry into Beast Mode (long-press "Today",
@@ -689,6 +700,18 @@ class MainActivity : FragmentActivity() {
             {
                 navController.popBackStack(route = "main", inclusive = false)
                 goToPage(0)
+            }
+        }
+        // User request — a single tap on "Today" must work (and haptic) from inside Beast Mode
+        // exactly like every other tab, not just the long-press-to-exit gesture. "beast_today" is
+        // a synthetic route id (never a WorkoutRoutes.NAV member, and never equal to
+        // beastCurrentRoute below) so the shared BottomNav's `item.route != currentRoute` haptic
+        // check always fires for it, and this callback special-cases it to exitBeastMode() instead
+        // of resolving it against WorkoutRoutes.NAV (where indexOf would coerce to page 0).
+        val onSelectBeastRoute: (String) -> Unit = remember(goToBeastPage, exitBeastMode) {
+            { route ->
+                if (route == BEAST_TODAY_ROUTE) exitBeastMode()
+                else goToBeastPage(WorkoutRoutes.NAV.indexOf(route).coerceAtLeast(0))
             }
         }
         val goWorkoutSettings: () -> Unit = remember(navController) {
@@ -726,11 +749,18 @@ class MainActivity : FragmentActivity() {
         // settled page the same way `currentRoute` tracks `settledPage` for "main" above.
         val beastCurrentRoute = WorkoutRoutes.NAV.getOrElse(beastSettledPage) { WorkoutRoutes.HOME }
         val workoutIcon: ImageVector = ImageVector.vectorResource(R.drawable.ic_workout)
-        val beastNavItems = remember(workoutIcon) {
+        // User request — "Today" gets its own tappable nav item inside Beast Mode too, leading the
+        // row (matching "home"'s always-first position in the main nav's NavConfig.ALL_ROUTES),
+        // instead of being reachable only via the hidden long-press-to-exit gesture.
+        val beastNavItems = remember(workoutIcon, homeIcon) {
             listOf(
+                NavItemSpec(BEAST_TODAY_ROUTE, homeIcon, "Today"),
                 NavItemSpec(WorkoutRoutes.HOME, workoutIcon, "Routines"),
                 NavItemSpec(WorkoutRoutes.HISTORY, com.daybook.app.ui.icons.DaybookIcons.Clock, "History"),
-                NavItemSpec(WorkoutRoutes.LIBRARY, com.daybook.app.ui.icons.DaybookIcons.Category, "Exercises")
+                // Round B (§7.4) — this slot's destination is repurposed to the Health tab; the
+                // exercise browser (BROWSE mode) survives only via PICK mode from a live session /
+                // routine editor's "+ Add Exercise" (unchanged, §7.3).
+                NavItemSpec(WorkoutRoutes.LIBRARY, com.daybook.app.ui.icons.DaybookIcons.Heart, "Health")
             )
         }
 
@@ -872,12 +902,20 @@ class MainActivity : FragmentActivity() {
                                 onNavigateToDetail = { id -> goDetail("habit", id) },
                                 onNavigateToSettings = goSettings
                             )
-                            else -> FoodMedScreen(
+                            "foodmed" -> FoodMedScreen(
                                 contentPadding = scaffoldPadding,
                                 onNavigateToAddFoodMed = goAddFoodMed,
                                 onNavigateToEditFoodMed = goEditFoodMed,
                                 onNavigateToDetail = { id -> goDetail("food_med", id) },
                                 onNavigateToSettings = goSettings
+                            )
+                            // DAILY_REPORT_PLAN.md §2 — the fourth tab. `else`, not `"report" ->`,
+                            // so an unknown/future route id still lands somewhere sane rather than
+                            // crashing the `when`.
+                            else -> com.daybook.app.ui.report.DailyReportScreen(
+                                contentPadding = scaffoldPadding,
+                                onNavigateToSettings = goSettings,
+                                onOpenAiExclusions = { scope -> navController.navigate("settings_ai_exclusions/$scope") }
                             )
                         }
                     }
@@ -892,7 +930,25 @@ class MainActivity : FragmentActivity() {
                         onOpenAccount = { navController.navigate("settings_account") },
                         onOpenAppLock = { navController.navigate("settings_app_lock") },
                         onOpenAbout = { navController.navigate("settings_about") },
+                        onOpenAiProviders = { navController.navigate("settings_ai_providers") },
+                        onOpenDailyReportAi = { navController.navigate("settings_daily_report_ai") },
                         onOpenWorkout = goWorkout
+                    )
+                }
+                composable("settings_ai_providers") {
+                    com.daybook.app.ui.settings.AiProvidersSettingsScreen(
+                        onNavigateBack = { navController.popBackStack() }
+                    )
+                }
+                composable("settings_daily_report_ai") {
+                    com.daybook.app.ui.settings.DailyReportAiSettingsScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        onOpenAiExclusions = { scope -> navController.navigate("settings_ai_exclusions/$scope") }
+                    )
+                }
+                composable("settings_ai_exclusions/{scope}") {
+                    com.daybook.app.ui.settings.AiExclusionsScreen(
+                        onNavigateBack = { navController.popBackStack() }
                     )
                 }
                 composable("settings_app_lock") {
@@ -1013,14 +1069,13 @@ class MainActivity : FragmentActivity() {
                                 onOpenSession = goWorkoutSession,
                                 onOpenDetail = goWorkoutDetail
                             )
-                            WorkoutRoutes.LIBRARY -> AddExerciseScreen(
-                                mode = ExercisePickerMode.BROWSE,
+                            // Round B (§7.4) — repurposed nav slot: the exercise browser (BROWSE
+                            // mode) is no longer a bottom-nav destination; this now renders the
+                            // Health tab. The browser itself survives in PICK mode only (unchanged
+                            // call sites: the live session's / routine editor's "+ Add Exercise").
+                            WorkoutRoutes.LIBRARY -> com.daybook.app.ui.workout.health.HealthTabScreen(
                                 contentPadding = scaffoldPadding,
-                                onPick = {},
-                                onBack = null,
-                                onNewExercise = goNewExercise,
-                                onEditExercise = goEditExercise,
-                                onOpenHistory = {}
+                                onOpenSettings = goWorkoutSettings
                             )
                             else -> WorkoutHomeScreen(
                                 contentPadding = scaffoldPadding,
@@ -1148,3 +1203,7 @@ private fun beastPopExit(reduceMotion: Boolean) =
 
 /** SharedPreferences key: the exact-alarm dialog has been shown once (ask-once, like notifications). */
 private const val KEY_ALARM_PERMISSION_ASKED = "alarm_permission_asked"
+
+/** Synthetic Beast Mode nav route id for the "Today" item — never a real NavHost destination and
+ *  never a member of [WorkoutRoutes.NAV]; `onSelectBeastRoute` special-cases it to `exitBeastMode()`. */
+private const val BEAST_TODAY_ROUTE = "beast_today"

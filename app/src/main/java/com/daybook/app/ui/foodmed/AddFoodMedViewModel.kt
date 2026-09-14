@@ -148,6 +148,7 @@ class AddFoodMedViewModel @Inject constructor(
                 item?.let { i ->
                     occurrenceScheduler.cancelTask(i.id)
                     foodMedRepository.delete(i)
+                    foodMedRepository.database.aiExclusionDao().deleteForItem(i.id)
                     _successMessage.value = "Reminder deleted"
                 }
             } catch (e: Exception) {

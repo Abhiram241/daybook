@@ -156,6 +156,7 @@ class AddHabitViewModel @Inject constructor(
                 habit?.let { h ->
                     occurrenceScheduler.cancelHabit(h.id)
                     habitRepository.delete(h)
+                    habitRepository.database.aiExclusionDao().deleteForItem(h.id)
                     _successMessage.value = "Habit deleted successfully"
                 }
             } catch (e: Exception) {

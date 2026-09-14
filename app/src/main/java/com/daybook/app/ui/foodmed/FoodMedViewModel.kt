@@ -198,6 +198,7 @@ class FoodMedViewModel @Inject constructor(
             item?.let { i ->
                 occurrenceScheduler.cancelTask(i.id)
                 foodMedRepository.delete(i)
+                foodMedRepository.database.aiExclusionDao().deleteForItem(i.id)
             }
         }
     }

@@ -18,6 +18,11 @@ import com.daybook.app.data.model.WorkoutExercise
 import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.data.model.WorkoutRoutine
 import com.daybook.app.data.model.WorkoutRoutineExercise
+import com.daybook.app.data.model.HealthDay
+import com.daybook.app.data.model.HealthSession
+import com.daybook.app.data.model.HealthWeightReading
+import com.daybook.app.data.model.DailyReportAiSummary
+import com.daybook.app.data.model.AiExclusion
 import com.daybook.app.util.enums.Converters
 
 @Database(entities = [
@@ -36,8 +41,20 @@ import com.daybook.app.util.enums.Converters
     WorkoutExercise::class,
     WorkoutSet::class,
     WorkoutRoutine::class,
-    WorkoutRoutineExercise::class
-], version = 23, exportSchema = true)
+    WorkoutRoutineExercise::class,
+    // B2: Round B (Health Connect). Two new tables, 100% additive (MIGRATION_23_24, §7.2).
+    HealthDay::class,
+    HealthSession::class,
+    // HEALTH_VITALS_RICHNESS_PLAN.md V1: one new table, 100% additive (MIGRATION_24_25, §2).
+    HealthWeightReading::class,
+    // DAILY_REPORT_PLAN.md §3.6: one new table, 100% additive (MIGRATION_25_26).
+    DailyReportAiSummary::class,
+    // BEAST_HEALTH_REPORT_AUDIT.md M4: one new nullable column on that table, 100% additive
+    // (MIGRATION_27_28).
+    // AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §2.2: one new table, 100% additive
+    // (MIGRATION_28_29). Device-only — never in DATA_TABLES/BackupModel/ContentHash (S2).
+    AiExclusion::class
+], version = 30, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun habitDao(): HabitDao
@@ -52,4 +69,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun exerciseDao(): ExerciseDao
     abstract fun workoutDao(): WorkoutDao
     abstract fun routineDao(): RoutineDao
+    abstract fun healthDao(): HealthDao
+    abstract fun dailyReportAiSummaryDao(): DailyReportAiSummaryDao
+    abstract fun aiExclusionDao(): AiExclusionDao
 }

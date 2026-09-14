@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
@@ -145,18 +146,36 @@ class WorkoutSessionViewModel @Inject constructor(
     // (only the derived `restRemainingSeconds` below is); `restRemainingSeconds` makes it fully
     // redundant as a public surface, so only the private backing field remains.
     private val _restEndsAt = MutableStateFlow<Long?>(null)
-    private val _restRemainingSeconds = MutableStateFlow<Long?>(null)
-    val restRemainingSeconds = _restRemainingSeconds.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            while (true) {
-                val ends = _restEndsAt.value
-                _restRemainingSeconds.value = ends?.let { ((it - System.currentTimeMillis()) / 1000).coerceAtLeast(0) }
-                kotlinx.coroutines.delay(1000)
+    // L3 fix — this used to be a `MutableStateFlow` fed by an unconditional `while(true)` 1Hz
+    // ticker that ran for the ViewModel's entire lifetime regardless of whether a rest timer was
+    // even running (recomputing `null` once a second forever the rest of the time). Now a flow
+    // DERIVED from `_restEndsAt` via `flatMapLatest`: the actual per-second ticking coroutine only
+    // exists while a rest timer is active, and is cancelled the instant `_restEndsAt` changes
+    // (a new rest started, `cancelRest()`, or this loop's own M7 expiry-clear below).
+    val restRemainingSeconds: kotlinx.coroutines.flow.StateFlow<Long?> = _restEndsAt.flatMapLatest { ends ->
+        if (ends == null) {
+            kotlinx.coroutines.flow.flowOf<Long?>(null)
+        } else {
+            kotlinx.coroutines.flow.flow {
+                while (true) {
+                    val remaining = ((ends - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                    emit(remaining)
+                    if (remaining <= 0L) {
+                        // M7 fix — this never nulled `_restEndsAt` once the countdown hit zero, so
+                        // the "Rest over" pill (visibility keyed on `restRemaining != null`) stuck
+                        // on the stats card permanently, through every subsequent set, until the
+                        // user re-opened the rest sheet and picked "Off". Hold "Rest over" for a
+                        // few seconds (so the expiry is still noticeable) then clear it.
+                        kotlinx.coroutines.delay(REST_OVER_HOLD_MILLIS)
+                        _restEndsAt.value = null
+                        break
+                    }
+                    kotlinx.coroutines.delay(1000)
+                }
             }
         }
-    }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun startRest(seconds: Int) { _restEndsAt.value = System.currentTimeMillis() + seconds * 1000L }
     fun cancelRest() { _restEndsAt.value = null }
@@ -238,5 +257,11 @@ class WorkoutSessionViewModel @Inject constructor(
     fun discard() = safeLaunch {
         repo.discardSession(sessionId)
         _finished.value = true
+    }
+
+    private companion object {
+        /** M7 — how long the "Rest over" pill stays up after the countdown hits zero, before it's
+         *  cleared so it doesn't stick around for the rest of the session. */
+        const val REST_OVER_HOLD_MILLIS = 5_000L
     }
 }

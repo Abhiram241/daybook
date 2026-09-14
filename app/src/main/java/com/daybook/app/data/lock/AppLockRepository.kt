@@ -46,9 +46,41 @@ class AppLockRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
-    private val prefs: SharedPreferences = openPrefs(context)
+    // BUG_AUDIT_REPORT.md §1.13: a PLAINTEXT (never encrypted — it holds one boolean, never a PIN
+    // or hash) tripwire file, separate from `prefs`, so the app can tell "lock was deliberately
+    // turned off" from "the encrypted file became unreadable". A keystore master key can be
+    // invalidated by Android itself (the user changes/removes their device lock-screen credential);
+    // when that happens `openPrefs` silently falls back to a fresh, empty file, `KEY_ENABLED`
+    // defaults to false there, and the app used to open straight to Today with the lock silently
+    // off. This file survives that — it's a different file, never touched by the keystore.
+    private val tripwirePrefs: SharedPreferences =
+        context.getSharedPreferences(FILE_TRIPWIRE, Context.MODE_PRIVATE)
+    private val prefsResult: Pair<SharedPreferences, Boolean> = run {
+        var fellBack = false
+        val p = openPrefs(context) { fellBack = true }
+        p to fellBack
+    }
+    private val prefs: SharedPreferences = prefsResult.first
+    private val usedFallback: Boolean = prefsResult.second
 
-    private val _isEnabled = MutableStateFlow(prefs.getBoolean(KEY_ENABLED, false))
+    /**
+     * True when the encrypted prefs were unreadable/missing AND the tripwire says the lock was
+     * previously armed — i.e. the lock is broken, not disabled. The UI should treat this as "lock
+     * could not be verified, set a new PIN" rather than opening straight to Today.
+     */
+    private val lockWasCompromisedOnOpen: Boolean = usedFallback && tripwirePrefs.getBoolean(KEY_LOCK_WAS_ENABLED, false)
+
+    private val _lockCompromised = MutableStateFlow(lockWasCompromisedOnOpen)
+    val lockCompromised: StateFlow<Boolean> = _lockCompromised.asStateFlow()
+
+    // Fail CLOSED, not open: if the tripwire says the lock was enabled but the encrypted store
+    // that would prove it is gone, treat the lock as still enabled and still locked (a hasPin()
+    // check against the now-empty fallback file will be false, so the lock screen must route the
+    // user to "set a new PIN" rather than accept one — see `lockCompromised`), instead of silently
+    // seeding both to false the way the pre-fix code did.
+    private val _isEnabled = MutableStateFlow(
+        if (lockWasCompromisedOnOpen) true else prefs.getBoolean(KEY_ENABLED, false)
+    )
     val isEnabled: StateFlow<Boolean> = _isEnabled.asStateFlow()
 
     private val _timeout = MutableStateFlow(LockTimeout.fromNameOrDefault(prefs.getString(KEY_TIMEOUT, null)))
@@ -74,7 +106,12 @@ class AppLockRepository @Inject constructor(
             .putString(KEY_PIN_HASH, hash)
             .putBoolean(KEY_ENABLED, true)
             .apply()
+        // §1.13: the tripwire is set alongside KEY_ENABLED, in the separate plaintext file the
+        // keystore can't invalidate. This call is also how a compromised lock gets recovered — the
+        // user set a fresh PIN, so the compromise no longer applies.
+        tripwirePrefs.edit().putBoolean(KEY_LOCK_WAS_ENABLED, true).apply()
         _isEnabled.value = true
+        _lockCompromised.value = false
         // Enabling from inside the app must not immediately black out the screen the user is on.
         _isLocked.value = false
         return true
@@ -93,8 +130,12 @@ class AppLockRepository @Inject constructor(
             .remove(KEY_BG_AT)
             .putBoolean(KEY_ENABLED, false)
             .apply()
+        // §1.13: an explicit, successful disable clears the tripwire too — this is the one path
+        // that's allowed to turn the lock off; a silently-broken keystore must not look like this.
+        tripwirePrefs.edit().putBoolean(KEY_LOCK_WAS_ENABLED, false).apply()
         _isEnabled.value = false
         _isLocked.value = false
+        _lockCompromised.value = false
         return true
     }
 
@@ -165,14 +206,17 @@ class AppLockRepository @Inject constructor(
          * story, not a disclosed PIN. Bricking the app on such a device would be worse.
          */
         const val FILE_FALLBACK = "daybook_lock_plain"
+        /** §1.13 — the plaintext tripwire file. Holds exactly one boolean, never a PIN or hash. */
+        const val FILE_TRIPWIRE = "daybook_lock_tripwire"
 
         const val KEY_ENABLED = "enabled"
         const val KEY_PIN_HASH = "pin_hash"
         const val KEY_PIN_SALT = "pin_salt"
         const val KEY_TIMEOUT = "timeout"
         const val KEY_BG_AT = "last_backgrounded_at"
+        const val KEY_LOCK_WAS_ENABLED = "lock_was_enabled"
 
-        fun openPrefs(context: Context): SharedPreferences = runCatching {
+        fun openPrefs(context: Context, onFallback: () -> Unit = {}): SharedPreferences = runCatching {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
@@ -185,6 +229,8 @@ class AppLockRepository @Inject constructor(
             ) as SharedPreferences
         }.getOrElse {
             Log.w(TAG, "EncryptedSharedPreferences unavailable — falling back to plain prefs", it)
+            com.daybook.app.util.recordUnhandledException(it)
+            onFallback()
             context.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
         }
     }

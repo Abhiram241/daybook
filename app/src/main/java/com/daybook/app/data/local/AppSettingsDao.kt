@@ -145,4 +145,29 @@ interface AppSettingsDao {
 
     @Query("UPDATE app_settings SET default_exercise_group = :v WHERE id = 1")
     suspend fun updateDefaultExerciseGroup(v: String?)
+
+    // ------------------------------------------------------------------------ Round B (DB v24)
+    @Query("UPDATE app_settings SET health_tab_last_mode = :v WHERE id = 1")
+    suspend fun updateHealthTabLastMode(v: Int)
+
+    // ------------------------------------------------------------ DAILY_REPORT_REDESIGN_PLAN.md (DB v27)
+    @Query("UPDATE app_settings SET ai_meta_prompt = :v WHERE id = 1")
+    suspend fun updateAiMetaPrompt(v: String)
+
+    @Query("UPDATE app_settings SET ai_report_categories = :v WHERE id = 1")
+    suspend fun updateAiReportCategories(v: String)
+
+    @Query("UPDATE app_settings SET ai_chat_range_start = :start, ai_chat_range_end = :end WHERE id = 1")
+    suspend fun updateAiChatRange(start: String, end: String)
+
+    @Query("UPDATE app_settings SET ai_chat_categories = :v WHERE id = 1")
+    suspend fun updateAiChatCategories(v: String)
+
+    // ---------------------------------------------- AI_CHAT..._PLAN.md §1 (DB v29)
+    @Query("UPDATE app_settings SET ai_chat_meta_prompt = :v WHERE id = 1")
+    suspend fun updateAiChatMetaPrompt(v: String)
+
+    // ---------------------------------------------- Health tab card visibility (DB v30)
+    @Query("UPDATE app_settings SET health_hidden_cards = :v WHERE id = 1")
+    suspend fun updateHealthHiddenCards(v: String)
 }

@@ -21,22 +21,25 @@ import javax.inject.Singleton
 class StorageUtils @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private fun newFileName(rangeStart: String? = null, rangeEnd: String? = null): String {
+    private fun newFileName(rangeStart: String? = null, rangeEnd: String? = null, beastMode: Boolean = false): String {
         // v0.5.3 Phase 6 (D2): a date-range export stamps the span into the filename so the file is
         // self-describing in the Downloads list, e.g. daybook-backup-2026-03-01_2026-03-31.json.
+        // B5a (§7.5.1) — the Beast Mode file gets its own "-beastmode-" infix so the two files are
+        // distinguishable at a glance in a downloads folder or a share sheet.
+        val prefix = if (beastMode) "daybook-beastmode-backup" else "daybook-backup"
         if (rangeStart != null && rangeEnd != null) {
-            return "daybook-backup-${rangeStart}_${rangeEnd}.json"
+            return "$prefix-${rangeStart}_${rangeEnd}.json"
         }
         val ts = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
-        return "daybook-backup-$ts.json"
+        return "$prefix-$ts.json"
     }
 
     /**
      * Writes [json] into the device's public Downloads folder so it is visible in
      * the Files app / any file manager. Returns a human-readable location string.
      */
-    fun saveExport(json: String, rangeStart: String? = null, rangeEnd: String? = null): String {
-        val filename = newFileName(rangeStart, rangeEnd)
+    fun saveExport(json: String, rangeStart: String? = null, rangeEnd: String? = null, beastMode: Boolean = false): String {
+        val filename = newFileName(rangeStart, rangeEnd, beastMode)
         val bytes = json.toByteArray()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -61,6 +64,49 @@ class StorageUtils @Inject constructor(
 
         // API 26–28: no MediaStore Downloads collection. Write to the app's shared
         // external files dir (no permission needed) and let the user use "Share backup".
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        if (!dir.exists()) dir.mkdirs()
+        val file = File(dir, filename)
+        file.writeBytes(bytes)
+        return file.absolutePath
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // User request ("export API keys and import them via JSON — that way it never hits the
+    // cloud") — a completely separate file family from `saveExport`/`writeShareFile` above.
+    // Never referenced by ExportImportRepository/CloudSyncRepository/BackupModel — see
+    // ui/settings/ApiKeysExport.kt's header comment.
+    // ---------------------------------------------------------------------------------------
+    private fun apiKeysFileName(): String {
+        val ts = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+        return "daybook-api-keys-$ts.json"
+    }
+
+    /** Same Downloads-folder / pre-Q-fallback logic as [saveExport], its own filename family. */
+    fun saveApiKeysExport(json: String): String {
+        val filename = apiKeysFileName()
+        val bytes = json.toByteArray()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                put(MediaStore.Downloads.MIME_TYPE, "application/json")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Could not create file in Downloads")
+            resolver.openOutputStream(uri).use { out ->
+                requireNotNull(out) { "Could not open Downloads file for writing" }
+                out.write(bytes)
+            }
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return "Downloads/$filename"
+        }
+
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         if (!dir.exists()) dir.mkdirs()
         val file = File(dir, filename)

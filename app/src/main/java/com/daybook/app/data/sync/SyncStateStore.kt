@@ -43,6 +43,18 @@ class SyncStateStore @Inject constructor(@ApplicationContext ctx: Context) {
         set(v) = prefs.edit().putString(KEY_DEFS_HASH, v).apply()
 
     /**
+     * User request (Firestore sync for AI meta-prompts + privacy settings) — hash of the
+     * `aiSettings`/`aiExclusions`/`healthHiddenCards` parent-doc fields we last pushed OR pulled.
+     * A separate field from [definitionsHash] on purpose: [Definitions] (habits/reminders) and this
+     * AI-settings bundle change independently, and folding them into one hash would force a full
+     * parent-doc rewrite whenever EITHER changed, defeating the whole point of `defsChanged`'s
+     * "don't touch the parent doc for a pure history write" guard.
+     */
+    var aiSettingsHash: String?
+        get() = prefs.getString(KEY_AI_SETTINGS_HASH, null)
+        set(v) = prefs.edit().putString(KEY_AI_SETTINGS_HASH, v).apply()
+
+    /**
      * v0.5.1 §N: `{"2026-08":"ab12…","2026-07":"cd34…"}` — the content hash of each month doc as
      * we last pushed or pulled it. One JSON string in one pref key; still SharedPreferences, still
      * no Room, so the DB stays at v7.
@@ -134,6 +146,7 @@ class SyncStateStore @Inject constructor(@ApplicationContext ctx: Context) {
         prefs.edit()
             .remove(KEY_LAST_HASH)          // v0.5's combined hash — dead, removed for good measure
             .remove(KEY_DEFS_HASH)
+            .remove(KEY_AI_SETTINGS_HASH)
             .remove(KEY_MONTH_HASHES)       // a new account must not inherit these (§N)
             .remove(KEY_HYDRATED_MONTHS)
             .remove(KEY_LAST_REV)
@@ -160,6 +173,7 @@ class SyncStateStore @Inject constructor(@ApplicationContext ctx: Context) {
         /** v0.5's definitions+days hash for the single-blob layout. Dead; only ever removed now. */
         const val KEY_LAST_HASH = "sync_last_hash"
         const val KEY_DEFS_HASH = "sync_definitions_hash"
+        const val KEY_AI_SETTINGS_HASH = "sync_ai_settings_hash"
         const val KEY_MONTH_HASHES = "sync_month_hashes"
         const val KEY_HYDRATED_MONTHS = "sync_hydrated_months"
         const val KEY_LAST_REV = "sync_last_revision"

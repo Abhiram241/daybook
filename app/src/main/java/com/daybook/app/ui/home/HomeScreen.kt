@@ -27,7 +27,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,7 +120,6 @@ fun HomeScreen(
         // v0.5.3 Phase 5 (§3.9) — one shared duration with WeekStrip's SizeTransform.
         calendarAnimating = true; delay(Motion.calendarExpandMillis.toLong()); calendarAnimating = false
     }
-    var undoToken by remember { mutableStateOf(0) }
     var remindersFilterOpen by remember { mutableStateOf(false) }
     // UX overhaul item 7 — "Group by type" is session state (survives rotation), never an
     // app_settings column. Off = the Overdue / Now / Later / Done time axis.
@@ -265,7 +266,7 @@ fun HomeScreen(
                         onSkip = { viewModel.skipItem(item) },
                         onSnooze = { viewModel.snoozeItem(item) },
                         onReply = { text, flag, suspected, outside -> viewModel.replyToItem(item, text, flag, suspected, outside) },
-                        onUndo = { viewModel.revertItem(item); undoToken++ },
+                        onUndo = { viewModel.revertItem(item) },
                         onOpenEntryEdit = { item.occurrenceId?.let { onOpenEntryEdit(it) } },
                         onOpenJournal = openJournal,
                         onOpenHabitJournalChat = openHabitJournalChat,
@@ -315,7 +316,9 @@ fun HomeScreen(
             },
         )
 
-        UndoSnack(token = undoToken, text = undoFeedback ?: "Undone")
+        // BUG_AUDIT_REPORT.md §1.10: token now comes from the ViewModel and only bumps once real
+        // feedback lands, instead of on tap — see HomeViewModel.UndoFeedback's comment.
+        UndoSnack(token = undoFeedback?.token ?: 0, text = undoFeedback?.message ?: "Undone")
     }
 }
 
@@ -537,6 +540,7 @@ private fun ReminderCard(
     onOpenHabitJournalEdit: () -> Unit,
     onOpen: () -> Unit
 ) {
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
     var sheetOpen by remember { mutableStateOf(false) }
     // Journal Mode: a resolved intake / journal text reply is editable (not undoable). Its status
     // tap and the sheet's "Edit" row open the entry editor; journal vs intake picks the route.
@@ -655,7 +659,16 @@ private fun ReminderCard(
                     }
                 }
                 item.canComplete -> {
-                    CircleIconButton(icon = MI.Filled.Check, contentDescription = "Complete", onClick = onComplete, style = CircleStyle.Success, size = IconButtonSize.Md.dp)
+                    CircleIconButton(
+                        icon = MI.Filled.Check,
+                        contentDescription = "Complete",
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onComplete()
+                        },
+                        style = CircleStyle.Success,
+                        size = IconButtonSize.Md.dp
+                    )
                     Spacer(Modifier.width(6.dp))
                     CircleIconButton(icon = MI.Filled.MoreVert, contentDescription = "More", onClick = { sheetOpen = true }, size = IconButtonSize.Sm.dp)
                 }
@@ -726,6 +739,7 @@ private fun ReminderCard(
                         contentDescription = "Log",
                         onClick = {
                             if (draft.isNotBlank()) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onReply(
                                     draft.trim(),
                                     if (item.isFood) flagDraft else null,
@@ -785,8 +799,14 @@ private fun ReminderCard(
             when (label) {
                 "Edit" -> SheetAction(MI.Filled.Edit, "Edit", onClick = editEntry)
                 "Undo" -> SheetAction(DaybookIcons.Unarchive, "Undo", onClick = onUndo)
-                "Snooze" -> SheetAction(DaybookIcons.Clock, "Snooze", onClick = onSnooze)
-                else -> SheetAction(MI.Filled.Close, "Skip", onClick = onSkip)
+                "Snooze" -> SheetAction(DaybookIcons.Clock, "Snooze", onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onSnooze()
+                })
+                else -> SheetAction(MI.Filled.Close, "Skip", onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onSkip()
+                })
             }
         }
     )

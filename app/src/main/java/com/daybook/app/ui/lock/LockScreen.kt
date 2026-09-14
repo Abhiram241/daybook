@@ -67,6 +67,7 @@ fun LockScreen(
     val wrong by vm.wrongPin.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val userName by vm.userName.collectAsStateWithLifecycle()
+    val lockCompromised by vm.lockCompromised.collectAsStateWithLifecycle()
     var biometricOffered by rememberSaveable { mutableStateOf(false) }
     val biometricsAvailable = remember { activity != null && vm.biometricsAvailable() }
 
@@ -124,10 +125,23 @@ fun LockScreen(
         )
         Spacer(Modifier.height(20.dp))
         Text(
-            "Enter your PIN",
+            if (lockCompromised) "Set a new PIN" else "Enter your PIN",
             style = MaterialTheme.typography.headlineSmall,
             color = DaybookColors.TextPrimary
         )
+        // BUG_AUDIT_REPORT.md §1.13: the encrypted PIN store became unreadable (most commonly:
+        // the device lock-screen credential was changed or removed, which invalidates the keystore
+        // key backing it) — there is nothing left to verify a PIN against, so route the user to set
+        // a fresh one instead of showing a pad that can never succeed.
+        if (lockCompromised) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Your app lock couldn't be verified after a device security change. Enter 4 digits to set a new PIN.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DaybookColors.TextMuted,
+                textAlign = TextAlign.Center
+            )
+        }
         Spacer(Modifier.height(24.dp))
 
         Row(

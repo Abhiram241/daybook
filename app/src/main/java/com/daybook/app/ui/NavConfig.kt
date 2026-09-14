@@ -10,8 +10,13 @@ package com.daybook.app.ui
  */
 object NavConfig {
 
-    /** The three known top-level route ids, in their canonical order. */
-    val ALL_ROUTES = listOf("home", "routines", "foodmed")
+    /**
+     * The known top-level route ids, in their canonical order. DAILY_REPORT_PLAN.md §2 appended
+     * `"report"` last (not inserted) — that's what makes it the rightmost tab for free, since
+     * `toggleRoute`'s re-insertion logic and every rendering loop already iterate `ALL_ROUTES` in
+     * order.
+     */
+    val ALL_ROUTES = listOf("home", "routines", "foodmed", "report")
 
     /**
      * Resolve the stored `nav_tabs` CSV to the list of visible route ids:

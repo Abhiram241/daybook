@@ -47,6 +47,13 @@ class LockViewModel @Inject constructor(
     val isLocked: StateFlow<Boolean> = repo.isLocked
     val timeout: StateFlow<LockTimeout> = repo.timeout
 
+    // BUG_AUDIT_REPORT.md §1.13: true when the lock was on but its encrypted store became
+    // unreadable (e.g. the device lock-screen credential changed, invalidating the keystore key).
+    // `hasPin()` is false in this state (the fallback file is empty), so the PIN pad can't verify
+    // anything — the lock screen should route the user to set a new PIN instead of showing a pad
+    // that can never succeed.
+    val lockCompromised: StateFlow<Boolean> = repo.lockCompromised
+
     /** Digits entered so far on the pad, 0..4. The screen renders one filled dot per digit. */
     private val _entry = MutableStateFlow("")
     val entry: StateFlow<String> = _entry.asStateFlow()
@@ -80,7 +87,12 @@ class LockViewModel @Inject constructor(
         val pin = _entry.value
         safeLaunch {
             _busy.value = true
-            val ok = repo.verifyPin(pin)
+            // BUG_AUDIT_REPORT.md §1.13: when the lock is compromised there is no PIN hash to
+            // verify against (the fallback file is empty) — verifyPin() would always fail and the
+            // user could never get back in. Treat the 4 digits as a NEW PIN instead, which both
+            // recovers the lock and clears the compromised flag (see AppLockRepository.enable()).
+            val wasCompromised = repo.lockCompromised.value
+            val ok = if (wasCompromised) repo.enable(pin) else repo.verifyPin(pin)
             _busy.value = false
             if (ok) {
                 _entry.value = ""

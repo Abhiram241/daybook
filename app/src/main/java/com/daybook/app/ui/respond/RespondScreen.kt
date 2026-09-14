@@ -19,6 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.foundation.background
@@ -56,6 +58,7 @@ fun RespondScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     // ROUND 0: confirm-first for the destructive "Reset to not logged" action below.
     var confirmReset by remember { mutableStateOf(false) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
 
     LaunchedEffect(state.done, state.missing) {
         if (state.done || state.missing) onDone()
@@ -219,7 +222,14 @@ fun RespondScreen(
                     } else {
                         PrimaryButton(text = "Complete", onClick = { vm.complete() }, enabled = !state.busy)
                         Spacer(Modifier.height(8.dp))
-                        GhostButton(text = "Skip", onClick = { vm.skip() }, modifier = Modifier.fillMaxWidth())
+                        GhostButton(
+                            text = "Skip",
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                vm.skip()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
                 RespondViewModel.Kind.INTAKE -> {
@@ -231,7 +241,14 @@ fun RespondScreen(
                     if (!state.isEdit) {
                         // Journal Mode: Skip is meaningless while editing an existing log.
                         Spacer(Modifier.height(8.dp))
-                        GhostButton(text = "Skip", onClick = { vm.skip() }, modifier = Modifier.fillMaxWidth())
+                        GhostButton(
+                            text = "Skip",
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                vm.skip()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     } else {
                         // ROUND 0: reset a mistaken log back to an unanswered slot. `vm.undo()`
                         // already existed and already called revertFoodMed; it was simply

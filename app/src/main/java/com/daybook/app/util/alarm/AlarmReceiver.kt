@@ -78,22 +78,32 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun fireBatch() {
-        val unresolved = scheduler.unresolvedBatchOccurrencesFor(System.currentTimeMillis())
-        if (unresolved.isEmpty()) {
-            Log.i(TAG, "fireBatch: nothing unresolved — posting nothing")   // SD-e
-        } else {
-            val titles = unresolved.mapNotNull { db.habitDao().getHabitById(it.habitId)?.title }
-            notificationUtils.showBatchHabitNotification(unresolved.size, titles)
-            // One SHOWN event per occurrence, guarded exactly like fireHabit (v0.5.1 §H).
-            unresolved.forEach { occ ->
-                if (!db.habitEventDao().hasShownEvent(occ.id)) {
-                    // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the SHOWN event.
-                    db.habitEventDao().insert(HabitEvent(occurrenceId = occ.id, action = Event.Action.SHOWN, itemId = occ.habitId))
+        // BUG_AUDIT_REPORT.md §1.12: armBatchCheckIn() used to be the last statement, not a
+        // `finally` — a throw above it (a SQLiteException on the event inserts, an 8s timeout on a
+        // syncMutex-contended unresolvedBatchOccurrencesFor) skipped the re-arm, and since this is
+        // a single self-rearming alarm chain, missing one link meant no BATCH habit ever got
+        // another check-in notification until something else called syncAll(). Wrapping the body
+        // so the re-arm runs in `finally` restores the "either way" invariant the old comment here
+        // only stated, rather than enforced.
+        try {
+            val unresolved = scheduler.unresolvedBatchOccurrencesFor(System.currentTimeMillis())
+            if (unresolved.isEmpty()) {
+                Log.i(TAG, "fireBatch: nothing unresolved — posting nothing")   // SD-e
+            } else {
+                val titles = unresolved.mapNotNull { db.habitDao().getHabitById(it.habitId)?.title }
+                notificationUtils.showBatchHabitNotification(unresolved.size, titles)
+                // One SHOWN event per occurrence, guarded exactly like fireHabit (v0.5.1 §H).
+                unresolved.forEach { occ ->
+                    if (!db.habitEventDao().hasShownEvent(occ.id)) {
+                        // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the SHOWN event.
+                        db.habitEventDao().insert(HabitEvent(occurrenceId = occ.id, action = Event.Action.SHOWN, itemId = occ.habitId))
+                    }
                 }
             }
+        } finally {
+            // Re-arm for tomorrow either way, so the chain never breaks.
+            scheduler.armBatchCheckIn()
         }
-        // Re-arm for tomorrow either way, so the chain never breaks.
-        scheduler.armBatchCheckIn()
     }
 
     private suspend fun fireHabit(occurrenceId: String, isRefire: Boolean) {

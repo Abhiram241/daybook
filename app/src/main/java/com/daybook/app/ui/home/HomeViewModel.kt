@@ -739,11 +739,17 @@ class HomeViewModel @Inject constructor(
         Occurrence.Status.PENDING -> if (isPastDay && !backfillable) MISSED_LABEL else null
     }
 
+    // BUG_AUDIT_REPORT.md §1.4 fix: the backfill branches used to discard their LogResult entirely
+    // — a rejection ("that month isn't loaded yet") looked identical to a save. Route a rejection
+    // into the same `_undoFeedback` snack the undo path already uses; a plain (non-backfill) path
+    // still returns Unit, so there's nothing to report there.
     fun completeItem(item: HomeItem) = safeLaunch {
         when {
             !item.isHabit -> Unit
-            item.isBackfill -> occurrenceScheduler.backfillHabit(
-                item.detailId, item.scheduledEpoch, Occurrence.Status.COMPLETED, Event.Action.COMPLETED
+            item.isBackfill -> reportIfRejected(
+                occurrenceScheduler.backfillHabit(
+                    item.detailId, item.scheduledEpoch, Occurrence.Status.COMPLETED, Event.Action.COMPLETED
+                )
             )
             item.occurrenceId != null -> occurrenceScheduler.completeHabit(item.occurrenceId)
         }
@@ -751,16 +757,24 @@ class HomeViewModel @Inject constructor(
 
     fun skipItem(item: HomeItem) = safeLaunch {
         when {
-            item.isBackfill && item.isHabit -> occurrenceScheduler.backfillHabit(
-                item.detailId, item.scheduledEpoch, Occurrence.Status.SKIPPED, Event.Action.SKIPPED
+            item.isBackfill && item.isHabit -> reportIfRejected(
+                occurrenceScheduler.backfillHabit(
+                    item.detailId, item.scheduledEpoch, Occurrence.Status.SKIPPED, Event.Action.SKIPPED
+                )
             )
-            item.isBackfill -> occurrenceScheduler.backfillFoodMed(
-                item.detailId, item.scheduledEpoch, Occurrence.Status.SKIPPED, "", null, Event.Action.SKIPPED
+            item.isBackfill -> reportIfRejected(
+                occurrenceScheduler.backfillFoodMed(
+                    item.detailId, item.scheduledEpoch, Occurrence.Status.SKIPPED, "", null, Event.Action.SKIPPED
+                )
             )
             item.occurrenceId == null -> Unit
             item.isHabit -> occurrenceScheduler.skipHabit(item.occurrenceId)
             else -> occurrenceScheduler.skipFoodMed(item.occurrenceId)
         }
+    }
+
+    private fun reportIfRejected(result: com.daybook.app.data.LogResult) {
+        if (result is com.daybook.app.data.LogResult.Rejected) postUndoFeedback(result.reason)
     }
 
     fun snoozeItem(item: HomeItem) {
@@ -770,19 +784,35 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ROUND 0 (C9): revert must not fail silently.
-    private val _undoFeedback = MutableStateFlow<String?>(null)
-    val undoFeedback: StateFlow<String?> = _undoFeedback.asStateFlow()
+    // BUG_AUDIT_REPORT.md §1.10 fix: `_undoFeedback` used to be a bare `String?` shown by a token
+    // the SCREEN bumped synchronously on tap (`onUndo = { viewModel.revertItem(item); undoToken++ }`)
+    // — before the suspend revert even ran. That meant (a) the first undo always showed the literal
+    // "Undone" default regardless of outcome, since the real message landed after the 2.6s window
+    // had already started, and (b) a second undo could show the FIRST attempt's stale text until
+    // the new value arrived. The token now lives here and only bumps when real feedback lands.
+    data class UndoFeedback(val token: Int, val message: String)
+    private val _undoFeedback = MutableStateFlow<UndoFeedback?>(null)
+    val undoFeedback: StateFlow<UndoFeedback?> = _undoFeedback.asStateFlow()
+    private var undoFeedbackSeq = 0
+    private fun postUndoFeedback(message: String) {
+        undoFeedbackSeq += 1
+        _undoFeedback.value = UndoFeedback(undoFeedbackSeq, message)
+    }
 
     /** v0.5.3 item 1: one-tap undo of a resolved reminder back to a blank PENDING slot. */
     fun revertItem(item: HomeItem) {
         val occ = item.occurrenceId ?: return
         safeLaunch {
+            // `.isSuccess` is true even when revertHabit/revertFoodMed took a `?: return@withLock`
+            // no-op on a missing occurrence row — reporting "Undone" over that no-op is still open
+            // (would need revertHabit/revertFoodMed to return a real result; several other call
+            // sites depend on their current Unit signature, so left as a known gap rather than
+            // widening this fix's blast radius).
             val ok = runCatching {
                 if (item.isHabit) occurrenceScheduler.revertHabit(occ)
                 else occurrenceScheduler.revertFoodMed(occ)
             }.isSuccess
-            _undoFeedback.value = undoFeedbackFor(ok)
+            postUndoFeedback(undoFeedbackFor(ok))
         }
     }
 
@@ -798,12 +828,16 @@ class HomeViewModel @Inject constructor(
         val outside = outsideFood?.takeIf { item.isFood }
         when {
             item.isHabit -> Unit
-            item.isBackfill -> occurrenceScheduler.backfillFoodMed(
-                item.detailId, item.scheduledEpoch, Occurrence.Status.LOGGED, responseText.trim(), null,
-                Event.Action.REPLIED, redFlag = flag, suspectedFood = suspected, outsideFood = outside
+            item.isBackfill -> reportIfRejected(
+                occurrenceScheduler.backfillFoodMed(
+                    item.detailId, item.scheduledEpoch, Occurrence.Status.LOGGED, responseText.trim(), null,
+                    Event.Action.REPLIED, redFlag = flag, suspectedFood = suspected, outsideFood = outside
+                )
             )
-            item.occurrenceId != null -> occurrenceScheduler.logFoodMed(
-                item.occurrenceId, responseText, redFlag = flag, suspectedFood = suspected, outsideFood = outside
+            item.occurrenceId != null -> reportIfRejected(
+                occurrenceScheduler.logFoodMed(
+                    item.occurrenceId, responseText, redFlag = flag, suspectedFood = suspected, outsideFood = outside
+                )
             )
         }
     }

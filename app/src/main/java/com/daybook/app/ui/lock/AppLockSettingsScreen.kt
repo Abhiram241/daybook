@@ -21,7 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -74,6 +76,7 @@ fun AppLockSettingsScreen(
     var flow by remember { mutableStateOf<LockFlow?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var timeoutSheet by remember { mutableStateOf(false) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
 
     fun clear() { flow = null; error = null }
 
@@ -123,6 +126,7 @@ fun AppLockSettingsScreen(
                 subtitle = if (enabled) "On" else "Off",
                 // v0.5.3 Phase 5 (§5.16) — the whole row toggles the switch, matching SortSheet.ArchivedRow.
                 onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     error = null
                     if (!enabled) flow = LockFlow.EnableSetPin else beginDisable()
                 },
@@ -130,6 +134,7 @@ fun AppLockSettingsScreen(
                     Switch(
                         checked = enabled,
                         onCheckedChange = { on ->
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             error = null
                             if (on) flow = LockFlow.EnableSetPin else beginDisable()
                         },

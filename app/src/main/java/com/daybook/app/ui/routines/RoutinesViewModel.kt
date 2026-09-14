@@ -236,6 +236,9 @@ class RoutinesViewModel @Inject constructor(
             habit?.let { h ->
                 occurrenceScheduler.cancelHabit(h.id)
                 habitRepository.delete(h)
+                // AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §2.2 — an exclusion points at
+                // this habit's id; deleting the habit must not leave an orphaned row behind.
+                habitRepository.database.aiExclusionDao().deleteForItem(h.id)
             }
         }
     }

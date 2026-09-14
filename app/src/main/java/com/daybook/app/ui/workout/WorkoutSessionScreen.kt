@@ -1,5 +1,6 @@
 package com.daybook.app.ui.workout
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,22 +45,30 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.onFocusEvent
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -68,7 +79,10 @@ import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.columnsFor
 import com.daybook.app.data.workout.formatElapsed
 import com.daybook.app.data.workout.formatVolume
+import com.daybook.app.data.workout.formatWeight
 import com.daybook.app.data.workout.isPersonalRecord
+import com.daybook.app.data.workout.kgToLb
+import com.daybook.app.data.workout.lbToKg
 import com.daybook.app.ui.components.BackHeader
 import com.daybook.app.ui.components.BottomSheetMenu
 import com.daybook.app.ui.components.CircleIconButton
@@ -101,10 +115,16 @@ import com.daybook.app.ui.workout.beast.RingStat
 import com.daybook.app.ui.workout.beast.StatGridTile
 import com.daybook.app.ui.workout.beast.muscleTint
 import com.daybook.app.ui.workout.beast.prCelebration
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 
 private val REST_OPTIONS = linkedMapOf(0 to "Off", 30 to "30s", 60 to "60s", 90 to "90s", 120 to "2m", 180 to "3m", 300 to "5m")
+
+// Bug fix round 2 — how much extra room `EditableSetCell`'s bring-into-view request reserves
+// below a focused field, so it clears the floating Discard/Finish bar (`BeastStickyBar`) and not
+// just the keyboard. Matches the 120dp trailing spacer the exercise list already appends after
+// its last item for the same reason (see the `item { ... Spacer(height = 120.dp) }` block above),
+// so a field in the very last exercise card has exactly that much real scroll room to use.
+private val STICKY_BAR_CLEARANCE = 120.dp
 
 /**
  * A6b (§3.7.1) — the live log, the richest screen in Round A.
@@ -285,10 +305,24 @@ fun WorkoutSessionScreen(
                 itemsIndexed(state.blocks, key = { _, it -> it.block.id }) { index, blockUi ->
                     ExerciseBlockCard(
                         blockUi = blockUi,
+                        weightUnit = weightUnit,
                         onNotesChange = { viewModel.setExerciseNotes(blockUi.block.id, it) },
                         onRestClick = { restSheetForBlock = blockUi.block.id },
                         onAddSet = { viewModel.addSet(blockUi.block.id, blockUi.block.exerciseId) },
-                        onToggleComplete = { viewModel.toggleSetComplete(it) },
+                        onToggleComplete = { setId ->
+                            // H8 fix — completing a set is the trigger the per-block rest timer was
+                            // built for; previously the only way to start it was re-opening the rest
+                            // picker sheet. `set.completedAt == null` here means the tap is about to
+                            // MARK the set complete (toggleSetComplete flips it after this reads).
+                            val wasIncomplete = blockUi.sets.firstOrNull { s -> s.id == setId }?.completedAt == null
+                            viewModel.toggleSetComplete(setId)
+                            val rest = blockUi.block.restSeconds
+                            if (wasIncomplete) {
+                                if (rest != null && rest > 0) viewModel.startRest(rest)
+                            } else {
+                                viewModel.cancelRest()
+                            }
+                        },
                         onUpdateWeight = { setId, v -> viewModel.updateSetWeight(setId, v) },
                         onUpdateReps = { setId, v -> viewModel.updateSetReps(setId, v) },
                         onUpdateDuration = { setId, v -> viewModel.updateSetDuration(setId, v) },
@@ -467,6 +501,7 @@ private fun FinishFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
 @Composable
 private fun ExerciseBlockCard(
     blockUi: BlockUi,
+    weightUnit: WeightUnit,
     onNotesChange: (String) -> Unit,
     onRestClick: () -> Unit,
     onAddSet: () -> Unit,
@@ -509,13 +544,16 @@ private fun ExerciseBlockCard(
             )
             // §2.9 — up/down move buttons: the previously-dead `WorkoutRepository.reorderExercises`
             // wired up, matching RoutineEditScreen's own reorder affordance.
+            // User feedback round — these read as too small next to the enlarged set-complete
+            // toggle below; bumped from 32.dp to the app-wide `CircleIconButton` default (44.dp,
+            // already used by the unlabeled "More" button on the same row) for visual consistency.
             CircleIconButton(
                 icon = Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
-                onClick = onMoveUp, enabled = canMoveUp, size = 32.dp
+                onClick = onMoveUp, enabled = canMoveUp, size = 44.dp
             )
             CircleIconButton(
                 icon = Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
-                onClick = onMoveDown, enabled = canMoveDown, size = 32.dp
+                onClick = onMoveDown, enabled = canMoveDown, size = 44.dp
             )
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
         }
@@ -524,6 +562,12 @@ private fun ExerciseBlockCard(
             value = notesText,
             onValueChange = { notesText = it },
             label = null, placeholder = "Add notes here…",
+            // User feedback round — this rendered as a hardcoded dark `SurfaceElevated` box that
+            // clashed against the card's own muscle-group tint (e.g. Rose), reading as a harsh,
+            // attention-grabbing black rectangle for what should be a quiet, optional field.
+            // Passing the card's own `tint` makes it use `tint.fillRaised`/`onFill`/`accent`
+            // instead, so it reads as a recessed area of the same card rather than a foreign block.
+            tint = tint,
             modifier = Modifier.onFocusChanged { state ->
                 if (notesWasFocused && !state.isFocused) onNotesChange(notesText)
                 notesWasFocused = state.isFocused
@@ -545,7 +589,7 @@ private fun ExerciseBlockCard(
         }
         Spacer(Modifier.height(8.dp))
         SetTable(
-            blockUi = blockUi, tint = tint, onToggleComplete = onToggleComplete,
+            blockUi = blockUi, tint = tint, weightUnit = weightUnit, onToggleComplete = onToggleComplete,
             onUpdateWeight = onUpdateWeight, onUpdateReps = onUpdateReps,
             onUpdateDuration = onUpdateDuration, onUpdateDistance = onUpdateDistance,
             onDeleteSet = onDeleteSet
@@ -559,6 +603,7 @@ private fun ExerciseBlockCard(
 private fun SetTable(
     blockUi: BlockUi,
     tint: com.daybook.app.ui.theme.CardTint,
+    weightUnit: WeightUnit,
     onToggleComplete: (String) -> Unit,
     onUpdateWeight: (String, Float?) -> Unit,
     onUpdateReps: (String, Int?) -> Unit,
@@ -573,6 +618,7 @@ private fun SetTable(
     // now a deliberate long-press on its SET number, opening the same bottom-sheet-menu pattern
     // the block header's own "More" overflow already uses.
     var deleteSetTarget by remember(blockUi.block.id) { mutableStateOf<String?>(null) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
             columns.forEach { c ->
@@ -581,7 +627,7 @@ private fun SetTable(
                 // each label over its own column (matching the centered body cells below) is what
                 // actually separates them.
                 Text(
-                    columnLabel(c), style = DaybookText.Caption, color = DaybookColors.TextMuted,
+                    columnLabel(c, weightUnit), style = DaybookText.Caption, color = DaybookColors.TextMuted,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
@@ -593,15 +639,62 @@ private fun SetTable(
             // deletion could shift every later row's position and mis-attribute its PR pulse to
             // the wrong set. `key(s.id)` gives each row's subtree its own remembered slot.
             key(s.id) {
-            val isPr = s.completedAt != null && isPersonalRecord(s, blockUi.best, blockUi.trackingMode)
             val prevForSet = blockUi.previous[s.setNumber]
+            val completed = s.completedAt != null
+            // Bug fix round 3 (coordinator-confirmed) — `EditableSetCell` only commits typed text
+            // to the DB (and so to `s.weightKg`/`s.reps`/etc.) on focus-loss, by design. Evaluating
+            // `isPersonalRecord` straight off `s` therefore judged the PR badge/highlight against
+            // the OLD, already-committed number while the user was still mid-keystroke on a new
+            // one — the badge could show (or fail to show) a PR that plainly didn't match the
+            // digits on screen until the field lost focus and re-committed.
+            //
+            // Fix: mirror each PR-relevant cell's LIVE (uncommitted) text up to this row via
+            // `EditableSetCell`'s `onTextChange`, and evaluate against a "candidate" `WorkoutSet`
+            // built from that live text where it parses, falling back to the last COMMITTED value
+            // (`s.<field>`) whenever the live text is blank/unparsable — the same "bad input ->
+            // null -> falls back" shape `onCommit`'s own `toFloatOrNull()/toIntOrNull()` already
+            // uses, so a cleared/ambiguous field reverts to the true committed state rather than
+            // ever crashing or silently zeroing a PR check. The commit-on-blur persistence timing
+            // itself is untouched — this only changes what the badge/highlight are computed from.
+            // C1 fix — the WEIGHT cell is now shown/edited in the user's `weightUnit`, so its live
+            // text is in that unit; seed and reconvert through `kgToLb`/`lbToKg` to keep this
+            // (kg-space) candidate consistent with the committed `s.weightKg` column.
+            var liveWeightText by remember { mutableStateOf(formatEditableNumber(displayWeight(s.weightKg, weightUnit))) }
+            var liveRepsText by remember { mutableStateOf(s.reps?.toString() ?: "") }
+            var liveDurationText by remember { mutableStateOf(s.durationSeconds?.toString() ?: "") }
+            var liveDistanceText by remember { mutableStateOf(formatEditableNumber(s.distanceMeters?.let { it / 1000f })) }
+            val candidateSet = s.copy(
+                weightKg = liveWeightText.toFloatOrNull()?.let { storedWeightKg(it, weightUnit) } ?: s.weightKg,
+                reps = liveRepsText.toIntOrNull() ?: s.reps,
+                durationSeconds = liveDurationText.toIntOrNull() ?: s.durationSeconds,
+                // DISTANCE is edited/displayed in km (matches the cell below) but stored in metres.
+                distanceMeters = liveDistanceText.toFloatOrNull()?.let { it * 1000f } ?: s.distanceMeters
+            )
+            val isPr = completed && isPersonalRecord(candidateSet, blockUi.best, blockUi.trackingMode)
+            // Screenshot-confirmed fix — `tint.fillRaised` alone read as almost no different from
+            // the block's own resting background, so a completed set barely registered at a
+            // glance. Still the block's own muscle tint (§3.5/§4.2's "no flat green wash" call
+            // stands), just at a strength that actually reads as "done": accent-tinted fill,
+            // animated in the instant `completedAt` flips from null so the transition itself
+            // draws the eye, plus a solid accent bar down the row's left edge for a highlight that
+            // survives even if the fill tint is close to the block colour on a given tint/theme.
+            val rowBg by animateColorAsState(
+                if (completed) tint.accent.copy(alpha = 0.22f) else Color.Transparent,
+                animationSpec = Motion.softSpring(),
+                label = "setRowBg"
+            )
+            val edgeBarColor = tint.accent
             Row(
                 Modifier
                     .fillMaxWidth()
-                    // §3.5/§4.2 — a completed set's highlight is now the block's own muscle tint
-                    // (still clearly "done" at a glance) instead of a flat green alpha wash; the
-                    // one-shot celebration pulse plays only the instant a set becomes a PR.
-                    .then(if (s.completedAt != null) Modifier.background(tint.fillRaised) else Modifier)
+                    .background(rowBg)
+                    .then(
+                        if (completed) {
+                            Modifier.drawBehind {
+                                drawRect(color = edgeBarColor, size = size.copy(width = 3.dp.toPx()))
+                            }
+                        } else Modifier
+                    )
                     .prCelebration(trigger = isPr)
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -635,29 +728,50 @@ private fun SetTable(
                                     }
                                 }
                             }
-                            SetColumn.PREVIOUS -> Text(formatPrevious(prevForSet), style = DaybookText.Caption, color = DaybookColors.TextMuted)
+                            // User feedback round — bumping this to CardSubtitle (14sp, kept per
+                            // user's "as expected" confirmation) made longer values like
+                            // "20.0kg × 12" wrap to a second line inside this equal-weight column,
+                            // unlike every other single-line cell in the row. Force single line
+                            // with ellipsis truncation rather than reverting the size.
+                            SetColumn.PREVIOUS -> Text(
+                                formatPrevious(prevForSet, weightUnit),
+                                style = DaybookText.CardSubtitle,
+                                color = DaybookColors.TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false
+                            )
                             // Item 4 (Workout UI fixes plan, LOCKED) — these four columns used to
                             // be plain read-only Text (the bug: a new set could only ever be
                             // marked complete, never actually filled in). Now a compact numeric
                             // table-cell field, saving via column-scoped commits (§2.13) on
                             // focus-loss (not per-keystroke, per the decided fix).
                             SetColumn.WEIGHT -> EditableSetCell(
-                                initialValue = formatEditableNumber(s.weightKg),
+                                // C1 fix — was hard-coded to kg regardless of `weightUnit`; the
+                                // cell now displays/accepts values in the user's chosen unit and
+                                // converts back to kg on commit so `workout_sets.weight_kg` keeps
+                                // meaning kilograms no matter what the user typed.
+                                initialValue = formatEditableNumber(displayWeight(s.weightKg, weightUnit)),
                                 keyboardType = KeyboardType.Decimal,
-                                placeholder = "kg",
-                                onCommit = { text -> onUpdateWeight(s.id, text.toFloatOrNull()) }
+                                placeholder = if (weightUnit == WeightUnit.LB) "lb" else "kg",
+                                onCommit = { text ->
+                                    onUpdateWeight(s.id, text.toFloatOrNull()?.let { storedWeightKg(it, weightUnit) })
+                                },
+                                onTextChange = { liveWeightText = it }
                             )
                             SetColumn.REPS -> EditableSetCell(
                                 initialValue = s.reps?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "reps",
-                                onCommit = { text -> onUpdateReps(s.id, text.toIntOrNull()) }
+                                onCommit = { text -> onUpdateReps(s.id, text.toIntOrNull()) },
+                                onTextChange = { liveRepsText = it }
                             )
                             SetColumn.DURATION -> EditableSetCell(
                                 initialValue = s.durationSeconds?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "sec",
-                                onCommit = { text -> onUpdateDuration(s.id, text.toIntOrNull()) }
+                                onCommit = { text -> onUpdateDuration(s.id, text.toIntOrNull()) },
+                                onTextChange = { liveDurationText = it }
                             )
                             SetColumn.DISTANCE -> EditableSetCell(
                                 // Displayed/edited in km (matches `formatPrevious`'s convention);
@@ -665,14 +779,56 @@ private fun SetTable(
                                 initialValue = formatEditableNumber(s.distanceMeters?.let { it / 1000f }),
                                 keyboardType = KeyboardType.Decimal,
                                 placeholder = "km",
-                                onCommit = { text -> onUpdateDistance(s.id, text.toFloatOrNull()?.let { it * 1000f }) }
+                                onCommit = { text -> onUpdateDistance(s.id, text.toFloatOrNull()?.let { it * 1000f }) },
+                                onTextChange = { liveDistanceText = it }
                             )
-                            SetColumn.COMPLETE -> CircleIconButton(
-                                icon = Icons.Filled.Check, contentDescription = "Complete set",
-                                onClick = { onToggleComplete(s.id) },
-                                style = if (s.completedAt != null) CircleStyle.Success else CircleStyle.Ghost,
-                                size = 32.dp
-                            )
+                            // Reference-screenshot fix — the old `CircleIconButton` toggle
+                            // (32/36dp circle) read as a small, tentative tap target next to a
+                            // reference app's large filled-square checkbox. Swapped to a
+                            // rounded-square target (`AppShapes.tile`, the same shape convention
+                            // `IconTile`/`TintPicker` swatches already use elsewhere) at a
+                            // meaningfully bigger 46dp. A raw solid `Success` fill clashed against
+                            // an exercise card's own accent tint (e.g. Rose/Lavender cards), so the
+                            // completed state instead reuses the same muted mint tonal look already
+                            // used by the Volume/Sets stat tiles above, which reads as "confident"
+                            // without fighting the surrounding card color. Row-level green highlight
+                            // above is untouched.
+                            SetColumn.COMPLETE -> {
+                                val completeInteraction = remember { MutableInteractionSource() }
+                                val completePressed by completeInteraction.collectIsPressedAsState()
+                                val completeScale by animateFloatAsState(
+                                    if (completePressed) 0.92f else 1f, Motion.pressSpring(), label = "setCompleteScale"
+                                )
+                                val toggleSize = 46.dp
+                                val mintTint = CardTints.Mint
+                                val completeBg by animateColorAsState(
+                                    if (completed) mintTint.fillRaised else DaybookColors.SurfaceElevated,
+                                    label = "setCompleteBg"
+                                )
+                                val completeBorder = if (completed) mintTint.accent.copy(alpha = 0.4f) else DaybookColors.Hairline
+                                val completeFg = if (completed) mintTint.accent else DaybookColors.TextPrimary
+                                Box(
+                                    modifier = Modifier
+                                        .graphicsLayer { scaleX = completeScale; scaleY = completeScale }
+                                        .size(toggleSize)
+                                        .clip(AppShapes.tile)
+                                        .background(completeBg)
+                                        .border(1.dp, completeBorder, AppShapes.tile)
+                                        .clickableImpl(completeInteraction) {
+                                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            onToggleComplete(s.id)
+                                        }
+                                        .semantics { contentDescription = "Complete set" },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Check,
+                                        contentDescription = null,
+                                        tint = completeFg,
+                                        modifier = Modifier.size(toggleSize * 0.6f)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -714,7 +870,15 @@ private fun EditableSetCell(
     // column header. A per-column unit hint, shown only while the cell is empty (same convention
     // `DaybookTextField`'s own `placeholder` uses), makes each field self-explanatory on its own.
     placeholder: String,
-    onCommit: (String) -> Unit
+    onCommit: (String) -> Unit,
+    // Bug fix round 3 — mirrors this cell's live (not-yet-committed) text up to the set-row level,
+    // on every change, for whichever cell governs the current tracking mode's PR-relevant value(s)
+    // (see `SetTable`'s `candidateSet` above). Fired from a `LaunchedEffect(text)` below rather
+    // than from `onValueChange` directly so it reflects `text`'s true current value regardless of
+    // WHY it changed — a keystroke, or the `remember(initialValue)` reset when a fresh committed
+    // value arrives from Room. Defaults to a no-op so every other (non-PR-relevant) caller is
+    // unaffected.
+    onTextChange: (String) -> Unit = {}
 ) {
     var text by remember(initialValue) { mutableStateOf(initialValue) }
     var wasFocused by remember { mutableStateOf(false) }
@@ -729,37 +893,75 @@ private fun EditableSetCell(
     DisposableEffect(Unit) {
         onDispose { if (wasFocusedState.value) onCommitState.value(textState.value) }
     }
-    // Bug fix — this screen's cells had no bring-into-view request of their own; on a session
-    // with several sets, focusing one of the lower rows' KG/REPS/etc. cells left it sitting right
-    // under (or fully behind) the keyboard with no scroll to reveal it, since `imePadding()` on
-    // the root only reserves space, it doesn't reposition the focused child. Requesting it
-    // explicitly — after a short delay so the IME's own resize animation has settled — makes the
-    // list scroll the focused cell above the keyboard reliably.
+    LaunchedEffect(text) { onTextChange(text) }
+    // Bug fix round 2 (screen-recording) — the original fix (a single `bringIntoView()` call
+    // after a flat `delay(250)`) wasn't reliable: on a real device the IME's own resize
+    // animation — especially with a tall system keyboard like Gboard's suggestion-strip toolbar,
+    // which adds real height on top of the key rows — can easily run longer than 250ms. That
+    // race had two visible symptoms in the recording: (1) the fixed delay sometimes fired the
+    // single `bringIntoView()` call MID-animation, against layout coordinates that were still
+    // sliding as `imePadding()` on the root Box kept resizing after the call had already
+    // finished, so the field settled back under the keyboard once the resize caught up; and
+    // (2) because it was a one-shot call instead of tracking the animation, the LazyColumn could
+    // jump to a stale scroll position and then jump again when the resize completed a moment
+    // later — the "sticky bar overlapping oddly" jump in the video.
+    //
+    // Fix: drive `bringIntoView()` off the SAME animated value that drives `imePadding()` itself
+    // — `WindowInsets.ime`'s bottom inset — instead of a guessed duration. `collectLatest` means
+    // every intermediate frame of the IME's resize animation cancels the previous (now-stale)
+    // scroll request and re-issues it against the current inset, so this cell is chased into view
+    // in lockstep with the keyboard for the whole animation; the LAST emission (once the inset
+    // stops changing) is always the one that actually completes, landing the field in its final,
+    // correct position with no separate settle step needed.
+    //
+    // Second fix: `bringIntoView()` with no `Rect` only guarantees the field's own tiny bounds
+    // clear the *keyboard* — the sticky Discard/Finish bar (`BeastStickyBar`, a ~96dp overlay:
+    // ~50dp Finish/Discard row + its own 24dp top / 12dp bottom padding) is a separate overlay on
+    // top of the LazyColumn, not something the list's own viewport math knows to avoid. A field
+    // could clear the keyboard and still land right behind that bar. Passing a [Rect] that
+    // extends STICKY_BAR_CLEARANCE below the field's own measured bounds asks the scrollable
+    // parent to keep that much extra room clear too — the same 120dp margin the list's own
+    // trailing spacer already budgets for this bar, so it's guaranteed to have that much scroll
+    // room even for a field in the very last exercise card.
     val bringIntoViewRequester = remember { BringIntoViewRequester() }
-    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var fieldSize by remember { mutableStateOf(IntSize.Zero) }
+    var isFocused by remember { mutableStateOf(false) }
+    val imeInsets = WindowInsets.ime
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            snapshotFlow { imeInsets.getBottom(density) }
+                .collectLatest {
+                    val clearancePx = with(density) { STICKY_BAR_CLEARANCE.toPx() }
+                    val rect = Rect(
+                        left = 0f,
+                        top = 0f,
+                        right = fieldSize.width.toFloat(),
+                        bottom = fieldSize.height.toFloat() + clearancePx
+                    )
+                    bringIntoViewRequester.bringIntoView(rect)
+                }
+        }
+    }
     BasicTextField(
         value = text,
         onValueChange = { text = it },
         singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium.copy(
+        // User feedback round — enlarged alongside the set-complete toggle (46.dp) so the row
+        // doesn't read as one big target next to several small ones: bigger cell + larger digits.
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
             color = DaybookColors.TextPrimary, textAlign = TextAlign.Center
         ),
         cursorBrush = SolidColor(LocalAccent.current),
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Next),
         modifier = Modifier
-            .width(52.dp)
+            .width(58.dp)
             .clip(AppShapes.field)
             .background(DaybookColors.SurfaceElevated)
-            .padding(horizontal = 6.dp, vertical = 6.dp)
+            .padding(horizontal = 6.dp, vertical = 10.dp)
+            .onSizeChanged { fieldSize = it }
             .bringIntoViewRequester(bringIntoViewRequester)
-            .onFocusEvent { state ->
-                if (state.isFocused) {
-                    scope.launch {
-                        delay(250)
-                        bringIntoViewRequester.bringIntoView()
-                    }
-                }
-            }
+            .onFocusEvent { state -> isFocused = state.isFocused }
             .onFocusChanged { state ->
                 if (wasFocused && !state.isFocused) onCommit(text)
                 wasFocused = state.isFocused
@@ -796,29 +998,50 @@ private fun formatEditableNumber(v: Float?): String {
 // hint only lived in the empty-cell placeholder, so it vanished the moment a value was entered
 // and there was nothing to tell "12" apart from "12 seconds" vs "12 km". DURATION/DISTANCE now
 // follow the same "header IS the unit" convention as WEIGHT, for every tracking mode.
-private fun columnLabel(c: SetColumn): String = when (c) {
+// C1 fix — the stored `weight_kg` column always means kilograms; these two are the single
+// choke point that converts to/from whatever unit the WEIGHT cell is currently displaying, so a
+// typed value round-trips correctly (type 135 in lb mode -> ~61.23 kg stored -> displays as 135
+// lb again) instead of being persisted verbatim regardless of unit.
+private fun displayWeight(kg: Float?, unit: WeightUnit): Float? =
+    kg?.let { if (unit == WeightUnit.LB) kgToLb(it) else it }
+
+private fun storedWeightKg(typed: Float, unit: WeightUnit): Float =
+    if (unit == WeightUnit.LB) lbToKg(typed) else typed
+
+private fun columnLabel(c: SetColumn, weightUnit: WeightUnit): String = when (c) {
     SetColumn.SET -> "SET"
     SetColumn.PREVIOUS -> "PREV"
-    SetColumn.WEIGHT -> "KG"
+    SetColumn.WEIGHT -> if (weightUnit == WeightUnit.LB) "LB" else "KG"
     SetColumn.REPS -> "REPS"
     SetColumn.DURATION -> "SEC"
     SetColumn.DISTANCE -> "KM"
     SetColumn.COMPLETE -> "✓"
 }
 
-private fun formatPrevious(s: WorkoutSet?): String {
+private fun formatPrevious(s: WorkoutSet?, weightUnit: WeightUnit): String {
     if (s == null) return "–"
     val w = s.weightKg
     val r = s.reps
+    // User feedback round — bumping this column's text style to CardSubtitle (14sp) made the old
+    // "20.0kg × 12" formatting (padded spaces, an always-shown ".0") wrap to a second line inside
+    // the column's equal-weight width. Ellipsis-truncating that string hides the rep count
+    // entirely, which is just as bad as wrapping, so the format itself is tightened first: reuse
+    // `formatEditableNumber`'s trailing-".0" trim (20.0 -> "20") and drop the spaces around "×"
+    // (matches the compact convention header labels already use). This alone fits the common
+    // case on one line; `maxLines = 1` + ellipsis at the call site is kept only as a safety net
+    // for genuinely long values (e.g. 3-digit reps with a decimal weight).
+    // C1 fix — this used to hardcode "kg" regardless of `weightUnit`, unlike every other weight
+    // display in the app (`formatWeight`). Reuse `formatWeight` for the weight portion so PREVIOUS
+    // matches the unit the WEIGHT cell above it is showing.
     return when {
-        w != null && r != null -> "${w}kg × $r"
+        w != null && r != null -> "${formatWeight(w, weightUnit).replace(" ", "")}×$r"
         r != null -> "$r"
         // §3 fix — a weight-only PREVIOUS (weight logged, reps left blank — reachable from a Hevy
         // import or from filling only the KG cell) used to fall through every branch to "–" even
         // though the data was there.
-        w != null -> "${w}kg"
+        w != null -> formatWeight(w, weightUnit).replace(" ", "")
         s.durationSeconds != null -> "${s.durationSeconds}s"
-        s.distanceMeters != null -> "${s.distanceMeters / 1000f}km"
+        s.distanceMeters != null -> "${formatEditableNumber(s.distanceMeters / 1000f)}km"
         else -> "–"
     }
 }

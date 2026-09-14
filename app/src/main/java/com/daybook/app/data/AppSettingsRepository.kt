@@ -106,6 +106,24 @@ class AppSettingsRepository @Inject constructor(
     suspend fun setWorkoutTodayCardEnabled(v: Boolean) { ensureRow(); database.appSettingsDao().updateWorkoutTodayCardEnabled(v) }
     suspend fun setDefaultExerciseGroup(v: String?) { ensureRow(); database.appSettingsDao().updateDefaultExerciseGroup(v) }
 
+    // --------------------------------------------------------------------------- Round B (DB v24)
+    suspend fun setHealthTabLastMode(v: Int) { ensureRow(); database.appSettingsDao().updateHealthTabLastMode(v) }
+
+    // ------------------------------------------------------------ DAILY_REPORT_REDESIGN_PLAN.md (DB v27)
+    suspend fun setAiMetaPrompt(v: String) { ensureRow(); database.appSettingsDao().updateAiMetaPrompt(v) }
+    suspend fun setAiReportCategories(v: String) { ensureRow(); database.appSettingsDao().updateAiReportCategories(v) }
+    suspend fun setAiChatCategories(v: String) { ensureRow(); database.appSettingsDao().updateAiChatCategories(v) }
+    /** §7.4's "Reset to today" action writes both columns together, atomically. */
+    suspend fun setChatRange(start: String, end: String) {
+        ensureRow()
+        database.appSettingsDao().updateAiChatRange(start, end)
+    }
+
+    // ------------------------------------------------- AI_CHAT..._PLAN.md §1 (DB v29)
+    suspend fun setAiChatMetaPrompt(v: String) { ensureRow(); database.appSettingsDao().updateAiChatMetaPrompt(v) }
+
+    suspend fun setHealthHiddenCards(v: String) { ensureRow(); database.appSettingsDao().updateHealthHiddenCards(v) }
+
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =
         database.appSettingsDao().observeSettings().map { it ?: AppSettings() }

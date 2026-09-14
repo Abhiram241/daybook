@@ -15,7 +15,8 @@ import java.util.*
 data class TaskNextMillis(val taskId: String, val nextMillis: Long)
 
 /** v0.5.3 Phase 3 (A4) — see [com.daybook.app.data.local.HabitSchedStatus]; food/med side. */
-data class FoodMedSchedStatus(val scheduledFor: Long, val status: Occurrence.Status)
+// BUG_AUDIT_REPORT.md §1.7 — see HabitSchedStatus's identical comment.
+data class FoodMedSchedStatus(val scheduledFor: Long, val status: Occurrence.Status, val localDate: String?)
 
 @Dao
 interface FoodMedOccurrenceDao {
@@ -166,7 +167,7 @@ interface FoodMedOccurrenceDao {
     suspend fun getTerminalPageForTask(taskId: String, limit: Int, offset: Int): List<FoodMedOccurrence>
 
     /** v0.5.3 Phase 3 (A4) — see [HabitOccurrenceDao.getScheduledStatusesForHabit]; food/med side. */
-    @Query("SELECT scheduled_for AS scheduledFor, status AS status FROM food_med_occurrences WHERE task_id = :taskId")
+    @Query("SELECT scheduled_for AS scheduledFor, status AS status, local_date AS localDate FROM food_med_occurrences WHERE task_id = :taskId")
     suspend fun getScheduledStatusesForTask(taskId: String): List<FoodMedSchedStatus>
 
     /** Full wipe — used only by the backup restore path (L4), inside its transaction. */

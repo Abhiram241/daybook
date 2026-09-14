@@ -125,7 +125,7 @@ fun FloatingPillNav(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val reduceMotion = LocalReduceMotion.current
-                val haptics = LocalHapticFeedback.current
+                val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
                 val longPressTimeoutMillis = LocalViewConfiguration.current.longPressTimeoutMillis
                 val rampMillis = remember(longPressTimeoutMillis) { longPressRampMillis(longPressTimeoutMillis) }
 
@@ -199,7 +199,15 @@ fun FloatingPillNav(
                                         onClick = { onSelect(item.route) }
                                     )
                                 } else {
-                                    Modifier.clickableImpl(interaction) { onSelect(item.route) }
+                                    Modifier.clickableImpl(interaction) {
+                                        // Polish pass — a subtle tick only on an actual tab switch,
+                                        // not on re-tapping the already-selected tab, so it stays
+                                        // out of the way of ordinary repeated navigation.
+                                        if (item.route != currentRoute) {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        }
+                                        onSelect(item.route)
+                                    }
                                 }
                             )
                             .padding(vertical = 8.dp),

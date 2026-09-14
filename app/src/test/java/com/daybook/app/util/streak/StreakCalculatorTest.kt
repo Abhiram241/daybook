@@ -345,8 +345,8 @@ class StreakCalculatorTest {
     fun `streaksFromScheduledStatuses treats LOGGED as done for the habit doneStatus COMPLETED`() {
         val today = LocalDate.now(ZoneId.systemDefault())
         val scheduled = listOf(
-            epochMillis(today, LocalTime.of(9, 0)) to Occurrence.Status.LOGGED,
-            epochMillis(today.minusDays(1), LocalTime.of(9, 0)) to Occurrence.Status.LOGGED
+            Triple(null, epochMillis(today, LocalTime.of(9, 0)), Occurrence.Status.LOGGED),
+            Triple(null, epochMillis(today.minusDays(1), LocalTime.of(9, 0)), Occurrence.Status.LOGGED)
         )
         val result = streaksFromScheduledStatuses(scheduled, Occurrence.Status.COMPLETED, today)
         assertEquals(2, result.currentStreak)

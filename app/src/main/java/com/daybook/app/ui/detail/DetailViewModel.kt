@@ -242,7 +242,11 @@ class DetailViewModel @Inject constructor(
         _canLoadMoreTerminal.value = terminalOccs.size == limit
         // The stats fold + streak maths still need the WHOLE history — a two-column projection,
         // no TimelineEvent allocation.
-        val schedStatuses = dao.getScheduledStatusesForHabit(habitId).map { it.scheduledFor to it.status }
+        val schedStatusRows = dao.getScheduledStatusesForHabit(habitId)
+        val schedStatuses = schedStatusRows.map { it.scheduledFor to it.status }
+        // BUG_AUDIT_REPORT.md §1.7: the streak fold gets the row's local_date too, so it buckets on
+        // the stored, timezone-stable column instead of recomputing from scheduledFor.
+        val streakInputs = schedStatusRows.map { Triple(it.localDate, it.scheduledFor, it.status) }
         val activity = habitRepository.database.habitEventDao()
             .getRecentActivityEventsForHabit(habitId, TIMELINE_LIMIT)
 
@@ -305,7 +309,7 @@ class DetailViewModel @Inject constructor(
         _stats.value = withContext(Dispatchers.Default) {
             computeStats(
                 schedStatuses,
-                streaksFromScheduledStatuses(schedStatuses, doneStatus, mode = mode, restDays = restDays),
+                streaksFromScheduledStatuses(streakInputs, doneStatus, mode = mode, restDays = restDays),
                 doneStatus
             )
         }
@@ -332,7 +336,9 @@ class DetailViewModel @Inject constructor(
         _canLoadMoreTerminal.value = terminalOccs.size == limit
         // The stats fold + streak maths still need the WHOLE history — a two-column projection,
         // no TimelineEvent allocation.
-        val schedStatuses = dao.getScheduledStatusesForTask(taskId).map { it.scheduledFor to it.status }
+        val schedStatusRows = dao.getScheduledStatusesForTask(taskId)
+        val schedStatuses = schedStatusRows.map { it.scheduledFor to it.status }
+        val streakInputs = schedStatusRows.map { Triple(it.localDate, it.scheduledFor, it.status) }
         val activity = foodMedRepository.database.foodMedEventDao()
             .getRecentActivityEventsForTask(taskId, TIMELINE_LIMIT)
 
@@ -397,7 +403,7 @@ class DetailViewModel @Inject constructor(
         _stats.value = withContext(Dispatchers.Default) {
             computeStats(
                 schedStatuses,
-                streaksFromScheduledStatuses(schedStatuses, Occurrence.Status.LOGGED, mode = mode, restDays = restDays),
+                streaksFromScheduledStatuses(streakInputs, Occurrence.Status.LOGGED, mode = mode, restDays = restDays),
                 Occurrence.Status.LOGGED
             )
         }

@@ -18,6 +18,31 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Round B (Health Connect, §6.1.8/§6.2) — the 12-type MVP read set, requested in one call.
+         Read-only: no health.WRITE_* permission is ever declared (§6.1.9/§6.3). None of §6.1.5's
+         seven cycle-tracking permissions are declared. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS"/>
+    <uses-permission android:name="android.permission.health.READ_SLEEP"/>
+    <uses-permission android:name="android.permission.health.READ_EXERCISE"/>
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE"/>
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE"/>
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED"/>
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED"/>
+    <uses-permission android:name="android.permission.health.READ_DISTANCE"/>
+    <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION"/>
+    <uses-permission android:name="android.permission.health.READ_WEIGHT"/>
+    <uses-permission android:name="android.permission.health.READ_HYDRATION"/>
+    <uses-permission android:name="android.permission.health.READ_NUTRITION"/>
+    <!-- Optional, requested separately (§5.1/§6.3); degrade gracefully if refused or rejected by
+         the alpha08 client (R4). -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"/>
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY"/>
+
+    <!-- Required so getSdkStatus() can see the provider on Android 13 and below (§6.2). -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
     <application
         android:name=".DaybookApplication"
         android:allowBackup="true"
@@ -47,6 +72,25 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Round B (§6.2) — the required Health Connect privacy-policy rationale activity, in
+             both its forms. Unconditional per the OS requirement even though nothing else about
+             Health Connect appears in the main app (§7.3) — it hosts no entry point of its own. -->
+        <activity android:name=".ui.workout.health.HealthPermissionsRationaleActivity"
+                  android:exported="true" android:theme="@style/Theme.Daybook">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+        <activity-alias android:name="ViewPermissionUsageActivity"
+                  android:exported="true"
+                  android:targetActivity=".ui.workout.health.HealthPermissionsRationaleActivity"
+                  android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <provider
             android:name="androidx.core.content.FileProvider"

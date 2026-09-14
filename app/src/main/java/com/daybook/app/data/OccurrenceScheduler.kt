@@ -725,19 +725,25 @@ class OccurrenceScheduler @Inject constructor(
      * acquire one. Written terminal-in-one-transaction: a row that was briefly PENDING could be
      * caught by `skipStaleForHabit` and silently overwritten.
      */
+    // BUG_AUDIT_REPORT.md §1.4 fix: used to return Unit with three silent `return@withLock` early
+    // exits, so `completeItem`/`skipItem` in HomeViewModel could never tell a rejection from a
+    // save. Now returns LogResult like its two siblings (backfillHabitJournal, backfillFoodMed).
     suspend fun backfillHabit(
         habitId: String,
         slotMillis: Long,
         status: Occurrence.Status,
         action: Event.Action
-    ) = syncMutex.withLock {
-        val habit = db.habitDao().getHabitById(habitId) ?: return@withLock
+    ): LogResult = syncMutex.withLock {
+        val habit = db.habitDao().getHabitById(habitId)
+            ?: return@withLock LogResult.Rejected("That habit no longer exists.")
         val date = DateTimeUtils.timestampToLocalDate(slotMillis)
         if (!canBackfill(date, LocalDate.now(), habit.createdAt, habit.activeDaysJson, habit.isArchived)) {
-            Log.w(TAG, "backfillHabit($habitId, $slotMillis): rejected by canBackfill"); return@withLock
+            Log.w(TAG, "backfillHabit($habitId, $slotMillis): rejected by canBackfill")
+            return@withLock LogResult.Rejected("That date can't be logged for this habit.")
         }
         if (!monthResident(date)) {
-            Log.w(TAG, "backfillHabit($habitId, $slotMillis): month not resident — refusing"); return@withLock
+            Log.w(TAG, "backfillHabit($habitId, $slotMillis): month not resident — refusing")
+            return@withLock LogResult.Rejected("That month isn't loaded yet — connect and retry.")
         }
         val id = occId(habitId, slotMillis)
         val now = System.currentTimeMillis()
@@ -758,6 +764,7 @@ class OccurrenceScheduler @Inject constructor(
             // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the event.
             db.habitEventDao().insert(HabitEvent(occurrenceId = id, action = action, itemId = habitId))
         }
+        LogResult.Success
     }
 
     /**

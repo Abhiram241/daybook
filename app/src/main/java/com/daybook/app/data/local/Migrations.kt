@@ -622,6 +622,70 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
  * which cannot happen via any prior migration) ever sees AMBER. The new table statement mirrors
  * Room's generated v23 schema for `app_settings` exactly.
  */
+/**
+ * v23 -> v24 — Round B (Health Connect, §7.2 of HEALTH_AND_WORKOUT_PLAN.md / §0.1's baseline
+ * correction: this is `MIGRATION_23_24`, NOT `MIGRATION_22_23` as stray earlier plan references
+ * say — `MIGRATION_22_23` above was already consumed by the shipped Beast-Mode-accent-default
+ * migration). Fully additive: two new tables (`health_days`, `health_sessions`) plus one new
+ * device-local `app_settings` column. No existing table, column or row is touched.
+ *
+ * Every `health_days` metric column is nullable with NO schema default (Ri3/R18) — a `NOT NULL
+ * DEFAULT 0` would destroy the difference between "no data" and "zero", exactly as it would on
+ * `workout_sets`.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `health_days` (" +
+                "`local_date` TEXT NOT NULL, " +
+                "`steps` INTEGER, `distance_meters` REAL, `active_calories` REAL, `total_calories` REAL, " +
+                "`resting_heart_rate` INTEGER, `avg_heart_rate` INTEGER, `min_heart_rate` INTEGER, " +
+                "`max_heart_rate` INTEGER, `sleep_minutes` INTEGER, `sleep_deep_minutes` INTEGER, " +
+                "`sleep_light_minutes` INTEGER, `sleep_rem_minutes` INTEGER, `sleep_awake_minutes` INTEGER, " +
+                "`sleep_start_millis` INTEGER, `sleep_end_millis` INTEGER, `spo2_percent` REAL, " +
+                "`weight_kg` REAL, `hydration_ml` REAL, `nutrition_calories` REAL, " +
+                "`nutrition_protein_grams` REAL, `nutrition_carbs_grams` REAL, `nutrition_fat_grams` REAL, " +
+                "`nutrition_source_app` TEXT, `updated_at` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`local_date`))"
+        )
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `health_sessions` (" +
+                "`id` TEXT NOT NULL, `local_date` TEXT NOT NULL, `exercise_type` INTEGER NOT NULL, " +
+                "`title` TEXT, `start_millis` INTEGER NOT NULL, `end_millis` INTEGER NOT NULL, " +
+                "`duration_minutes` INTEGER NOT NULL, `active_calories` REAL, `distance_meters` REAL, " +
+                "`avg_heart_rate` INTEGER, `source_app` TEXT, `updated_at` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_health_sessions_local_date` ON `health_sessions`(`local_date`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_health_sessions_start_millis` ON `health_sessions`(`start_millis`)")
+
+        // §7.4's Day/Range SegmentedControl memory — device-local, mirrors every other Beast-Mode
+        // preference. 0 = day view, 1 = aggregate view. A plain ADD COLUMN suffices here (unlike
+        // MIGRATION_22_23's rebuild) because this is a genuinely NEW column, not a retargeted
+        // DEFAULT on an existing one.
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_tab_last_mode INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * HEALTH_VITALS_RICHNESS_PLAN.md §2 — DB v24 -> v25. Fully additive: two new nullable columns on
+ * `health_days` (SpO2 min/max, same nullable-metric rule as MIGRATION_23_24) plus one new table,
+ * `health_weight_readings`, for the day's individual weight readings (§1).
+ */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE health_days ADD COLUMN spo2_min_percent REAL")
+        db.execSQL("ALTER TABLE health_days ADD COLUMN spo2_max_percent REAL")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `health_weight_readings` (" +
+                "`id` TEXT NOT NULL, `local_date` TEXT NOT NULL, `at_millis` INTEGER NOT NULL, " +
+                "`weight_kg` REAL NOT NULL, `source_app` TEXT, PRIMARY KEY(`id`))"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_health_weight_readings_local_date` ON `health_weight_readings`(`local_date`)")
+    }
+}
+
 val MIGRATION_22_23 = object : Migration(22, 23) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -697,5 +761,90 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
         )
         db.execSQL("DROP TABLE `app_settings`")
         db.execSQL("ALTER TABLE `app_settings_new` RENAME TO `app_settings`")
+    }
+}
+
+/**
+ * v25 -> v26: DAILY_REPORT_PLAN.md §3.6/§2. One new table, `daily_report_ai_summaries`, for the
+ * cached per-day AI summary — fully additive, no existing table touched.
+ *
+ * Also appends `",report"` to every existing row's `app_settings.nav_tabs` (unless already
+ * present) so an upgrading install sees the new fourth nav tab immediately, without silently
+ * reordering or dropping whatever tabs that row already had hidden/shown (§2 — the new tab is
+ * always appended last, never inserted).
+ */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `daily_report_ai_summaries` (" +
+                "`local_date` TEXT NOT NULL, `provider` TEXT NOT NULL, `model` TEXT NOT NULL, " +
+                "`summary_text` TEXT NOT NULL, `generated_at` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`local_date`))"
+        )
+        db.execSQL(
+            "UPDATE app_settings SET nav_tabs = " +
+                "COALESCE(nav_tabs, 'home,routines,foodmed') || ',report' " +
+                "WHERE nav_tabs NOT LIKE '%report%'"
+        )
+    }
+}
+
+/**
+ * v26 -> v27: DAILY_REPORT_REDESIGN_PLAN.md §8. Five additive columns on `app_settings`, no table
+ * rebuild, no existing row rewritten — all five are plain `ADD COLUMN`s with defaults, all
+ * DEVICE-LOCAL (NOT synced, NOT in BackupModel, NOT in ContentHash — same treatment as every
+ * app_settings column since v16):
+ *   ai_meta_prompt        — §2's free-text instruction prepended to report/chat prompts.
+ *   ai_report_categories  — §6's CSV toggle set for the one-shot AI Summary prompt.
+ *   ai_chat_range_start/end — §7.1's custom chat context date range ("" == not set / today only).
+ *   ai_chat_categories    — §7.1's SEPARATE CSV toggle set for chat's seeded context.
+ */
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_meta_prompt TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_report_categories TEXT NOT NULL DEFAULT 'WORKOUT,HEALTH,INTAKE,TODO'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_chat_range_start TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_chat_range_end TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_chat_categories TEXT NOT NULL DEFAULT 'WORKOUT,HEALTH,INTAKE,TODO'")
+    }
+}
+
+// BEAST_HEALTH_REPORT_AUDIT.md M4 — one new nullable column, 100% additive. Pre-existing rows get
+// NULL (SQLite's implicit default for a column with no NOT NULL constraint), which
+// `DailyReportAiSummary.settingsFingerprint` and the screen's staleness check both treat as
+// "unknown, so don't claim it's fresh" — no backfill value would be honest here since the
+// meta-prompt/categories active when those older rows were generated were never recorded.
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE daily_report_ai_summaries ADD COLUMN settings_fingerprint TEXT")
+    }
+}
+
+/**
+ * v28 -> v29: AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §1/§2. One additive column on
+ * `app_settings` (`ai_chat_meta_prompt`, copied from `ai_meta_prompt` per S3 so Chat keeps
+ * behaving exactly as before until the user edits the new Chat box) plus one new table
+ * (`ai_exclusions`) — both 100% additive, device-only (S2: never in DATA_TABLES/BackupModel/
+ * ContentHash).
+ */
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN ai_chat_meta_prompt TEXT NOT NULL DEFAULT ''")
+        db.execSQL("UPDATE app_settings SET ai_chat_meta_prompt = ai_meta_prompt")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS ai_exclusions (" +
+                "scope TEXT NOT NULL, kind TEXT NOT NULL, target_id TEXT NOT NULL, created_at INTEGER NOT NULL, " +
+                "PRIMARY KEY(scope, kind, target_id))"
+        )
+    }
+}
+
+/**
+ * User request (Health tab card visibility) — one additive column, DEVICE-LOCAL: NOT synced, NOT
+ * in BackupModel, NOT in ContentHash, same treatment as every app_settings column since v16.
+ */
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_hidden_cards TEXT NOT NULL DEFAULT ''")
     }
 }

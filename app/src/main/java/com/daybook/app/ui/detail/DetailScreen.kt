@@ -88,6 +88,11 @@ fun DetailScreen(
     val query by viewModel.query.collectAsStateWithLifecycle()
     // v0.5.3 Phase 3 (A4): older terminal timeline rows are paged in on demand.
     val canLoadMoreTerminal by viewModel.canLoadMoreTerminal.collectAsStateWithLifecycle()
+    // BUG_AUDIT_REPORT.md §1.9: isLoading/errorMessage were produced by the ViewModel but never
+    // collected anywhere on this screen — a failed loadItemDetails() (a SQLiteException, a corrupt
+    // qa_json) rendered as a silent blank screen, and a slow load looked identical to an empty item.
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val tint = CardTints.byId(itemId)
     val isHabit = itemType == "habit"
@@ -107,6 +112,24 @@ fun DetailScreen(
             // v0.5.3 Phase 4 (§4.1) — pinned back header carrying the compact title; §5.7 moves the
             // 64dp identity block into each tab's list so it scrolls with the content (UI Q6).
             BackHeader(title = itemTitle.ifBlank { "Details" }, onBack = onNavigateBack)
+
+            // BUG_AUDIT_REPORT.md §1.9: the only error surface on this screen — render it right
+            // under the header so it isn't missed, without disturbing the rest of the layout.
+            errorMessage?.let { message ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.screenH, vertical = Spacing.xs),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(message, style = DaybookText.CardSubtitle, color = DaybookColors.Danger)
+                }
+            }
+            if (isLoading && timelineEvents.isEmpty()) {
+                Box(Modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator(color = DaybookColors.TextPrimary)
+                }
+            }
 
             // v0.5.3 Phase 5 (§5.7 / backlog #21) — fade the History <-> Stats swap.
             val rmTab = LocalReduceMotion.current

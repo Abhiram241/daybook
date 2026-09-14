@@ -8,6 +8,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.WorkManager
+import com.daybook.app.data.HealthRepository
 import com.daybook.app.data.OccurrenceScheduler
 import com.daybook.app.data.sync.CloudSyncRepository
 import dagger.assisted.Assisted
@@ -27,7 +28,8 @@ class WindowRefreshWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val scheduler: OccurrenceScheduler,
-    private val cloudSync: CloudSyncRepository
+    private val cloudSync: CloudSyncRepository,
+    private val healthRepository: HealthRepository
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
@@ -35,6 +37,11 @@ class WindowRefreshWorker @AssistedInject constructor(
         // v0.5.3 Phase 1 (S3): month eviction now runs here (off the hot push path) — plus, in a
         // later phase, the retention sweep.
         runCatching { cloudSync.runMaintenance() }
+        // Round B (§6.3 cadence 2) — the daily Health Connect pull is folded into this existing
+        // worker rather than a new `HealthPullWorker` (C7 — one fewer scheduled job). Failure-inert
+        // and silent-but-visible: HealthRepository already records the outcome to its own status
+        // line (C9.4); a failure here must not fail the whole window-refresh pass.
+        runCatching { healthRepository.pullDaily() }
         Result.success()
     } catch (t: Throwable) {
         Log.e(TAG, "window refresh failed", t)

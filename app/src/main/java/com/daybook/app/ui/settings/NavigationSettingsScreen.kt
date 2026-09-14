@@ -50,7 +50,11 @@ fun ColumnScope.NavigationLayoutSections(
     // A landing tab that got hidden falls back to Today.
     val effectiveLanding = if (landing in visible) landing else "home"
 
-    val labelFor = mapOf("home" to "Today", "routines" to "Habits", "foodmed" to "Intake")
+    val labelFor = mapOf(
+        "home" to "Today", "routines" to "Habits", "foodmed" to "Intake",
+        // DAILY_REPORT_PLAN.md §2 — the fourth tab.
+        "report" to "Daily Report"
+    )
 
     SectionHeader("Layout", subtitle = "Which tab opens on launch, and which tabs show in the bottom bar.")
     SettingsGroup {
@@ -104,6 +108,12 @@ fun ColumnScope.NavigationLayoutSections(
                 label = "Show Intake tab",
                 checked = "foodmed" in visible,
                 onCheckedChange = { viewModel.setNavTabs(NavConfig.toggleRoute(navTabs, "foodmed")) }
+            )
+            HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
+            SettingsToggleRow(
+                label = "Show Daily Report tab",
+                checked = "report" in visible,
+                onCheckedChange = { viewModel.setNavTabs(NavConfig.toggleRoute(navTabs, "report")) }
             )
         }
     }

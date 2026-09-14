@@ -6,6 +6,10 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 
 /**
  * Date/time helpers. Was a `@Singleton` class whose every method forwarded to a companion
@@ -209,3 +213,17 @@ object DateTimeUtils {
         }
     }
 }
+
+/** BEAST_HEALTH_REPORT_AUDIT.md L6 fix — `LocalDate.now(zoneId)` evaluated straight inside a
+ *  `combine` lambda only re-runs when some OTHER source in that combine emits, so a screen left
+ *  open across midnight kept highlighting yesterday (e.g. `WeekStrip`, a date picker's `maxDate`)
+ *  until something unrelated changed. A slow-ticking (once a minute is plenty for a date, not a
+ *  clock) `.distinctUntilChanged()` flow makes "today" its own combine source that emits exactly
+ *  once when the calendar day actually rolls over, whichever screen is open. */
+fun currentDateFlow(zoneId: ZoneId): Flow<LocalDate> =
+    flow {
+        while (true) {
+            emit(LocalDate.now(zoneId))
+            delay(60_000L)
+        }
+    }.distinctUntilChanged()

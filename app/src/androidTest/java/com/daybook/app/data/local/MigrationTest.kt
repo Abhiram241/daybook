@@ -1137,6 +1137,398 @@ class MigrationTest {
         )
     }
 
+    /** B2 (§7.2/§0.1) — `MIGRATION_23_24`, DB v23 -> v24: `health_days`, `health_sessions` +
+     *  `app_settings.health_tab_last_mode`. Additive only. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate23To24() {
+        helper.createDatabase(TEST_DB, 23).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 24, true, MIGRATION_23_24)
+
+        val newTables = setOf("health_days", "health_sessions")
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('health_days','health_sessions')"
+        ).use { c ->
+            val found = HashSet<String>()
+            while (c.moveToNext()) found += c.getString(0)
+            assertEquals(newTables, found)
+        }
+
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing column health_tab_last_mode", c.columnNames.contains("health_tab_last_mode"))
+        }
+
+        // Ri3/R18 — none of health_days' metric columns may be NOT NULL (nullable == "no data",
+        // never collapsed into zero). updated_at is deliberately excluded — it is bookkeeping, not
+        // a metric value.
+        db.query("PRAGMA table_info(health_days)").use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            val notNullIdx = c.getColumnIndex("notnull")
+            val exemptColumns = setOf("local_date", "updated_at")
+            while (c.moveToNext()) {
+                val name = c.getString(nameIdx)
+                if (name !in exemptColumns) {
+                    assertTrue("health_days.$name must be nullable", c.getInt(notNullIdx) == 0)
+                }
+            }
+        }
+    }
+
+    /** HEALTH_VITALS_RICHNESS_PLAN.md §2/§7 V1 — `MIGRATION_24_25`, DB v24 -> v25: two new
+     *  nullable `health_days` columns (SpO2 min/max) + the new `health_weight_readings` table. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate24To25() {
+        helper.createDatabase(TEST_DB, 24).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 25, true, MIGRATION_24_25)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'health_weight_readings'"
+        ).use { c -> assertTrue("missing table health_weight_readings", c.moveToNext()) }
+
+        db.query("SELECT * FROM health_days").use { c ->
+            assertTrue(c.columnNames.contains("spo2_min_percent"))
+            assertTrue(c.columnNames.contains("spo2_max_percent"))
+        }
+
+        // Ri3/R18 — the new health_days columns are metrics too, so nullable, same rule as every
+        // other column on this table.
+        db.query("PRAGMA table_info(health_days)").use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            val notNullIdx = c.getColumnIndex("notnull")
+            while (c.moveToNext()) {
+                val name = c.getString(nameIdx)
+                if (name == "spo2_min_percent" || name == "spo2_max_percent") {
+                    assertTrue("health_days.$name must be nullable", c.getInt(notNullIdx) == 0)
+                }
+            }
+        }
+
+        // health_weight_readings.weight_kg IS NOT NULL by design (§2) — a row's whole reason to
+        // exist is a reading that happened.
+        db.query("PRAGMA table_info(health_weight_readings)").use { c ->
+            val nameIdx = c.getColumnIndex("name")
+            val notNullIdx = c.getColumnIndex("notnull")
+            while (c.moveToNext()) {
+                if (c.getString(nameIdx) == "weight_kg") {
+                    assertTrue("health_weight_readings.weight_kg must be NOT NULL", c.getInt(notNullIdx) == 1)
+                }
+            }
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To24() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 24, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24
+        )
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To25() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 25, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25
+        )
+    }
+
+    /** DAILY_REPORT_PLAN.md §3.6/§2 — `MIGRATION_25_26`, DB v25 -> v26: the new
+     *  `daily_report_ai_summaries` table, plus the `nav_tabs` backfill that appends the new
+     *  `"report"` tab id to every existing row that doesn't already have it. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate25To26_addsTableAndBackfillsNavTabs() {
+        helper.createDatabase(TEST_DB, 25).apply {
+            execSQL(
+                "INSERT INTO app_settings (id,default_snooze_minutes,onboarding_completed,user_name," +
+                    "accent_color,notif_permission_asked,profile_photo_path,font_choice,habit_checkin_time," +
+                    "habits_accent_color,intake_accent_color,check_for_updates_enabled,theme_mode," +
+                    "dark_style,light_style,corner_scale,weight_unit,workout_accent_color," +
+                    "rest_timer_default_seconds,workout_hint_state,workout_today_card_enabled,nav_tabs) " +
+                    "VALUES (1,15,1,'Alex','CORAL',1,'/tmp/p.jpg','LITERATA','08:30','CORAL','CORAL',0,'LIGHT'," +
+                    "'CHARCOAL','PAPER',1.0,'KG','CORAL',0,0,1,'home,foodmed')"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 26, true, MIGRATION_25_26)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'daily_report_ai_summaries'"
+        ).use { c -> assertTrue("missing table daily_report_ai_summaries", c.moveToNext()) }
+
+        db.query("PRAGMA table_info(daily_report_ai_summaries)").use { c ->
+            val cols = HashSet<String>()
+            while (c.moveToNext()) cols += c.getString(c.getColumnIndex("name"))
+            assertEquals(setOf("local_date", "provider", "model", "summary_text", "generated_at"), cols)
+        }
+
+        // A pre-existing row that had already hidden the Habits tab keeps that customization AND
+        // gains the new tab, appended — not reset to the fresh-install default.
+        db.query("SELECT user_name, nav_tabs FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+            assertEquals("home,foodmed,report", c.getString(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To26() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 26, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26
+        )
+    }
+
+    // ------------------------------------------------------------ v26 -> v27 (DAILY_REPORT_REDESIGN_PLAN.md §8)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate26To27_addsFiveAiColumns() {
+        helper.createDatabase(TEST_DB, 26).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 27, true, MIGRATION_26_27)
+        db.query("SELECT * FROM app_settings").use { c ->
+            listOf(
+                "ai_meta_prompt", "ai_report_categories", "ai_chat_range_start",
+                "ai_chat_range_end", "ai_chat_categories"
+            ).forEach { assertTrue("missing $it", c.columnNames.contains(it)) }
+        }
+    }
+
+    /** The load-bearing one: a pre-existing app_settings row must come out of the migration with
+     *  every new column at its SQL default, and every pre-existing column byte-for-byte intact. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate26To27_preservesRowsAndDefaultsToBlankPrompt_allCategoriesOn() {
+        helper.createDatabase(TEST_DB, 26).apply {
+            execSQL(
+                "INSERT INTO app_settings (id,default_snooze_minutes,onboarding_completed,user_name," +
+                    "accent_color,notif_permission_asked,profile_photo_path,font_choice,habit_checkin_time," +
+                    "habits_accent_color,intake_accent_color,check_for_updates_enabled,theme_mode," +
+                    "dark_style,light_style,corner_scale,weight_unit,workout_accent_color," +
+                    "rest_timer_default_seconds,workout_hint_state,workout_today_card_enabled,nav_tabs) " +
+                    "VALUES (1,15,1,'Alex','CORAL',1,'/tmp/p.jpg','LITERATA','08:30','CORAL','CORAL',0,'LIGHT'," +
+                    "'CHARCOAL','PAPER',1.0,'KG','CORAL',0,0,1,'home,foodmed,report')"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 27, true, MIGRATION_26_27)
+        db.query(
+            "SELECT ai_meta_prompt, ai_report_categories, ai_chat_range_start, ai_chat_range_end, " +
+                "ai_chat_categories, user_name, nav_tabs FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("", c.getString(0))
+            assertEquals("WORKOUT,HEALTH,INTAKE,TODO", c.getString(1))
+            assertEquals("", c.getString(2))
+            assertEquals("", c.getString(3))
+            assertEquals("WORKOUT,HEALTH,INTAKE,TODO", c.getString(4))
+            assertEquals("Alex", c.getString(5))
+            assertEquals("home,foodmed,report", c.getString(6))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To27() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 27, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27
+        )
+    }
+
+    // ------------------------------------------------------------ v27 -> v28 (BEAST_HEALTH_REPORT_AUDIT.md M4)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate27To28_addsSettingsFingerprintColumn() {
+        helper.createDatabase(TEST_DB, 27).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, MIGRATION_27_28)
+        db.query("SELECT * FROM daily_report_ai_summaries").use { c ->
+            assertTrue("missing settings_fingerprint", c.columnNames.contains("settings_fingerprint"))
+        }
+    }
+
+    /** The load-bearing one: a pre-existing summary row must come out of the migration with the
+     *  new column NULL (never a fabricated value — no fingerprint was ever recorded for it) and
+     *  every pre-existing column byte-for-byte intact. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate27To28_preservesRowsAndDefaultsToNullFingerprint() {
+        helper.createDatabase(TEST_DB, 27).apply {
+            execSQL(
+                "INSERT INTO daily_report_ai_summaries (local_date,provider,model,summary_text,generated_at) " +
+                    "VALUES ('2026-09-01','OPENAI','gpt-4o','Summary text',1700000000000)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 28, true, MIGRATION_27_28)
+        db.query(
+            "SELECT settings_fingerprint, provider, model, summary_text, generated_at " +
+                "FROM daily_report_ai_summaries WHERE local_date = '2026-09-01'"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue("expected NULL fingerprint for a pre-existing row", c.isNull(0))
+            assertEquals("OPENAI", c.getString(1))
+            assertEquals("gpt-4o", c.getString(2))
+            assertEquals("Summary text", c.getString(3))
+            assertEquals(1700000000000L, c.getLong(4))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To28() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 28, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28
+        )
+    }
+
+    // ------------------------------------------------------------ v28 -> v29 (AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §1/§2)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate28To29_addsChatMetaPromptColumnAndExclusionsTable() {
+        helper.createDatabase(TEST_DB, 28).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, MIGRATION_28_29)
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing ai_chat_meta_prompt", c.columnNames.contains("ai_chat_meta_prompt"))
+        }
+        db.query("SELECT * FROM ai_exclusions").use { c ->
+            assertTrue(c.columnNames.contains("scope"))
+            assertTrue(c.columnNames.contains("kind"))
+            assertTrue(c.columnNames.contains("target_id"))
+            assertTrue(c.columnNames.contains("created_at"))
+        }
+    }
+
+    /** S3 — an existing `ai_meta_prompt` value is copied into the new `ai_chat_meta_prompt` column
+     *  so Chat keeps behaving exactly as before until the user edits the new Chat box; every other
+     *  pre-existing column stays byte-for-byte intact. */
+    @Test
+    @Throws(IOException::class)
+    fun migrate28To29_copiesAiMetaPromptIntoChatMetaPromptAndPreservesRows() {
+        helper.createDatabase(TEST_DB, 28).apply {
+            execSQL(
+                "UPDATE app_settings SET ai_meta_prompt = 'Keep it short', user_name = 'Alex' WHERE id = 1"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, MIGRATION_28_29)
+        db.query("SELECT ai_meta_prompt, ai_chat_meta_prompt, user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Keep it short", c.getString(0))
+            assertEquals("Keep it short", c.getString(1))
+            assertEquals("Alex", c.getString(2))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate28To29_exclusionsTableAcceptsInserts() {
+        helper.createDatabase(TEST_DB, 28).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 29, true, MIGRATION_28_29)
+        db.execSQL(
+            "INSERT INTO ai_exclusions (scope, kind, target_id, created_at) " +
+                "VALUES ('CHAT', 'HABIT', 'h1', 1700000000000)"
+        )
+        db.query("SELECT scope, kind, target_id, created_at FROM ai_exclusions WHERE target_id = 'h1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("CHAT", c.getString(0))
+            assertEquals("HABIT", c.getString(1))
+            assertEquals("h1", c.getString(2))
+            assertEquals(1700000000000L, c.getLong(3))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To29() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 29, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29
+        )
+    }
+
+    // ------------------------------------------------------------ v29 -> v30 (Health tab card visibility)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate29To30_addsHealthHiddenCardsColumn() {
+        helper.createDatabase(TEST_DB, 29).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, MIGRATION_29_30)
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing health_hidden_cards", c.columnNames.contains("health_hidden_cards"))
+        }
+        db.query("SELECT health_hidden_cards FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("", c.getString(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate29To30_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 29).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 30, true, MIGRATION_29_30)
+        db.query("SELECT user_name, health_hidden_cards FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+            assertEquals("", c.getString(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To30() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 30, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
+            MIGRATION_29_30
+        )
+    }
+
     @Test
     @Throws(IOException::class)
     fun migrateAll_3To8() {
@@ -1165,7 +1557,8 @@ class MigrationTest {
                 MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
                 MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
                 MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23
+                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+                MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29
             )
             .fallbackToDestructiveMigrationFrom(1)
             .build()

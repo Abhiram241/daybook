@@ -285,6 +285,10 @@ class CloudSyncRepository @Inject constructor(
             database.foodMedTaskDao().deleteAll()
             database.customCategoryDao().deleteAll()
             database.customPromptDao().deleteAll()
+            // AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §2.2 — exclusions point at one
+            // account's habits/entries; a second account signing in on this device must not
+            // inherit them.
+            database.aiExclusionDao().deleteAll()
         }
         syncState.reset()
         hydrationAttempted.clear()
@@ -500,6 +504,12 @@ class CloudSyncRepository @Inject constructor(
         if (isLocalEmpty()) return
 
         val defsHash = ContentHash.ofDefinitions(backup.definitions)
+        // User request (Firestore sync for AI meta-prompts + privacy settings) — its own hash,
+        // computed and gated independently of `defsHash` (see `SyncStateStore.aiSettingsHash`'s
+        // KDoc for why): a pure history push, or a pure AI-settings push, must not force a rewrite
+        // of the other.
+        val aiSettings = buildAiSyncSettings()
+        val aiHash = ContentHash.ofAiSyncSettings(aiSettings)
         val byMonth = MonthPartitioner.partition(backup.days)
         val curHashes = MonthPartitioner.hashes(byMonth)
 
@@ -524,8 +534,12 @@ class CloudSyncRepository @Inject constructor(
             changedRaw.filter { byMonth[it] != null }.toSet()
         }
         val defsChanged = force || defsHash != syncState.definitionsHash
+        val aiChanged = force || aiHash != syncState.aiSettingsHash
+        // Either kind of parent-doc-affecting change forces the same full `parentData()` write —
+        // there's only one parent doc, so a plain field `update()` can't selectively skip one half.
+        val fullParentWrite = defsChanged || aiChanged
 
-        if (!defsChanged && changed.isEmpty()) {
+        if (!fullParentWrite && changed.isEmpty()) {
             if (shouldClearPending(seenDirty, dirtyCounter.get())) syncState.pendingPush = false
             markIdle()
             return
@@ -581,17 +595,17 @@ class CloudSyncRepository @Inject constructor(
             )
             val batches = ArrayList<WriteBatch>()
             if (groups.isEmpty()) {
-                if (defsChanged) {
+                if (fullParentWrite) {
                     firestore.batch()
-                        .also { it.set(docRef(uid), parentData(backup.definitions, defsHash, rev, projectedHashes)) }
+                        .also { it.set(docRef(uid), parentData(backup.definitions, defsHash, aiSettings, aiHash, rev, projectedHashes)) }
                         .let { batches += it }
                 }
             } else {
                 groups.forEachIndexed { index, group ->
                     val batch = firestore.batch()
                     if (index == 0) {
-                        if (defsChanged) {
-                            batch.set(docRef(uid), parentData(backup.definitions, defsHash, rev, projectedHashes))
+                        if (fullParentWrite) {
+                            batch.set(docRef(uid), parentData(backup.definitions, defsHash, aiSettings, aiHash, rev, projectedHashes))
                         } else {
                             // v0.5.3 Phase 2 (S1): a pure-history push still refreshes the parent's
                             // month-hash summary (one extra doc write) so the cold-start read stays a
@@ -638,6 +652,7 @@ class CloudSyncRepository @Inject constructor(
             for (batch in batches) batch.commit().awaitCompat()
 
             if (defsChanged) syncState.definitionsHash = defsHash
+            if (aiChanged) syncState.aiSettingsHash = aiHash
             val pushedMonths = writes.mapTo(HashSet()) { it.month }
             val newHashes = syncState.monthHashes.toMutableMap()
             for (month in changed) {
@@ -646,7 +661,12 @@ class CloudSyncRepository @Inject constructor(
                 if (h != null) newHashes[month] = h else newHashes.remove(month)
             }
             syncState.monthHashes = newHashes
-            syncState.hydratedMonths = curHashes.keys + MonthPartitioner.recentMonths()
+            // BUG_AUDIT_REPORT.md §1.6: this used to REPLACE hydratedMonths with just this export's
+            // non-empty months + recentMonths(), which drops a genuinely-empty-but-confirmed month
+            // (onLocalDataReplaced was already fixed to union for the identical hazard — see its
+            // S-13 comment below). Union instead, so a month proven empty by ensureMonthHydrated
+            // stays resident rather than reverting to "not loaded" on the next push.
+            syncState.hydratedMonths = syncState.hydratedMonths + curHashes.keys + MonthPartitioner.recentMonths()
             syncState.lastKnownRevision = rev
             // v0.5.3 Phase 1 (S10): only clear `pendingPush` if no user edit landed during the
             // push. An oversized-skipped month does NOT keep the flag armed — it is retried when a
@@ -672,6 +692,9 @@ class CloudSyncRepository @Inject constructor(
     private fun parentData(
         defs: Definitions,
         defsHash: String,
+        // User request (Firestore sync for AI meta-prompts + privacy settings).
+        aiSettings: com.daybook.app.data.backup.AiSyncSettings,
+        aiHash: String,
         rev: Long,
         // v0.5.3 Phase 2 (S1): the full month-hash summary, written onto the parent doc in the same
         // batch as the month docs so a cold start reads ONE document instead of a full `months`
@@ -687,8 +710,44 @@ class CloudSyncRepository @Inject constructor(
         F_UPDATED to FieldValue.serverTimestamp(),
         F_FORMAT to FORMAT_VERSION,
         F_APPVER to BuildConfig.VERSION_NAME,
-        F_MONTH_HASHES to monthHashes
+        F_MONTH_HASHES to monthHashes,
+        // Plain (uncompressed) sibling fields — see the F_AI_* constants' KDoc.
+        F_AI_SETTINGS to mapOf(
+            "metaPrompt" to aiSettings.metaPrompt,
+            "chatMetaPrompt" to aiSettings.chatMetaPrompt,
+            "reportCategories" to aiSettings.reportCategories,
+            "chatCategories" to aiSettings.chatCategories,
+            "chatRangeStart" to aiSettings.chatRangeStart,
+            "chatRangeEnd" to aiSettings.chatRangeEnd
+        ),
+        F_AI_EXCLUSIONS to aiSettings.exclusions.map {
+            mapOf("scope" to it.scope, "kind" to it.kind, "targetId" to it.targetId, "createdAt" to it.createdAt)
+        },
+        F_HEALTH_HIDDEN_CARDS to aiSettings.healthHiddenCards,
+        F_AI_HASH to aiHash
     )
+
+    /** User request (Firestore sync for AI meta-prompts + privacy settings) — reads the current
+     *  device state into the wire model [parentData] pushes and [ContentHash.ofAiSyncSettings]
+     *  hashes. */
+    private suspend fun buildAiSyncSettings(): com.daybook.app.data.backup.AiSyncSettings {
+        val settings = settingsRepository.getSettings()
+        val exclusions = database.aiExclusionDao().getAll().map {
+            com.daybook.app.data.backup.AiExclusionEntry(it.scope, it.kind, it.targetId, it.createdAt)
+        }
+        val hiddenCards = com.daybook.app.data.health.parseHiddenHealthCards(settings.healthHiddenCards)
+            .map { it.name }
+        return com.daybook.app.data.backup.AiSyncSettings(
+            metaPrompt = settings.aiMetaPrompt,
+            chatMetaPrompt = settings.aiChatMetaPrompt,
+            reportCategories = settings.aiReportCategories,
+            chatCategories = settings.aiChatCategories,
+            chatRangeStart = settings.aiChatRangeStart,
+            chatRangeEnd = settings.aiChatRangeEnd,
+            exclusions = exclusions,
+            healthHiddenCards = hiddenCards
+        )
+    }
 
     /**
      * SD-3(a) eviction. Drops occurrence rows for months outside the hydrated window, and **only**
@@ -928,9 +987,24 @@ class CloudSyncRepository @Inject constructor(
         monthsReg = scopedMonthsListener(uid)
     }
 
+    // User request (Firestore sync for AI meta-prompts + privacy settings) — `shouldApply`'s
+    // "we already hold exactly this content" echo-guard (step 2) used to compare ONLY the
+    // definitions hash. Now that a parent-doc push can bump `revision` with `defsHash` UNCHANGED
+    // (an AI-settings-only change), gating on `defsHash` alone would make `shouldApply` return
+    // false and skip `applyRemoteParent` entirely on every OTHER device — the AI-only change would
+    // never be pulled. Combining both hashes into one comparison string means either half changing
+    // is enough to make the combined value differ, so the echo-guard still recognises "we already
+    // hold this" only when the WHOLE parent doc content (defs + AI settings) actually matches.
+    private fun combinedParentHash(defsHash: String?, aiHash: String?): String? =
+        if (defsHash == null && aiHash == null) null else "${defsHash.orEmpty()}|${aiHash.orEmpty()}"
+
     private fun shouldApplyParent(snap: DocumentSnapshot): Boolean = SyncLogic.shouldApply(
-        remoteDocOf(snap, snap.getString(F_DEFS_HASH)),
-        SyncSnapshot(syncState.definitionsHash, syncState.deviceId, syncState.lastKnownRevision)
+        remoteDocOf(snap, combinedParentHash(snap.getString(F_DEFS_HASH), snap.getString(F_AI_HASH))),
+        SyncSnapshot(
+            combinedParentHash(syncState.definitionsHash, syncState.aiSettingsHash),
+            syncState.deviceId,
+            syncState.lastKnownRevision
+        )
     )
 
     private fun shouldApplyMonthDoc(doc: DocumentSnapshot): Boolean = SyncLogic.shouldApplyMonth(
@@ -958,13 +1032,19 @@ class CloudSyncRepository @Inject constructor(
      */
     private suspend fun applyRemoteParent(snap: DocumentSnapshot): Boolean {
         if (conflictPaused) { _status.value = SyncStatus.Paused; return false }   // v0.5.3 Phase 3
-        val blob = snap.get(F_DEFINITIONS) as? Blob ?: return false
+        // User request (Firestore sync for AI meta-prompts + privacy settings) — applied
+        // unconditionally, BEFORE the definitions guard below: an account can legitimately have
+        // custom AI settings/exclusions with zero habits (a brand-new sign-in that hasn't created
+        // anything yet), and this is logically independent of whether the definitions blob itself
+        // is present/non-empty.
+        val aiApplied = applyRemoteAiSettings(snap)
+        val blob = snap.get(F_DEFINITIONS) as? Blob ?: return aiApplied
         val defs = runCatching {
             MonthPartitioner.decodeDefinitionsJson(PayloadCodec.gunzipToString(blob.toBytes()))
-        }.getOrNull() ?: return false
+        }.getOrNull() ?: return aiApplied
         if (defs.habits.isEmpty() && defs.intakeReminders.isEmpty()) {
             Log.w(TAG, "remote definitions are empty — refusing to apply")
-            return false
+            return aiApplied
         }
         _status.value = SyncStatus.Syncing
         val dirtyBefore = dirtyCounter.get()
@@ -972,7 +1052,7 @@ class CloudSyncRepository @Inject constructor(
         if (!result.success) {
             Log.w(TAG, "remote definitions import rejected: ${result.message}")
             _status.value = SyncStatus.Error("Couldn't apply cloud data")
-            return false
+            return aiApplied
         }
         // Store the hash of a FRESH re-export, not the remote one: applyRemoteDefinitions is not a
         // perfect inverse of exportBackup, and this is what makes the one possible reconciling push
@@ -992,6 +1072,56 @@ class CloudSyncRepository @Inject constructor(
         }
         currentUid?.let { syncState.lastSyncedUid = it }
         return true
+    }
+
+    /**
+     * User request (Firestore sync for AI meta-prompts + privacy settings) — applies the parent
+     * doc's `aiSettings`/`aiExclusions`/`healthHiddenCards` fields into Room. Full-replace for
+     * `ai_exclusions` (mirrors how [ExportImportRepository.applyRemoteDefinitions] full-replaces the
+     * small `custom_categories`/`custom_prompts` tables) — this is a small, whole-value settings
+     * bundle, not history, so there's nothing to merge per-row. Returns false when the doc carries
+     * none of these fields at all (an old client's doc, or nothing has ever been pushed here) so
+     * the caller doesn't mistake "nothing to apply" for a change.
+     */
+    private suspend fun applyRemoteAiSettings(snap: DocumentSnapshot): Boolean {
+        val aiMap = snap.get(F_AI_SETTINGS) as? Map<*, *>
+        val exclusionsList = snap.get(F_AI_EXCLUSIONS) as? List<*>
+        val hiddenCardsList = snap.get(F_HEALTH_HIDDEN_CARDS) as? List<*>
+        if (aiMap == null && exclusionsList == null && hiddenCardsList == null) return false
+
+        fun str(key: String): String = (aiMap?.get(key) as? String).orEmpty()
+
+        val applied = runCatching {
+            if (aiMap != null) {
+                settingsRepository.setAiMetaPrompt(str("metaPrompt"))
+                settingsRepository.setAiChatMetaPrompt(str("chatMetaPrompt"))
+                settingsRepository.setAiReportCategories(str("reportCategories"))
+                settingsRepository.setAiChatCategories(str("chatCategories"))
+                settingsRepository.setChatRange(str("chatRangeStart"), str("chatRangeEnd"))
+            }
+            if (hiddenCardsList != null) {
+                settingsRepository.setHealthHiddenCards(hiddenCardsList.filterIsInstance<String>().joinToString(","))
+            }
+            if (exclusionsList != null) {
+                val rows = exclusionsList.mapNotNull { entry ->
+                    val m = entry as? Map<*, *> ?: return@mapNotNull null
+                    val scope = m["scope"] as? String ?: return@mapNotNull null
+                    val kind = m["kind"] as? String ?: return@mapNotNull null
+                    val targetId = m["targetId"] as? String ?: return@mapNotNull null
+                    val createdAt = (m["createdAt"] as? Number)?.toLong() ?: return@mapNotNull null
+                    com.daybook.app.data.model.AiExclusion(scope, kind, targetId, createdAt)
+                }
+                database.withTransaction {
+                    database.aiExclusionDao().deleteAll()
+                    if (rows.isNotEmpty()) database.aiExclusionDao().upsertAll(rows)
+                }
+            }
+        }.onFailure { Log.w(TAG, "applyRemoteAiSettings failed", it) }.isSuccess
+
+        if (applied) {
+            snap.getString(F_AI_HASH)?.let { syncState.aiSettingsHash = it }
+        }
+        return applied
     }
 
     /** Gunzip one month doc and merge it into Room via [ExportImportRepository.importMonth]. */
@@ -1395,7 +1525,24 @@ class CloudSyncRepository @Inject constructor(
             // THIS direction — DataTablesSyncTest only catches a STALE one — so this is a manual
             // step every round must not skip.
             "exercises", "workout_sessions", "workout_exercises", "workout_sets",
-            "workout_routines", "workout_routine_exercises"
+            "workout_routines", "workout_routine_exercises",
+            // B5 (§7.5.0): Round B (Health Connect). Same manual-step caveat as the Round A entries
+            // above — DataTablesSyncTest will NOT catch a forgotten entry here.
+            "health_days", "health_sessions",
+            // HEALTH_VITALS_RICHNESS_PLAN.md §5 — same manual-step caveat as above.
+            "health_weight_readings",
+            // DAILY_REPORT_PLAN.md §3.6 — syncs like normal Daybook data (decision 3). Same
+            // manual-step caveat as the Round A/B entries above.
+            "daily_report_ai_summaries",
+            // User request (Firestore sync for AI meta-prompts + privacy settings) — `app_settings`
+            // carries plenty of OTHER still-device-local columns (accent, font, nav tabs, app
+            // lock, …) alongside the now-synced AI ones; including the whole table here means a
+            // purely cosmetic settings tweak also wakes the push loop, which `doPush`'s own
+            // `aiChanged`/`defsChanged` hash gates then find nothing to do for — a harmless wasted
+            // wake, not a correctness bug, and the only way a Room `InvalidationTracker` can
+            // distinguish "did something in this table change" (there's no per-column granularity).
+            // `ai_exclusions` (the Hide-from-AI lists) has no other device-local content at all.
+            "app_settings", "ai_exclusions"
         )
 
         // Parent doc.
@@ -1407,6 +1554,13 @@ class CloudSyncRepository @Inject constructor(
          *  replaces a full `months` collection scan on every cold start. Plain map field — no rules
          *  change (the parent-doc match already lets the owner write arbitrary fields). */
         const val F_MONTH_HASHES = "monthHashes"
+        // User request (Firestore sync for AI meta-prompts + privacy settings) — plain (never
+        // gzipped; this bundle is tiny) sibling fields on the same parent doc, own hash so a change
+        // here never forces a rewrite of the (potentially much larger) definitions blob.
+        const val F_AI_SETTINGS = "aiSettings"
+        const val F_AI_EXCLUSIONS = "aiExclusions"
+        const val F_HEALTH_HIDDEN_CARDS = "healthHiddenCards"
+        const val F_AI_HASH = "aiSettingsHash"
         // Month doc.
         const val F_PAYLOAD = "payload"
         const val F_HASH = "contentHash"

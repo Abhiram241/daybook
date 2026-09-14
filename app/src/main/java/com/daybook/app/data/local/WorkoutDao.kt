@@ -42,6 +42,10 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sessions WHERE local_date BETWEEN :startYmd AND :endYmd ORDER BY started_at ASC")
     suspend fun getSessionsInLocalDateRange(startYmd: String, endYmd: String): List<WorkoutSession>
 
+    /** DAILY_REPORT_PLAN.md §1.1 — the Daily Report's Workout section, one calendar day. */
+    @Query("SELECT * FROM workout_sessions WHERE local_date = :localDate ORDER BY started_at ASC")
+    fun observeSessionsForLocalDate(localDate: String): Flow<List<WorkoutSession>>
+
     /** §3.9.5 — the Hevy-import duplicate probe: dedupe key is (startedAt, endedAt). */
     @Query("SELECT * FROM workout_sessions WHERE started_at BETWEEN :fromMillis AND :toMillis")
     suspend fun sessionsStartingBetween(fromMillis: Long, toMillis: Long): List<WorkoutSession>
@@ -211,6 +215,11 @@ interface WorkoutDao {
 
     /** Beast Mode home "This week" stat grid — the pre-week personal best, so a set logged THIS
      *  week can be checked against what stood before the week started (§3.3, item 3). */
+    // L1 fix — this KDoc-and-sibling reference said this query was "aligned with
+    // bestSetForExerciseBefore's scoping" (excluding ACTIVE sessions), but this query had no
+    // `ws.status` predicate at all, so a stale never-finished ACTIVE session from a previous week
+    // could count toward the Beast Mode home "pre-week best" while the identical concept on the
+    // session screen (`bestSetForExercise`, above) correctly excludes it. Added to match.
     @Query(
         "SELECT s.* FROM workout_sets s " +
             "JOIN workout_sessions ws ON ws.id = s.session_id " +
@@ -218,6 +227,7 @@ interface WorkoutDao {
             "AND ws.started_at < :beforeMillis " +
             "AND s.completed_at IS NOT NULL " +
             "AND s.set_type = 'NORMAL' " +
+            "AND ws.status = 'COMPLETED' " +
             "ORDER BY COALESCE(s.weight_kg, 0) DESC, " +
             "COALESCE(s.reps, 0) DESC, " +
             "COALESCE(s.duration_seconds, 0) DESC, " +

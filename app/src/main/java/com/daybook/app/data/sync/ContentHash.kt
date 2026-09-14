@@ -1,5 +1,6 @@
 package com.daybook.app.data.sync
 
+import com.daybook.app.data.backup.AiSyncSettings
 import com.daybook.app.data.backup.DayEntry
 import com.daybook.app.data.backup.DaybookBackup
 import com.daybook.app.data.backup.Definitions
@@ -60,6 +61,16 @@ object ContentHash {
      */
     fun ofDefinitions(defs: Definitions): String {
         val canonical = json.encodeToString(Definitions.serializer(), defs)
+        return sha256Hex(canonical.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * User request (Firestore sync for AI meta-prompts + privacy settings) — same echo-guard
+     * discipline as [ofDefinitions], its own hash so a change to AI settings/exclusions doesn't
+     * force a rewrite of the (potentially much larger) definitions blob, and vice versa.
+     */
+    fun ofAiSyncSettings(settings: AiSyncSettings): String {
+        val canonical = json.encodeToString(AiSyncSettings.serializer(), settings)
         return sha256Hex(canonical.toByteArray(Charsets.UTF_8))
     }
 

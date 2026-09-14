@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.ExportImportRepository
+import com.daybook.app.data.HapticsPrefs
 import com.daybook.app.data.OccurrenceScheduler
 import com.daybook.app.data.ProfilePhotoStore
 import com.daybook.app.data.WorkoutRepository
@@ -51,6 +52,7 @@ class SettingsViewModel @Inject constructor(
     private val cloudSync: CloudSyncRepository,
     private val jsonUtils: JsonUtils,
     private val workoutRepository: WorkoutRepository,
+    private val hapticsPrefs: HapticsPrefs,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -273,6 +275,11 @@ class SettingsViewModel @Inject constructor(
     val reduceMotion: StateFlow<Boolean> = col({ it.reduceMotion }, false)
     fun setReduceMotion(v: Boolean) { safeLaunch { settingsRepository.setReduceMotion(v) } }
 
+    // Settings > Appearance > Feel — app-wide "Vibration / Haptics" toggle. SharedPreferences-
+    // backed (see HapticsPrefs), not a Room column/`col()` selector like the settings above.
+    val hapticsEnabled: StateFlow<Boolean> = hapticsPrefs.hapticsEnabled
+    fun setHapticsEnabled(v: Boolean) { hapticsPrefs.setHapticsEnabled(v) }
+
     // "Check for updates" toggle round — gates whether MainActivity.onResume() calls
     // InAppUpdateChecker at all. Auto-flipped off by MainActivity on an explicit sign-in decline;
     // this is the manual on/off switch in Settings.
@@ -297,7 +304,7 @@ class SettingsViewModel @Inject constructor(
     fun setStreakRestDays(v: String) { safeLaunch { settingsRepository.setStreakRestDays(v) } }
 
     // rec 7 — navigation
-    val navTabs: StateFlow<String> = col({ it.navTabs }, "home,routines,foodmed")
+    val navTabs: StateFlow<String> = col({ it.navTabs }, "home,routines,foodmed,report")
     val defaultLandingTab: StateFlow<String> = col({ it.defaultLandingTab }, "home")
     fun setNavTabs(v: String) { safeLaunch { settingsRepository.setNavTabs(v) } }
     fun setDefaultLandingTab(v: String) { safeLaunch { settingsRepository.setDefaultLandingTab(v) } }
@@ -331,13 +338,54 @@ class SettingsViewModel @Inject constructor(
                     }
                     HydrateResult.NoAccount, HydrateResult.Ok -> { /* proceed to the file write */ }
                 }
-                val backup = exportImportRepository.exportRange(lo, hi)
+                // B5a (§7.5.1) — this existing button is now explicitly the Daybook file (no
+                // workout/health bytes); the new "Export Beast Mode data" button below shares this
+                // same hydrate step and range.
+                val backup = exportImportRepository.exportDaybookRange(lo, hi)
                 val json = jsonUtils.encode(backup)
                 val location = storageUtils.saveExport(json, backup.meta.rangeStart, backup.meta.rangeEnd)
                 _exportResult.value =
                     "Exported ${backup.days.size} days ($lo – $hi) to $location"
             } catch (t: Throwable) {
                 // Phase 13 (C-14): Throwable, not Exception — see importFromUri's identical note.
+                _exportResult.value = "Export failed: ${t.message}"
+            } finally {
+                cloudSync.endRangeExport()
+                _hydrateProgress.value = null
+                _isExporting.value = false
+            }
+        }
+    }
+
+    /** B5a (§7.5.1) — the new "Export Beast Mode data" button: same shared start/end range as
+     *  [exportRange], a separately filtered/filenamed file. */
+    fun exportBeastModeRange(start: LocalDate, end: LocalDate) {
+        safeLaunch {
+            _isExporting.value = true
+            _exportResult.value = null
+            _importResult.value = null
+            _hydrateProgress.value = null
+            val lo = if (start.isAfter(end)) end else start
+            val hi = if (start.isAfter(end)) start else end
+            try {
+                val startMonth = YearMonth.from(lo).toString()
+                val endMonth = YearMonth.from(hi).toString()
+                when (val r = cloudSync.hydrateRange(startMonth, endMonth) { done, total ->
+                    _hydrateProgress.value = done to total
+                }) {
+                    is HydrateResult.Offline -> {
+                        _exportResult.value =
+                            "Couldn't reach the cloud for ${r.month}. Connect to the internet and try again."
+                        return@safeLaunch
+                    }
+                    HydrateResult.NoAccount, HydrateResult.Ok -> { /* proceed to the file write */ }
+                }
+                val backup = exportImportRepository.exportBeastModeRange(lo, hi)
+                val json = jsonUtils.encode(backup)
+                val location = storageUtils.saveExport(json, backup.meta.rangeStart, backup.meta.rangeEnd, beastMode = true)
+                _exportResult.value =
+                    "Exported ${backup.days.size} days ($lo – $hi) to $location"
+            } catch (t: Throwable) {
                 _exportResult.value = "Export failed: ${t.message}"
             } finally {
                 cloudSync.endRangeExport()

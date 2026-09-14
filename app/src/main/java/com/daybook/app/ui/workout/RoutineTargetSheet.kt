@@ -21,6 +21,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.daybook.app.data.RoutineExerciseDraft
+import com.daybook.app.data.workout.WeightUnit
+import com.daybook.app.data.workout.kgToLb
+import com.daybook.app.data.workout.lbToKg
 import com.daybook.app.ui.components.DaybookTextField
 import com.daybook.app.ui.components.PrimaryButton
 import com.daybook.app.ui.theme.AppShapes
@@ -40,13 +43,19 @@ fun RoutineTargetSheet(
     visible: Boolean,
     draft: RoutineExerciseDraft,
     trackingMode: String,
+    weightUnit: WeightUnit,
     onDone: (RoutineExerciseDraft) -> Unit,
     onDismiss: () -> Unit
 ) {
     if (!visible) return
     var sets by remember(draft.id) { mutableStateOf(draft.targetSets?.toString().orEmpty()) }
     var reps by remember(draft.id) { mutableStateOf(draft.targetReps?.toString().orEmpty()) }
-    var weight by remember(draft.id) { mutableStateOf(draft.targetWeightKg?.toString().orEmpty()) }
+    // C1 fix — this was hard-coded to kg regardless of `weightUnit` ("Weight (kg)" label plus a
+    // verbatim `weight.toFloatOrNull()` write to `targetWeightKg`); now seeded/labelled/converted
+    // the same way the live set table's WEIGHT cell is.
+    var weight by remember(draft.id) {
+        mutableStateOf(draft.targetWeightKg?.let { if (weightUnit == WeightUnit.LB) kgToLb(it) else it }?.toString().orEmpty())
+    }
     var duration by remember(draft.id) { mutableStateOf(draft.targetDurationSeconds?.toString().orEmpty()) }
     var distance by remember(draft.id) { mutableStateOf(draft.targetDistanceMeters?.let { it / 1000f }?.toString().orEmpty()) }
     var note by remember(draft.id) { mutableStateOf(draft.notes.orEmpty()) }
@@ -64,7 +73,7 @@ fun RoutineTargetSheet(
                 NumField("Reps", reps, allowDecimal = false) { reps = it }
             }
             if (trackingMode == "WEIGHT_REPS") {
-                NumField("Weight (kg)", weight, allowDecimal = true) { weight = it }
+                NumField(if (weightUnit == WeightUnit.LB) "Weight (lb)" else "Weight (kg)", weight, allowDecimal = true) { weight = it }
             }
             if (trackingMode == "DURATION" || trackingMode == "DISTANCE_DURATION") {
                 NumField("Time (s)", duration, allowDecimal = false) { duration = it }
@@ -81,7 +90,7 @@ fun RoutineTargetSheet(
                         draft.copy(
                             targetSets = sets.toIntOrNull(),
                             targetReps = reps.toIntOrNull(),
-                            targetWeightKg = weight.toFloatOrNull(),
+                            targetWeightKg = weight.toFloatOrNull()?.let { if (weightUnit == WeightUnit.LB) lbToKg(it) else it },
                             targetDurationSeconds = duration.toIntOrNull(),
                             targetDistanceMeters = distance.toFloatOrNull()?.let { it * 1000f },
                             notes = note.trim().takeIf { it.isNotEmpty() }

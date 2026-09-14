@@ -22,6 +22,10 @@ enum class WeightUnit { KG, LB }
 /** kg -> lb, rounded to the nearest 0.5 lb (§3.8.2). */
 fun kgToLb(kg: Float): Float = (Math.round(kg * 2.2046226f * 2f) / 2f)
 
+/** lb -> kg, the inverse of [kgToLb] — used on every weight-entry write path so the stored
+ *  `weight_kg` column always means kilograms regardless of the user's display unit (BEAST_HEALTH_REPORT_AUDIT.md C1). */
+fun lbToKg(lb: Float): Float = lb / 2.2046226f
+
 /** The set-table's column set for one exercise block (§3.7.1). Order is display order. */
 enum class SetColumn { SET, PREVIOUS, WEIGHT, REPS, DURATION, DISTANCE, COMPLETE }
 

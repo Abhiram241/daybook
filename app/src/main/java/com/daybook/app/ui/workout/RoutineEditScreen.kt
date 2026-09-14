@@ -153,6 +153,7 @@ fun RoutineEditScreen(
             visible = true,
             draft = target,
             trackingMode = trackingMode,
+            weightUnit = weightUnit,
             onDone = { updated -> viewModel.setTargets(target.id, updated); targetsFor = null },
             onDismiss = { targetsFor = null }
         )

@@ -50,8 +50,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -99,6 +101,10 @@ fun SettingsScreen(
     onOpenAccount: () -> Unit = {},
     onOpenAppLock: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
+    // DAILY_REPORT_PLAN.md §3.2.
+    onOpenAiProviders: () -> Unit = {},
+    // DAILY_REPORT_REDESIGN_PLAN.md §2/§6/§7.
+    onOpenDailyReportAi: () -> Unit = {},
     // A7 (§3.8.1) — the ONE Workout row Daybook's main Settings carries. Unconditional, behind
     // no toggle: the accessibility floor for anyone who never sees or cannot perform the
     // long-press gesture (§3.6.4).
@@ -277,6 +283,23 @@ fun SettingsScreen(
                         onClick = onOpenData
                     )
                     SettingsRowDivider()
+                    // DAILY_REPORT_PLAN.md §3.2 — a main-app section (not Beast Mode Settings).
+                    SettingsRow(
+                        icon = DaybookIcons.Bolt,
+                        title = "AI Providers",
+                        subtitle = "API keys for the Daily Report's AI summary",
+                        onClick = onOpenAiProviders
+                    )
+                    SettingsRowDivider()
+                    // DAILY_REPORT_REDESIGN_PLAN.md §2/§6/§7 — meta-prompt + category toggles +
+                    // Chat's custom context date range.
+                    SettingsRow(
+                        icon = DaybookIcons.Bolt,
+                        title = "Daily Report AI",
+                        subtitle = "Custom instructions and what the AI can see",
+                        onClick = onOpenDailyReportAi
+                    )
+                    SettingsRowDivider()
                     SettingsRow(
                         icon = MI.Filled.Info,
                         title = "About & help",
@@ -405,6 +428,7 @@ fun AppearanceSettingsScreen(
     val darkStyle by viewModel.darkStyle.collectAsStateWithLifecycle()
     val lightStyle by viewModel.lightStyle.collectAsStateWithLifecycle()
     val cornerScale by viewModel.cornerScale.collectAsStateWithLifecycle()
+    val hapticsEnabled by viewModel.hapticsEnabled.collectAsStateWithLifecycle()
     SettingsSubScreen("Appearance", onNavigateBack) {
         // UX overhaul item 4 — app theme. Dark is the default for every install.
         SectionHeader("Theme", subtitle = "Choose a dark or light look, or follow your system setting.")
@@ -546,6 +570,19 @@ fun AppearanceSettingsScreen(
         // UX overhaul item 8.3 — the "Reduce motion" (was "Accessibility"/"Motion") toggle is
         // removed. The reduce_motion column stays live and is still OR-ed with the OS
         // "Remove animations" setting in effectiveReduceMotion().
+
+        Spacer(Modifier.height(Spacing.listGap))
+        SectionHeader("Feel", subtitle = "Tactile feedback for taps and actions.")
+        SettingsGroup {
+            Column(Modifier.padding(Spacing.cardInner)) {
+                SettingsToggleRow(
+                    label = "Vibration / Haptics",
+                    subtitle = "Short vibration feedback on taps, toggles, and completions.",
+                    checked = hapticsEnabled,
+                    onCheckedChange = viewModel::setHapticsEnabled
+                )
+            }
+        }
     }
 }
 
@@ -563,10 +600,15 @@ internal fun SettingsToggleRow(
     subtitle: String? = null,
     enabled: Boolean = true
 ) {
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
+    val toggle: (Boolean) -> Unit = { next ->
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        onCheckedChange(next)
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickableImpl(remember { MutableInteractionSource() }) { if (enabled) onCheckedChange(!checked) }
+            .clickableImpl(remember { MutableInteractionSource() }) { if (enabled) toggle(!checked) }
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -583,7 +625,7 @@ internal fun SettingsToggleRow(
         Spacer(Modifier.width(12.dp))
         Switch(
             checked = checked,
-            onCheckedChange = { if (enabled) onCheckedChange(it) },
+            onCheckedChange = { if (enabled) toggle(it) },
             enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = LocalAccent.current,
@@ -1082,6 +1124,15 @@ fun DataSettingsScreen(
                     enabled = !isExporting && rangeValid,
                     loading = isExporting
                 )
+                // B5a (§7.5.1) — same picked range, a separately filtered/filenamed "Beast Mode"
+                // file (workout + health data, no habits/intake). Beast Mode's own import button
+                // lives in Beast Mode Settings, not here (§7.5.1's placement asymmetry).
+                GhostButton(
+                    text = if (isExporting) "Exporting…" else "Export Beast Mode data",
+                    onClick = { viewModel.exportBeastModeRange(startDate, endDate) },
+                    enabled = !isExporting && rangeValid,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 if (!rangeValid) {
                     Text(
                         "The start date must be on or before the end date.",
@@ -1127,7 +1178,10 @@ fun DataSettingsScreen(
         FormGroup(title = null) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.listGap)) {
                 GhostButton(
-                    text = if (isImporting) "Importing…" else "Import JSON",
+                    // B5a (§7.5.1) — relabelled now that a second import (Beast Mode, in Beast
+                    // Mode Settings) exists elsewhere. Behaviour unchanged: still accepts an old
+                    // unsplit full export, rejects only a Beast Mode file.
+                    text = if (isImporting) "Importing…" else "Import Daybook JSON",
                     onClick = { confirmImport = true },
                     enabled = !isImporting,
                     modifier = Modifier.fillMaxWidth()

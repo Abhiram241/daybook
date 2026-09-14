@@ -219,12 +219,21 @@ class RespondViewModel @Inject constructor(
         }
     }
 
+    // BUG_AUDIT_REPORT.md §1.3 fix: this used to `runCatching { action() }` and discard the
+    // result entirely — a thrown exception reached neither the user, logcat, nor Crashlytics,
+    // and `done = true` fired regardless, so the screen navigated away as if it worked. Mirrors
+    // undo()'s own C9 fix: log the failure and surface it instead of pretending it succeeded.
     private inline fun resolve(crossinline action: suspend () -> Unit) {
         if (_state.value.busy) return
-        _state.update { it.copy(busy = true) }
+        _state.update { it.copy(busy = true, rejectedMessage = null) }
         safeLaunch {
-            runCatching { action() }
-            _state.update { it.copy(busy = false, done = true) }
+            val err = runCatching { action() }.exceptionOrNull()
+            if (err != null) {
+                com.daybook.app.util.recordUnhandledException(err)
+                _state.update { it.copy(busy = false, rejectedMessage = "Something went wrong — try again.") }
+            } else {
+                _state.update { it.copy(busy = false, done = true) }
+            }
         }
     }
 

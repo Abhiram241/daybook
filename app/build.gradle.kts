@@ -31,11 +31,12 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34          // v0.6.2 build 34 — Beast Mode bug-fix pass (session/routine error feedback, exercise picker, history, Hevy import) + DB v23 migration for the workout accent default.
-        versionName = "0.6.2"     // v0.6.2 — Beast Mode fixes
+        versionCode = 38          // v0.7.1 build 38 — Daily Report round 2: model pickers, expand-on-tap
+                                   // Intake/Habits, streak-aware habit rows, AI chat, markdown rendering.
+        versionName = "0.7.1"     // v0.7.1 — Daily Report round 2
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
+
         // For Room database
         javaCompileOptions {
             annotationProcessorOptions {
@@ -179,11 +180,31 @@ dependencies {
     // release compatible with compileSdk 34; alpha07+ requires 35.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    // Round B (Health Connect, HEALTH_AND_WORKOUT_PLAN.md §5.1) — pinned to alpha08 deliberately:
+    // it's the last connect-client release that builds against compileSdk 34 / AGP 8.3.2 / Gradle
+    // 8.6 (1.1.0-alpha09+ requires compileSdk 35, 1.1.0 stable requires compileSdk 36 + AGP 8.9.1).
+    // Moving off this pin is its own later toolchain round (§5.1) — do not float this version.
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha08")
+
     // Image loading — renders the profile photo copied into filesDir (L5).
     implementation("io.coil-kt:coil-compose:2.6.0")
 
     // Reads EXIF orientation off picked photos so the saved avatar isn't sideways (Section 11).
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // DAILY_REPORT_PLAN.md §3.3 — the app's first direct HTTP client dependency, used only by
+    // data/ai/'s seven AI-provider adapters (Firebase's own SDKs handle Firestore's networking
+    // internally). One small, well-known, actively-maintained library beats hand-rolling
+    // HttpURLConnection across three distinct request shapes.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Round 2 (AI Summary markdown fix) — the AI-generated summary/chat text comes back as
+    // markdown (`**bold**`, `- bullets`); it was previously dumped into a plain `Text`, so the
+    // literal asterisks/dashes showed. No markdown renderer existed anywhere in the app already
+    // (checked before adding this). A small, actively-maintained Compose-native renderer beats
+    // hand-rolling a parser; the Material3 flavour picks up MaterialTheme (bridged to
+    // DaybookColors/DaybookText at the call site) instead of its own default look.
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.26.0")
 
     // Testing — JUnit 4 only. junit-jupiter (JUnit 5) was declared but ran nothing: no Jupiter
     // platform runner is configured and AGP's unit-test task is JUnit 4 (REV-43).

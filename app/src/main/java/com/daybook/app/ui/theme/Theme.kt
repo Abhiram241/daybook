@@ -96,6 +96,9 @@ fun DaybookTheme(
     cornerScale: Float = DEFAULT_CORNER_SCALE,
     // rec 4 — the user preference; OR-ed here with the OS ANIMATOR_DURATION_SCALE == 0 setting.
     reduceMotion: Boolean = false,
+    // Settings > Appearance > Feel — app-wide "Vibration / Haptics" toggle, gating every
+    // `rememberDaybookHaptics()` call site via `LocalHapticsEnabled` (see Haptics.kt).
+    hapticsEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -153,7 +156,8 @@ fun DaybookTheme(
         LocalAccent provides accentColor,
         LocalOnAccent provides onAccent,
         LocalDaybookShapes provides appShapes,
-        LocalReduceMotion provides reduce
+        LocalReduceMotion provides reduce,
+        LocalHapticsEnabled provides hapticsEnabled
     ) {
         MaterialTheme(
             colorScheme = scheme,

@@ -180,10 +180,23 @@ class AccountViewModel @Inject constructor(
                     if (alsoEraseLocal) runCatching { cloudSync.wipeAllLocalData() }
                     _form.update { AccountForm(message = "Account deleted." + if (alsoEraseLocal) " Local data erased." else " Your data on this phone is untouched.") }
                 }
+                // BUG_AUDIT_REPORT.md §1.11: by the time either branch below runs, deleteRemoteDoc()
+                // has already permanently deleted every month doc and the parent doc — "Please sign
+                // in again, then retry" read as if nothing had happened yet, when the cloud copy was
+                // already gone.
                 AuthOutcome.NeedsReauth ->
-                    _form.update { it.copy(busy = false, message = "Please sign in again, then retry deletion.") }
+                    _form.update { it.copy(busy = false, message = "Your cloud data was already erased. Please sign in again to finish deleting your account.") }
                 is AuthOutcome.Error ->
-                    _form.update { it.copy(busy = false, message = o.message) }
+                    _form.update {
+                        it.copy(
+                            busy = false,
+                            // `o.message == null` means "stay silent" (user dismissed the re-auth
+                            // sheet) — don't invent cloud-erased copy over a silent outcome.
+                            message = o.message?.let { reason ->
+                                "Your cloud data was already erased, but the account itself couldn't be deleted: $reason"
+                            }
+                        )
+                    }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.daybook.app.ui.workout
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,6 +28,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -72,6 +76,58 @@ fun WorkoutSettingsScreen(
     var showRestSheet by remember { mutableStateOf(false) }
     var showGroupSheet by remember { mutableStateOf(false) }
     var showFontSheet by remember { mutableStateOf(false) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
+
+    // Round B (§7.4) — Health Connect state + actions.
+    val healthGrantedCount by viewModel.healthGrantedCount.collectAsStateWithLifecycle()
+    val healthMissingLabels by viewModel.healthMissingLabels.collectAsStateWithLifecycle()
+    val healthActionResult by viewModel.healthActionResult.collectAsStateWithLifecycle()
+    val healthActionIsFailure by viewModel.healthActionIsFailure.collectAsStateWithLifecycle()
+    val healthIsBusy by viewModel.healthIsBusy.collectAsStateWithLifecycle()
+    // M5 fix — these two used to be plain functions called directly in composition
+    // (`viewModel.healthStatusLine()`/`healthStatusIsFailure()`), reading SharedPreferences on
+    // the composition thread with nothing to trigger recomposition when they changed. Now
+    // genuine observed `StateFlow`s, refreshed on the same ticks the permission state already is.
+    val healthStatusLine by viewModel.healthStatusLine.collectAsStateWithLifecycle()
+    var showWhichDataSheet by remember { mutableStateOf(false) }
+    val healthPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = viewModel.requestHealthPermissionsContract()
+    ) { granted -> viewModel.onHealthPermissionFlowFinished(granted) }
+    // H6 fix — the optional-extras consent sheet (history + background reads), launched once
+    // ahead of "Import my past data" so the import can actually reach further than 30 days.
+    val healthExtrasLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = viewModel.requestHealthPermissionsContract()
+    ) { viewModel.onExtrasPermissionFlowFinished() }
+
+    // B5a (§7.5.1) — Beast Mode JSON import.
+    val beastImportResult by viewModel.beastImportResult.collectAsStateWithLifecycle()
+    val isImportingBeast by viewModel.isImportingBeast.collectAsStateWithLifecycle()
+    val openBeastDocLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importBeastModeFromUri(it) } }
+    var confirmBeastImport by remember { mutableStateOf(false) }
+    if (confirmBeastImport) {
+        com.daybook.app.ui.components.DaybookAlertDialog(
+            onDismissRequest = { confirmBeastImport = false },
+            title = "Import a Beast Mode backup?",
+            text = {
+                androidx.compose.material3.Text(
+                    "Importing replaces your current gym history, routines and health data with the " +
+                        "backup's contents. Your habits and intake logs are never touched. This can't be undone.",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                    color = com.daybook.app.ui.theme.DaybookColors.TextMuted
+                )
+            },
+            confirmLabel = "Choose file",
+            onConfirm = {
+                confirmBeastImport = false
+                openBeastDocLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+            },
+            dismissLabel = "Cancel",
+            onDismiss = { confirmBeastImport = false },
+            destructive = true
+        )
+    }
 
     Column(Modifier.fillMaxSize()) {
         BackHeader(title = "Beast Mode settings", onBack = onNavigateBack)
@@ -165,7 +221,10 @@ fun WorkoutSettingsScreen(
                         trailing = {
                             Switch(
                                 checked = settings.workoutTodayCardEnabled,
-                                onCheckedChange = viewModel::setShowOnToday,
+                                onCheckedChange = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setShowOnToday(it)
+                                },
                                 colors = SwitchDefaults.colors(checkedTrackColor = LocalAccent.current)
                             )
                         }
@@ -187,6 +246,126 @@ fun WorkoutSettingsScreen(
                         onClick = onImportFromHevy
                     )
                 }
+            }
+            // Round B (§7.4) — the entirety of Round B's user-facing settings surface: five rows,
+            // one new SettingsGroup, sitting below Hevy import and above Leave Beast Mode.
+            item {
+                Spacer(Modifier.height(Spacing.sectionGap))
+                SectionHeader("Health Connect")
+            }
+            item {
+                val missingCount = healthMissingLabels.size
+                val connected = healthGrantedCount > 0
+                SettingsGroup {
+                    SettingsRow(
+                        icon = DaybookIcons.Heart,
+                        title = if (connected) "Connected" else "Connect Health Connect",
+                        subtitle = when {
+                            !connected -> "Daybook only reads. It never writes anything to Health Connect."
+                            missingCount > 0 -> "$missingCount type(s) not shared"
+                            else -> "All 12 types shared"
+                        },
+                        trailing = {
+                            if (connected) {
+                                val ctx = androidx.compose.ui.platform.LocalContext.current
+                                com.daybook.app.ui.components.GhostButton(
+                                    text = "Disconnect",
+                                    modifier = Modifier.width0(110.dp),
+                                    onClick = {
+                                        // Daybook cannot itself revoke a Health Connect grant — this
+                                        // opens the OS Health Connect app's own per-app revoke screen.
+                                        runCatching {
+                                            ctx.startActivity(
+                                                com.daybook.app.data.health.HealthConnectAvailability.manageDataIntent(ctx)
+                                            )
+                                        }
+                                    }
+                                )
+                            } else {
+                                com.daybook.app.ui.components.PrimaryButton(
+                                    text = "Connect",
+                                    onClick = { healthPermissionLauncher.launch(viewModel.initialHealthPermissionSet()) },
+                                    modifier = Modifier.width0(120.dp)
+                                )
+                            }
+                        }
+                    )
+                    SettingsRowDivider()
+                    // C9.4 — the status line: "must show the last failure, not just the last success."
+                    SettingsRow(
+                        icon = DaybookIcons.Clock,
+                        title = "Status",
+                        subtitle = healthStatusLine ?: "Not connected yet",
+                        trailing = {}
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = DaybookIcons.ImportExport,
+                        title = if (healthIsBusy) "Refreshing…" else "Refresh now",
+                        onClick = { if (!healthIsBusy) viewModel.refreshHealthNow() }
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = DaybookIcons.ImportExport,
+                        title = if (healthIsBusy) "Importing…" else "Import my past data",
+                        subtitle = "Backfill up to a year of history",
+                        onClick = {
+                            if (!healthIsBusy) {
+                                // H6 fix — request the history/background extras once before the
+                                // first import, so the import can actually reach past 30 days;
+                                // subsequent taps skip straight to the import once that's decided.
+                                if (viewModel.historyExtrasAlreadyRequested()) {
+                                    viewModel.importHealthPastData()
+                                } else {
+                                    healthExtrasLauncher.launch(viewModel.optionalHealthExtras())
+                                }
+                            }
+                        }
+                    )
+                    SettingsRowDivider()
+                    SettingsRow(
+                        icon = DaybookIcons.Category,
+                        title = "Which data is shared",
+                        onClick = { showWhichDataSheet = true }
+                    )
+                }
+                if (healthActionResult != null) {
+                    Box(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(top = 6.dp)) {
+                        androidx.compose.material3.Text(
+                            healthActionResult!!,
+                            style = com.daybook.app.ui.theme.DaybookText.Caption,
+                            color = if (healthActionIsFailure) com.daybook.app.ui.theme.DaybookColors.Danger
+                            else com.daybook.app.ui.theme.DaybookColors.Success
+                        )
+                    }
+                }
+            }
+            item {
+                Spacer(Modifier.height(Spacing.sectionGap))
+                SectionHeader("Backup & data")
+            }
+            item {
+                SettingsGroup {
+                    SettingsRow(
+                        icon = DaybookIcons.ImportExport,
+                        title = if (isImportingBeast) "Importing…" else "Import Beast Mode backup",
+                        subtitle = "Restore gym history, routines and health data from a Beast Mode JSON file",
+                        onClick = { if (!isImportingBeast) confirmBeastImport = true }
+                    )
+                }
+                if (beastImportResult != null) {
+                    Box(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(top = 6.dp)) {
+                        val msg = beastImportResult!!
+                        val ok = msg.startsWith("Import successful")
+                        androidx.compose.material3.Text(
+                            msg,
+                            style = com.daybook.app.ui.theme.DaybookText.Caption,
+                            color = if (ok) com.daybook.app.ui.theme.DaybookColors.Success else com.daybook.app.ui.theme.DaybookColors.Danger
+                        )
+                    }
+                }
+            }
+            item {
                 Spacer(Modifier.height(Spacing.sectionGap))
                 SettingsGroup {
                     SettingsRow(
@@ -198,6 +377,33 @@ fun WorkoutSettingsScreen(
                 }
             }
         }
+    }
+
+    // Round B (§7.4) — "Which data is shared": a read-only sheet listing the 12 MVP types with a
+    // granted/not-shared indicator, plus a "Change what's shared" deep-link into the Health
+    // Connect app's own settings (§6.2).
+    if (showWhichDataSheet) {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        com.daybook.app.ui.components.BottomSheetMenu(
+            visible = true,
+            onDismiss = { showWhichDataSheet = false },
+            actions = com.daybook.app.data.health.HealthPermissions.LABELS.values.sorted().map { label ->
+                val notShared = label in healthMissingLabels
+                com.daybook.app.ui.components.SheetAction(
+                    icon = DaybookIcons.Heart,
+                    label = if (notShared) "$label — not shared" else label,
+                    onClick = {}
+                )
+            } + com.daybook.app.ui.components.SheetAction(
+                icon = DaybookIcons.ImportExport,
+                label = "Change what's shared",
+                onClick = {
+                    runCatching {
+                        ctx.startActivity(com.daybook.app.data.health.HealthConnectAvailability.settingsIntent())
+                    }
+                }
+            )
+        )
     }
 
     SortSheet(

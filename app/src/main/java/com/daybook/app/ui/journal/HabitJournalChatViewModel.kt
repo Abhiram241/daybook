@@ -83,10 +83,16 @@ internal fun advanceChat(
 class HabitJournalChatViewModel @Inject constructor(
     private val habitRepository: HabitRepository,
     private val occurrenceScheduler: OccurrenceScheduler,
-    savedStateHandle: SavedStateHandle
+    // BUG_AUDIT_REPORT.md §1.8(b): promoted to a property (was a bare constructor param) so the
+    // backfill-draft persistence in sendAnswer() below — a regular member function, not part of
+    // the constructor/init closure — can reach it too.
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    private companion object { const val DEFAULT_QUESTION = "What's on your mind?" }
+    private companion object {
+        const val DEFAULT_QUESTION = "What's on your mind?"
+        const val BACKFILL_DRAFT_KEY = "backfill_journal_draft_qa_json"
+    }
 
     private val arg0: String = savedStateHandle.get<String>("arg0") ?: ""
     private val slotMillis: Long = savedStateHandle.get<String>("slotMillis")?.toLongOrNull() ?: 0L
@@ -118,13 +124,28 @@ class HabitJournalChatViewModel @Inject constructor(
                 slotInstant = slotMillis
                 questions = DateTimeUtils.jsonToJournalQuestions(habit.journalQuestionsJson)
                     .ifEmpty { listOf(DEFAULT_QUESTION) }
+                // BUG_AUDIT_REPORT.md §1.8(b): a backfill has no occurrence row yet, so the normal
+                // saveHabitJournalDraft path (below, on the non-backfill branch) is a no-op for
+                // every answer before the last one. Restore whatever was already answered from the
+                // SavedStateHandle (survives process death, unlike a plain ViewModel field) so
+                // navigating away mid-conversation doesn't lose it.
+                val restoredJson = savedStateHandle.get<String>(BACKFILL_DRAFT_KEY)
+                answeredPairs.addAll(JournalQa.decode(restoredJson))
+                val startIndex = answeredPairs.size.coerceAtMost(questions.size)
+                val messages = mutableListOf<ChatMessage>()
+                answeredPairs.take(startIndex).forEach { (q, a) ->
+                    messages += ChatMessage.Question(q); messages += ChatMessage.Answer(a)
+                }
+                val allAnswered = startIndex >= questions.size
+                if (!allAnswered) messages += ChatMessage.Question(questions[startIndex])
                 _state.update {
                     it.copy(
                         title = habit.title,
                         scheduledTime = DateTimeUtils.formatTime(DateTimeUtils.timestampToLocalTime(slotMillis)),
-                        messages = listOf(ChatMessage.Question(questions[0])),
+                        messages = messages,
                         totalQuestions = questions.size,
-                        answeredCount = 0
+                        answeredCount = startIndex,
+                        allAnswered = allAnswered
                     )
                 }
             } else {
@@ -178,12 +199,18 @@ class HabitJournalChatViewModel @Inject constructor(
         val (newMessages, allAnswered) = advanceChat(s.messages, questions, s.answeredCount, answer)
         val question = questions.getOrElse(s.answeredCount) { "" }
         answeredPairs.add(question to answer)
+        // BUG_AUDIT_REPORT.md §1.8(a): `allAnswered` used to be committed to state immediately,
+        // before the save below even ran. On a Rejected save, the screen was then permanently
+        // gated shut (sendAnswer()'s own guard above refuses to run once allAnswered is true, and
+        // the screen hides the compose box on it too) with no way to retry. It's committed
+        // provisionally here only to drive `advanceChat`'s bubble rendering; the real
+        // `allAnswered`/`rejectedMessage` state below is set only once the save actually resolves.
         _state.update {
             it.copy(
                 messages = newMessages,
                 answeredCount = it.answeredCount + 1,
                 draftAnswer = "",
-                allAnswered = allAnswered
+                allAnswered = false
             )
         }
         safeLaunch {
@@ -202,18 +229,40 @@ class HabitJournalChatViewModel @Inject constructor(
                 }.getOrElse { LogResult.Rejected("Couldn't save: ${it.message}") }
                 _state.update {
                     when (result) {
-                        LogResult.Success -> it.copy(busy = false, saved = true)
-                        is LogResult.Rejected -> it.copy(busy = false, rejectedMessage = result.reason)
+                        LogResult.Success -> it.copy(busy = false, saved = true, allAnswered = true, draftAnswer = "")
+                        is LogResult.Rejected -> {
+                            // Roll the optimistic advance back: the user's last answer wasn't
+                            // actually saved, so put it back in the compose box and re-open the
+                            // last question bubble instead of leaving the screen with no input and
+                            // no way to retry.
+                            answeredPairs.removeAt(answeredPairs.lastIndex)
+                            it.copy(
+                                busy = false,
+                                rejectedMessage = result.reason,
+                                allAnswered = false,
+                                answeredCount = it.answeredCount - 1,
+                                messages = newMessages.dropLast(1),
+                                draftAnswer = answer
+                            )
+                        }
                         // AlreadyResolved is only returned by the notification-Reply-specific
                         // logFoodMedFromNotificationReply (Phase 12, N-7) — unreachable from this
                         // screen's own backfillHabitJournal/logHabitJournal calls. Handled
                         // defensively anyway.
-                        LogResult.AlreadyResolved -> it.copy(busy = false, rejectedMessage = "Already logged.")
+                        LogResult.AlreadyResolved -> it.copy(busy = false, rejectedMessage = "Already logged.", allAnswered = true)
                     }
                 }
             } else {
+                _state.update { it.copy(allAnswered = false) }
                 val id = occurrenceId
-                if (id != null) occurrenceScheduler.saveHabitJournalDraft(id, qaJson)
+                if (id != null) {
+                    occurrenceScheduler.saveHabitJournalDraft(id, qaJson)
+                } else if (isBackfill) {
+                    // BUG_AUDIT_REPORT.md §1.8(b): persist the in-progress backfill answers to the
+                    // SavedStateHandle (survives process death) since there's no occurrence row to
+                    // attach a Room-backed draft to yet.
+                    savedStateHandle[BACKFILL_DRAFT_KEY] = qaJson
+                }
             }
         }
     }

@@ -19,7 +19,10 @@ data class HabitNextMillis(val habitId: String, val nextMillis: Long)
  * (`computeStats` + the streak maths) needs, with no `TimelineEvent` allocation and no full-row
  * read. Lets the timeline itself be paged while the stats still see the whole history.
  */
-data class HabitSchedStatus(val scheduledFor: Long, val status: Occurrence.Status)
+// BUG_AUDIT_REPORT.md §1.7: `localDate` added so the streak fold can bucket by the stored,
+// timezone-stable column instead of recomputing the day from `scheduledFor` in the device's
+// *current* zone (which re-buckets historical rows after a timezone change or DST transition).
+data class HabitSchedStatus(val scheduledFor: Long, val status: Occurrence.Status, val localDate: String?)
 
 @Dao
 interface HabitOccurrenceDao {
@@ -174,7 +177,7 @@ interface HabitOccurrenceDao {
      * projection the stats fold and streak maths consume, so paging the timeline never truncates
      * the completion-rate / longest-streak numbers.
      */
-    @Query("SELECT scheduled_for AS scheduledFor, status AS status FROM habit_occurrences WHERE habit_id = :habitId")
+    @Query("SELECT scheduled_for AS scheduledFor, status AS status, local_date AS localDate FROM habit_occurrences WHERE habit_id = :habitId")
     suspend fun getScheduledStatusesForHabit(habitId: String): List<HabitSchedStatus>
 
     /** Full wipe — used only by the backup restore path (L4), inside its transaction. */

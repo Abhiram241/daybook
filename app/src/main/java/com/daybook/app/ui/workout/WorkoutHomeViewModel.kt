@@ -147,8 +147,14 @@ class WorkoutHomeViewModel @Inject constructor(
      *  sets, then runs the start action ([startEmptyWorkout] or [startRoutine]) that was stashed
      *  while the "already running" dialog was up. */
     fun discardActiveSessionAndThen(startAction: () -> Unit) = safeLaunch {
-        activeSession.value?.let { repo.discardSession(it.id) }
-        startAction()
+        // L5 fix — the only start-path action left without a `runCatching`/error message; a throw
+        // from `repo.discardSession` used to mean `startAction()` never ran and "Discard and
+        // start" did nothing visible, unlike every sibling action here (`startEmptyWorkout`,
+        // `startRoutine`, `duplicateRoutine`, `deleteRoutine`), which all cite
+        // BEAST_MODE_BUG_REPORT.md §1.2/§1.3 for exactly this reason.
+        runCatching { activeSession.value?.let { repo.discardSession(it.id) } }
+            .onSuccess { startAction() }
+            .onFailure { reportError(it, "Couldn't discard that workout. Try again.") }
     }
 
     fun duplicateRoutine(routineId: String) = safeLaunch {

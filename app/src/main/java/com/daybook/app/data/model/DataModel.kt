@@ -245,7 +245,11 @@ data class AppSettings(
     @ColumnInfo(name = "streak_rest_days", defaultValue = "") val streakRestDays: String = "",
     // rec 7 — default landing tab (route id) + ordered CSV of visible bottom-nav route ids.
     @ColumnInfo(name = "default_landing_tab", defaultValue = "home") val defaultLandingTab: String = "home",
-    @ColumnInfo(name = "nav_tabs", defaultValue = "home,routines,foodmed") val navTabs: String = "home,routines,foodmed",
+    // DAILY_REPORT_PLAN.md §2 — the new "report" (Daily Report) tab is appended last so it's the
+    // rightmost tab for free. MIGRATION_25_26 appends ",report" to every existing row's stored
+    // value too, so an upgrading install sees the new tab immediately rather than needing to
+    // manually re-enable it in Settings.
+    @ColumnInfo(name = "nav_tabs", defaultValue = "home,routines,foodmed,report") val navTabs: String = "home,routines,foodmed,report",
 
     // ---------------------------------------------------------------------------------------------
     // Three-axis accent round (DB v18). Device-local, same treatment as `accent_color` above
@@ -302,7 +306,62 @@ data class AppSettings(
      *  active filter chip: a [com.daybook.app.data.workout.MuscleGroup] name, or null for "All".
      *  Nullable, NO schema default (mirrors `profile_photo_path`) — "no preference" must not
      *  collapse into a real MuscleGroup value. Set from Beast Mode's own settings screen. */
-    @ColumnInfo(name = "default_exercise_group") val defaultExerciseGroup: String? = null
+    @ColumnInfo(name = "default_exercise_group") val defaultExerciseGroup: String? = null,
+
+    // ---------------------------------------------------------------------------------------------
+    // Round B (DB v24, MIGRATION_23_24) — Health Connect. One additive column, DEVICE-LOCAL: NOT
+    // synced, NOT in BackupModel, NOT in ContentHash, same treatment as every app_settings column
+    // since v16 (§7.2).
+    // ---------------------------------------------------------------------------------------------
+    /** §7.4's Health tab Day/Range `SegmentedControl` memory. 0 = day view, 1 = aggregate view. */
+    @ColumnInfo(name = "health_tab_last_mode", defaultValue = "0") val healthTabLastMode: Int = 0,
+
+    // ---------------------------------------------------------------------------------------------
+    // DAILY_REPORT_REDESIGN_PLAN.md §8 (DB v27, MIGRATION_26_27) — five additive columns. Every
+    // default byte-matches MIGRATION_26_27's SQL DEFAULT. Appended last, never reordered.
+    // User request (Firestore sync for AI meta-prompts + privacy settings): these five ARE now
+    // synced, per-user, on the Firestore parent doc's `aiSettings` field (CloudSyncRepository.
+    // buildAiSyncSettings/parentData/applyRemoteAiSettings) — no longer device-local. Still NOT in
+    // BackupModel/ContentHash: the plain JSON file backup/restore path is untouched by this (see
+    // AiSyncModel.kt's KDoc).
+    // ---------------------------------------------------------------------------------------------
+    /** §2 — free-text instruction prepended to both the one-shot AI Summary prompt and the chat
+     *  system prompt. Blank means "no meta-prompt configured" — never sent. */
+    @ColumnInfo(name = "ai_meta_prompt", defaultValue = "") val aiMetaPrompt: String = "",
+    /** §6 — CSV of [com.daybook.app.data.ReportCategory] names gating what the one-shot AI Summary
+     *  prompt includes. Blank/corrupt falls back to "all categories" (see `parseReportCategories`). */
+    @ColumnInfo(name = "ai_report_categories", defaultValue = "WORKOUT,HEALTH,INTAKE,TODO")
+    val aiReportCategories: String = "WORKOUT,HEALTH,INTAKE,TODO",
+    /** §7.1 — ISO `yyyy-MM-dd`, or "" meaning "no custom chat range set" (falls back to whatever
+     *  day the Report tab currently has open). */
+    @ColumnInfo(name = "ai_chat_range_start", defaultValue = "") val aiChatRangeStart: String = "",
+    @ColumnInfo(name = "ai_chat_range_end", defaultValue = "") val aiChatRangeEnd: String = "",
+    /** §7.1 — same CSV/enum scheme as [aiReportCategories], but a SEPARATE, independently-stored
+     *  toggle set for what Chat's seeded context includes. */
+    @ColumnInfo(name = "ai_chat_categories", defaultValue = "WORKOUT,HEALTH,INTAKE,TODO")
+    val aiChatCategories: String = "WORKOUT,HEALTH,INTAKE,TODO",
+
+    // ---------------------------------------------------------------------------------------------
+    // AI_CHAT_PROMPT_EXCLUSIONS_HEALTH_CARDS_PLAN.md §1 (DB v29, MIGRATION_28_29) — one additive
+    // column. Copied from `ai_meta_prompt` at migration time (S3) so Chat keeps behaving exactly as
+    // before until the user edits the new Chat box.
+    // User request (Firestore sync for AI meta-prompts + privacy settings): now synced, per-user
+    // (see the block above) — no longer device-local. Still NOT in BackupModel/ContentHash (the
+    // file backup path is untouched).
+    // ---------------------------------------------------------------------------------------------
+    /** §1 — separate free-text instruction sent ONLY with Chat's system message (never the one-shot
+     *  AI Summary, which still uses [aiMetaPrompt]). Blank means "no chat instructions". */
+    @ColumnInfo(name = "ai_chat_meta_prompt", defaultValue = "") val aiChatMetaPrompt: String = "",
+
+    // ---------------------------------------------------------------------------------------------
+    // User request (Health tab card visibility, DB v30, MIGRATION_29_30) — one additive column.
+    // User request (Firestore sync for AI meta-prompts + privacy settings): now synced, per-user,
+    // as a plain string list on the parent doc's `healthHiddenCards` field — no longer device-local.
+    // Still NOT in BackupModel/ContentHash (the file backup path is untouched).
+    // ---------------------------------------------------------------------------------------------
+    /** CSV of [com.daybook.app.data.health.HealthCardKind] names the user has chosen to hide from
+     *  the Health tab. Blank means "nothing hidden" (every card with data shows). */
+    @ColumnInfo(name = "health_hidden_cards", defaultValue = "") val healthHiddenCards: String = ""
 )
 
 /**

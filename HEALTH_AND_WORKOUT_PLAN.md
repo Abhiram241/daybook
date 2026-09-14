@@ -124,6 +124,60 @@ working tree clean (the only untracked file is this plan):
   `DaybookTheme` (`Theme.kt:153`) — re-providing it for a subtree is a supported, one-line move
   (§3.8.3).
 
+### 0.1 Post-Round-A baseline — re-verified against the live repo for this revision
+
+Round A ("Beast Mode") is no longer a plan — it is shipped, at **v0.6.2, build 34**, and has been
+through one bug-fix pass beyond its original phase list. Everything below is read from the live
+code, not the original A-phase description, and is what Round B's rewrite (§5–7) is now written
+against:
+
+- **`AppDatabase.version = 23`.** `MIGRATION_21_22` is Round A's six-table migration exactly as
+  planned. **`MIGRATION_22_23` already exists and is NOT free for Round B** — it is a small,
+  unrelated, already-shipped migration that added the `workout_accent_color` default plumbing for
+  Beast Mode's own accent picker. **Round B's migration is therefore `MIGRATION_23_24`, taking
+  `AppDatabase.version` 23 → 24**, and every reference to "`MIGRATION_22_23`" or "DB v23" for
+  Round B elsewhere in this document (§7.2, §7.6, §8, §9, §10) is superseded by this fact and
+  corrected in place below.
+- **Beast Mode grew its own design system, not just its own accent.** `ui/workout/beast/
+  BeastTheme.kt` defines `BeastAccentColor` — a **separate 9-value palette** (the original 5
+  `AccentColor` values plus 4 new, more saturated "gym" colours: `CRIMSON`, `ELECTRIC`, `VOLT`,
+  `VIOLET`), a `BeastPalette` (its own near-black dark-mode ground + accent vignette, distinct
+  from `DaybookColors.Bg`), and `BeastText` (a bold tabular-figure numeral treatment for
+  live-session numbers). `ui/workout/beast/BeastComponents.kt` supplies Beast-only composables on
+  top of this. **This is a deliberate, already-shipped divergence from C5** (§1) inside Beast
+  Mode's own UI — recorded as a standing carve-out in §1 rather than re-argued here, since it is
+  now precedent, not a new proposal. Round B's health surface follows the same rule: it draws from
+  `BeastTheme`/`BeastComponents`, never from `DaybookColors`/`AppShapes`/`DaybookText`.
+- **Beast Mode's bottom nav is exactly as originally planned, three items** (`ui/MainActivity.kt`
+  `beastNavItems`, ~line 729): `WorkoutRoutes.HOME` ("Routines"), `WorkoutRoutes.HISTORY`
+  ("History"), `WorkoutRoutes.LIBRARY` ("Exercises") — the third currently renders
+  `AddExerciseScreen` in `BROWSE` mode, i.e. the exercise catalog browser. **§7.4 repurposes this
+  exact slot** — same route constant, same nav position, same icon slot — into the health data
+  page. The exercise browser itself is not deleted from the codebase (still reachable from the
+  live session's `+ Add Exercise` in `PICK` mode); it simply stops being a bottom-nav destination.
+- **`WorkoutSettingsScreen.kt` / `WorkoutSettingsViewModel.kt` already exist and already hold more
+  than §3.8.2 originally specified** — a Beast Mode accent-and-font group, a weight-unit /
+  rest-timer / default-exercise-group / "Show Beast Mode on Today" group, an "Import from Hevy"
+  group, and the "Leave Beast Mode" row. §7.4 adds Round B's Health Connect settings as one more
+  `SettingsGroup` in this same file, using the same `SettingsGroup`/`SettingsRow` primitives —
+  nothing new is invented.
+- **`ui/settings/SettingsScreen.kt`'s "Backup & data" row opens `DataSettingsScreen`
+  (`ui/settings/SettingsScreen.kt:934`)**, which today has exactly one export shape (`Export
+  range` → `viewModel.exportRange`, full export via `shareLatestExport`) and one import shape
+  (`Import JSON` → confirm dialog → `OpenDocument` → `viewModel.importFromUri`), plus the separate,
+  non-destructive `Import from Hevy` CSV row. **§7.5.1's split model adds a second export button and
+  a second import button to this same screen** — it does not add a second screen.
+- **`CloudSyncRepository.DATA_TABLES`** (`data/sync/CloudSyncRepository.kt:1390`) today lists
+  exactly the eight pre-existing tables plus Round A's six: `"exercises"`, `"workout_sessions"`,
+  `"workout_exercises"`, `"workout_sets"`, `"workout_routines"`, `"workout_routine_exercises"`.
+  Round B adds `"health_days"`, `"health_sessions"` to this same array (§7.5).
+- **`BackupModel.kt` already carries Round A's shape exactly as planned** — `Definitions
+  .customExercises` / `.routines` (both `@EncodeDefault(NEVER)`-empty) and `DayEntry.workouts`
+  (`@EncodeDefault(NEVER)`-empty), with `ExerciseDef`, `RoutineDef`, `RoutineExerciseDef`,
+  `WorkoutLog`, `WorkoutExerciseLog`, `WorkoutSetLog` all present and unchanged. **§7.5.1's split
+  export/import is a change to how these fields are *serialised into files*, not a change to any
+  of these Kotlin shapes** — no field is removed, renamed or moved between classes.
+
 ---
 
 ## 1. Standing constraints for both rounds (non-negotiable)
@@ -149,6 +203,16 @@ working tree clean (the only untracked file is this plan):
   `AppShapes`, no new type ramp outside `DaybookText`. Every new screen is built from the existing
   components listed in §0. New surfaces honour `LocalReduceMotion`, `LocalDaybookShapes` (corner
   scale), `LocalIsDark` and the accent locals.
+  - **Superseding carve-out, already shipped, restated so it isn't mistaken for a new
+    exception: everything inside Beast Mode is exempt from the "outside `ui/theme/`" clause and
+    draws instead from `ui/workout/beast/BeastTheme.kt` and `BeastComponents.kt`** —
+    `BeastAccentColor` (its own 9-value palette), `BeastPalette` (its own ground/vignette) and
+    `BeastText` (its own numeral treatment) are the design system for every route in
+    `WorkoutRoutes.ALL`, not `DaybookColors`/`AppShapes`/`DaybookText` (§0.1). This carve-out is
+    scoped exactly to Beast Mode's own screens; **C5 governs the main app, unchanged** — nothing
+    outside `WorkoutRoutes.ALL` may reach into `BeastTheme`/`BeastComponents`, and nothing inside
+    Beast Mode may introduce a *third* design system on top of these two. Round B's health tab
+    and its Beast-Mode-Settings additions are unconditionally inside this carve-out (§7.4).
 - **C6. Offline-first stays true.** Nothing new may block app launch, and every Health Connect /
   Firestore call stays failure-inert (`runCatching` + a logged/Crashlytics-recorded failure, never
   a crash and never a blocking spinner on the launch path) — and never a silently-dropped failure:
@@ -180,8 +244,9 @@ working tree clean (the only untracked file is this plan):
      `WindowRefreshWorker` pass or an automatic sync pull may fail quietly *in the moment* —
      interrupting someone to say a background poll failed is worse than useless — but its outcome
      must still be readable somewhere the user can go and look: a status row in Settings (Round
-     B: §6.2's Settings → Health status line, which must show the last failure, not just the last
-     success). "Quiet" is allowed; "unknowable" is not.
+     B: §6.2's status line, which lives in Beast Mode Settings per §7.4's placement decision, and
+     must show the last failure, not just the last success). "Quiet" is allowed; "unknowable" is
+     not.
   5. This constraint applies to every section of this document.
 
 ---
@@ -205,16 +270,23 @@ Why Workout before Health:
   mode with a new entry gesture and a new dependency and permission flow behind one migration —
   which violates C8's spirit and makes the round un-revertable in pieces.
 
-Version plan:
+Version plan — updated for this revision. Round A shipped, then took one additional bug-fix pass
+that consumed a migration slot the original version plan had reserved for Health:
 
 | Round | Contents | DB | New schema JSON | versionCode / versionName |
 |---|---|---|---|---|
 | **0** | Intake reset fix (§2.4) | 21 — no migration | none | **25 / "0.5.7"** — SHIPPED |
-| **A** | Workout mode | 21 → **22** | `22.json` | **26 / "0.6"** |
-| **B** | Health Connect | 22 → **23** | `23.json` | **27 / "0.6.1"** |
+| **A** | Workout mode | 21 → **22** | `22.json` | **26 / "0.6"** — SHIPPED |
+| **A-fix** | Beast Mode bug-fix pass (own accent palette + font, session/routine error feedback, exercise picker, history, Hevy import) | 22 → **23** | `23.json` | **34 / "0.6.2"** — SHIPPED, current baseline |
+| **B** | Health Connect, placed inside Beast Mode (this revision) | 23 → **24** | `24.json` | **35 / "0.6.5"** |
 
-`MIGRATION_21_22` is the **workout** migration and `MIGRATION_22_23` the **health** one,
-permanently.
+`MIGRATION_21_22` is the **workout** migration, `MIGRATION_22_23` (already shipped) was the
+**Beast-Mode-accent-settings** migration, and **`MIGRATION_23_24` is Round B's health migration**
+— every later reference in this document to "`MIGRATION_22_23`" as Round B's migration, or to "DB
+v23" as Round B's target version, means `MIGRATION_23_24` / v24 (§0.1). versionCode jumped from 27
+to 34 across the shipped A-fix pass, so Round B's version is **35 / "0.6.5"**, not the originally
+planned 27 / "0.6.1" — bumped up along the 0.6.x line rather than to a new minor, keeping Round B
+adjacent to the Beast Mode work it extends.
 
 ### 2.1 Why we are **not** adopting the PRD's backend architecture
 
@@ -1549,6 +1621,15 @@ constraint. Matching the app's own rhythm also means a user who has just held To
 | **2** | `"workout_history"` | **`History`** | `DaybookIcons.Clock` | Past sessions (§3.7.6). The second thing anyone opens a gym app for, and it has nowhere else to be now that the landing is routines. |
 | **3** | `"workout_library"` | **`Exercises`** | `DaybookIcons.Category` | The exercise catalog is a manage-able surface: a labelled nav item is more discoverable than an overflow menu, needs no new affordance, and it is where you go to rename or archive an "Imported" row from a Hevy import (§3.9.4). Cost: zero new screens — it is `AddExerciseScreen` in `BROWSE` mode (§3.7.3). |
 
+**Superseded by Round B (§7.4), recorded here rather than silently rewritten so this section stays
+an honest record of what Round A actually shipped.** The user found the Exercises tab unused after
+living with the shipped app. Round B repurposes this same third slot — same `WorkoutRoutes.LIBRARY`
+route constant, same nav position, same icon slot — into the health data page, with a new label
+and icon (§7.4). `AddExerciseScreen` in `BROWSE` mode does not disappear from the codebase; it
+simply stops being reachable from the bottom nav, staying reachable only as `PICK` mode from inside
+a session or routine editor (§3.6.6's table). Everything else in this §3.6 — the gesture, the
+entry/exit points, `WorkoutRoutes.HOME`/`.HISTORY`, the accent provider — is unaffected.
+
 **Deliberately not a nav destination:**
 
 - **Beast Mode's Settings (`"workout_settings"`).** A settings screen is a place you visit, not a
@@ -1572,7 +1653,15 @@ val beastNavItems = remember(workoutIcon) {
     listOf(
         NavItemSpec(WorkoutRoutes.HOME,    workoutIcon,             "Routines"),
         NavItemSpec(WorkoutRoutes.HISTORY, DaybookIcons.Clock,      "History"),
-        NavItemSpec(WorkoutRoutes.LIBRARY, DaybookIcons.Category,   "Exercises")
+        NavItemSpec(WorkoutRoutes.LIBRARY, DaybookIcons.Category,   "Exercises")  // Round B (§7.4)
+                                                                                   // changes this
+                                                                                   // item's icon
+                                                                                   // and label to
+                                                                                   // "Health" —
+                                                                                   // the route
+                                                                                   // constant and
+                                                                                   // slot position
+                                                                                   // do not change.
     )
 }
 
@@ -2948,7 +3037,7 @@ surface — never merged into, never written into, and never displayed inside th
   `nutritionProteinGrams: Float?`, `nutritionCarbsGrams: Float?`, `nutritionFatGrams: Float?`,
   `hydrationMl: Float?` — daily aggregates only, not per-meal rows (a second occurrence-shaped
   table would compete with `food_med_occurrences` for the same conceptual space).
-- Rendered on `HealthScreen` (§7.4) as one `SoftCard` titled **`Nutrition`**, subtitle **`From
+- Rendered on `HealthTabScreen` (§7.4, inside Beast Mode — not a main-app screen) as one `SoftCard` titled **`Nutrition`**, subtitle **`From
   MyFitnessPal`** — resolved at runtime from `metadata.dataOrigin.packageName` through a small
   pure `SourceAppLabels` map, exact fallback string `From another app` for an unrecognised
   package. No icon scraping, no `PackageManager` label lookup.
@@ -3047,9 +3136,14 @@ health privacy statement.
 
 **Availability and degradation ladder** (`data/health/HealthConnectAvailability.kt`, a pure
 mapping + a thin `getSdkStatus` caller, unit-tested). Every row carries exact final copy. The rule
-for the whole table: **the Today card may hide itself silently, but Settings → Health must always
-be able to tell the user why.** Hiding a card is not an error; a user asking "why is there nothing
-here?" and finding no answer is.
+for the whole table: **the Health tab may render an empty/help state silently, but Beast Mode
+Settings must always be able to tell the user why.** Rendering an empty state is not an error; a
+user asking "why is there nothing here?" and finding no answer is. **Placement note, per §7.4's
+superseding decision: every "Today card" below means the `Health` tab's own body (there is no
+separate summary card to hide — the tab itself renders whichever row applies), and every "Settings
+→ Health" below means the `Health Connect` group inside Beast Mode Settings (§3.8.2, §7.4) — not
+Daybook's main Settings.** The copy in each row is otherwise exact and unchanged from the original
+design.
 
 | State | Exact behaviour and copy |
 |---|---|
@@ -3092,7 +3186,7 @@ Daybook gym session as an `ExerciseSessionRecord` — is deferred (§6.4).
    re-attempts a full 30-day read forever (a silent battery regression).
 4. **No `registerForDataNotifications` push subscription** — provider-dependent, and would mean
    waking the app on someone else's write cadence, against C7.
-5. **A manual "Refresh now" row** in Settings → Health. User-triggered, so it reports both
+5. **A manual "Refresh now" row** in Beast Mode Settings' `Health Connect` group (§7.4). User-triggered, so it reports both
    outcomes: label swaps to `Refreshing…` and disables while running; on success, `Last updated
    just now.`; on failure, `Couldn't refresh your health data. Check that Health Connect is still
    installed, then try again.` in `DaybookColors.Danger`; **on success with nothing new** (the
@@ -3115,7 +3209,7 @@ data was available.`
 
 **History window:** without `READ_HEALTH_DATA_HISTORY`, Health Connect only serves the 30 days
 preceding the permission grant; reading a single older record errors. So: default first pull =
-**last 30 days**; Settings → Health gets an "Import my past data" button that requests the history
+**last 30 days**; Beast Mode Settings' `Health Connect` group (§7.4) gets an "Import my past data" button that requests the history
 permission and backfills further, with a **365-day cap**: a longer window means more month docs
 hydrated and pushed, and older data the band has often does not have anyway. Uninstalling Daybook
 revokes the history permission, and reinstalling resets the 30-day window from the new grant date
@@ -3127,10 +3221,19 @@ revokes the history permission, and reinstalling resets the 30-day window from t
 a Room write here would re-trigger the `InvalidationTracker` observer and mark a cloud push
 pending on every poll, the exact feedback loop `SyncStateStore`'s KDoc warns about.
 
-### 6.4 Relationship to Round A's Workout mode — deliberately separate
+### 6.4 Relationship to Round A's Workout mode — deliberately separate tables, same mode
 
-**A workout recorded by the band (an `ExerciseSessionRecord`) does NOT appear in Workout mode. It
-appears in the Health surface only.** Workout mode shows only sessions the user logged by hand.
+**A workout recorded by the band (an `ExerciseSessionRecord`) does NOT appear in the Routines/
+History surfaces (`WorkoutRoutes.HOME`/`.HISTORY`). It appears only on the `Health` tab
+(§7.4).** This section's reasoning predates the placement decision in §7.4 and is unaffected by
+it: both surfaces now happen to live inside the same Beast Mode shell, but that is a UI-placement
+fact, not a data-model one — `health_sessions` and `workout_sessions` stay two separate tables with
+no foreign key or merge between them, for exactly the reasons below. **Placing the Health tab
+inside Beast Mode makes this distinction more visible, not less** — a user on the History tab sees
+only what they logged; one swipe over on the Health tab, they see only what the band recorded; the
+mode boundary that used to separate "Workout mode" from "the rest of the app" now does double duty
+separating "hand-logged" from "band-recorded" within the same mode, which is arguably a clearer
+home for this distinction than the original main-app/Health-screen split ever was.
 
 - **Double-counting is the default failure.** Log a gym session in Daybook and wear the band, and
   there are now two records of one workout. Merging them needs overlap-window dedupe heuristics
@@ -3213,14 +3316,21 @@ data class HealthSession(
 crashing. `ui/health/` needs a distance/duration formatter shared with Round A's set rows — put it
 in `util/` so both use one implementation.
 
-### 7.2 `MIGRATION_22_23`
+### 7.2 `MIGRATION_23_24`
 
 Additive: `CREATE TABLE health_days`, `CREATE TABLE health_sessions` + its two indices, and one
-device-local `ALTER TABLE app_settings ADD COLUMN health_card_enabled INTEGER NOT NULL DEFAULT 1`.
-`AppDatabase.version` 22 → 23, two entities + two DAO accessors, registered in `DatabaseModule`,
-`23.json` exported, `MigrationTest.migrate22To23` added.
+device-local `ALTER TABLE app_settings ADD COLUMN health_tab_last_mode INTEGER NOT NULL DEFAULT 0`
+(§7.4's day/aggregate toggle, remembered like every other Beast-Mode-local preference — 0 = day
+view, 1 = aggregate view). **No `health_card_enabled` column** — that column belonged to the
+now-dropped Today card (§7.4) and never ships. `AppDatabase.version` **23 → 24**, two entities + two
+DAO accessors, registered in `DatabaseModule`, `24.json` exported, `MigrationTest.migrate23To24`
+added.
 
 ### 7.3 New files
+
+All health-specific UI lives under `ui/workout/health/`, inside Beast Mode's own package, for the
+same reason `WorkoutSettingsScreen.kt` lives under `ui/workout/` and not `ui/settings/` (§3.8.2):
+reachable from exactly one place, inside the mode.
 
 | File | Role |
 |---|---|
@@ -3229,93 +3339,454 @@ device-local `ALTER TABLE app_settings ADD COLUMN health_card_enabled INTEGER NO
 | `data/health/HealthConnectReader.kt` | all `HealthConnectClient` calls: aggregates, session reads, changes token. The only file that imports `androidx.health.connect.*`. |
 | `data/health/HealthSyncStateStore.kt` | SharedPreferences token/cursor store (§6.3) |
 | `data/HealthRepository.kt` | orchestration: pull → map → upsert into Room; `@Singleton`, Hilt-provided in `DatabaseModule` |
-| `data/local/HealthDao.kt` | day + session queries, range reads for export, range deletes for eviction |
-| `ui/health/HealthPermissionsRationaleActivity.kt` | the required manifest activity + privacy copy |
-| `ui/health/HealthScreen.kt` + `HealthViewModel.kt` | the full health view (stacked route `"health"`) |
-| `ui/health/HealthSummaryCard.kt` | the compact Today card |
-| `ui/settings/HealthSettingsScreen.kt` | connect / disconnect / refresh now / import past data / which types / status |
+| `data/local/HealthDao.kt` | day + session queries, range reads for a single day, range reads for the aggregate mode (§7.4), range reads for export, range deletes for eviction |
+| `ui/workout/health/HealthPermissionsRationaleActivity.kt` | the required manifest activity + privacy copy. Its manifest declaration is unconditional (an OS requirement, §6.2) even though nothing else about Health Connect appears in the main app — it is not itself a Beast-Mode screen, just a system-facing activity with no entry point of its own. |
+| `ui/workout/health/HealthTabScreen.kt` + `HealthTabViewModel.kt` | the repurposed third nav destination (§7.4) — day/aggregate toggle, the `WeekStrip`-identical calendar, the metric cards, the band's workout sessions |
+| `ui/workout/health/HealthAggregateSheet.kt` | the date-range picker for aggregate mode (§7.4) |
+| `ui/workout/WorkoutSettingsScreen.kt` (existing file, extended) | gains one new `SettingsGroup` — connect / disconnect, permission status, refresh now, import past data, which types are shared (§7.4) |
+
+**No `ui/health/` package, no `ui/settings/HealthSettingsScreen.kt`, no `HealthSummaryCard.kt`, no
+stacked `"health"` route outside Beast Mode.** All three existed in the original version of this
+plan and are dropped outright per the user's decision (see the top of §7 and §7.4) — none of them
+were ever implemented, so nothing is migrated away from; they are simply not built.
 
 **No `util/work/HealthPullWorker.kt`** — the daily pull is a call inside `WindowRefreshWorker`; the
-other two cadences are an on-resume throttled pull and a manual "Refresh now" (§6.3).
+other two cadences are an on-resume throttled pull and a manual "Refresh now" (§6.3, now living in
+Beast Mode Settings rather than main Settings).
 
 **Isolation rule:** every Health Connect type stays behind `HealthConnectReader` and
 `HealthConnectAvailability`. Nothing in `ui/`, `HealthRepository` or the Room layer imports
 `androidx.health.connect.*`. If the alpha pin later moves to 1.1.0 stable, that is then a two-file
 change.
 
-### 7.4 UI placement
+### 7.4 UI placement — inside Beast Mode only
 
-**A summary card on Today + a stacked "Health" screen behind it. Not a new bottom-nav tab.**
+**Superseding decision, replacing the original version of this plan in full.** The original
+version of §7.4 put a health summary card on Today and a stacked "Health" screen behind it,
+reachable from the main app, with its settings living in `ui/settings/HealthSettingsScreen.kt`.
+**None of that was ever built.** The user's instruction for this revision is explicit and
+absolute: **Health Connect data and every Health Connect setting live only inside Beast Mode —
+never on Today, never in Daybook's main Settings, never as a standalone main-app route.** This is
+not a compromise between the two designs; the old design is deleted from the plan, not merged with
+the new one.
 
-- Today already groups its content; the health card is one more `SoftCard`, placed **below the
-  last reminder group and above the bottom clearance spacer** — the final item in Today's
-  `LazyColumn`. Today's purpose is *what you still have to do*; health data is *what already
-  happened*, so it must never push a pending reminder down the screen. `GroupHomeItemsTest`'s
-  existing grouping is not modified — the card is appended after the grouped items, not inserted
-  into them. Round A's `Beast Mode` row (§3.6.4) sits in the same appended region. Final order:
-  **grouped reminders → Beast Mode row → Health card → clearance spacer** — the workout row is an
-  action still available today, the health card a read-out of what already happened. Each row is
-  independently hideable (`workout_today_card_enabled`, §3.5; `health_card_enabled`, §7.2), and
-  hiding one must not move the other.
-- **Exact card content:** title row `Health`, then one compact stats row of at most three figures
-  in priority order, skipping any null: steps, sleep (as `7h 12m`), workouts (as `2 workouts` / `1
-  workout`). Three is the limit — the row must not wrap at 360 dp. Everything else lives on the
-  Health screen.
-- **The card renders nothing at all** when Health Connect is unavailable or ungranted — not an
-  empty shell with a "Connect" prompt, because Today is not a settings screen. Discovery happens in
-  Settings → Health, and §6.2's ladder guarantees that screen always explains itself.
-- Tapping it opens `"health"`, a stacked destination with the existing `BackHeader`: a
-  `WeekStrip`-driven day picker (already used on Today), the full day's metrics, and the band's
-  workout sessions for that day.
-- **A fourth bottom tab is one too many** for the pill nav at 360 dp, and health data is something
-  you glance at, not a place you live — the argument was never "there is no room" (Round A does not
-  take a tab slot, §3.6), it is that health data is a glance and a tab implies a destination. If
-  Health ever outgrows the card, the precedent is Round A's stacked mode, not a nav item.
-- The card is hideable via `app_settings.health_card_enabled` so a user who doesn't wear a band
-  never sees it.
+**Where it lives: the repurposed third Beast Mode nav slot.** Beast Mode's bottom nav keeps its
+three items and their route constants (`WorkoutRoutes.HOME` / `.HISTORY` / `.LIBRARY`, §3.6.7,
+already shipped) — only `.LIBRARY`'s destination changes:
 
-### 7.5 Sync integration for health data
+| # | Route | Old label/icon (Round A, shipped) | New label/icon (Round B) | New destination |
+|---|---|---|---|---|
+| 3 | `WorkoutRoutes.LIBRARY` = `"workout_library"` | `Exercises` / `DaybookIcons.Category` | **`Health`** / `DaybookIcons.Heart` | `HealthTabScreen` (this section) |
 
-**Health data syncs to the user's cloud account, and must also appear in the manual "Export JSON"
-backup, not only the background Firestore sync.** No extra plumbing is needed for the second half:
-the JSON export button (`ExportImportRepository.exportBackup()`, §4.4) and the Firestore push
-(§4.1–4.2) both serialise the **same** `BackupModel`/`DayEntry` object — populating
-`DayEntry.health` below makes it appear in both outputs at once. Do not build a second,
-health-specific export path — it would be redundant and a second place for the two outputs to
-drift apart.
+**Icon choice.** `DaybookIcons` (`ui/icons/DaybookIcons.kt`, the same file `.Clock` and `.Category`
+already come from) does not yet have a heart glyph; adding `DaybookIcons.Heart` as one more
+`ImageVector` built in code is exactly the precedent §0 already records for `.Clock`/`.Category` —
+no new vector asset, no `material-icons-extended` dependency. Rejected alternative:
+`MI.Filled.Favorite` (material-icons-core, zero new code) — rejected only because every other Beast
+Mode nav icon is a `DaybookIcons` entry and mixing a stock Material icon into that row for the one
+item that happens to need a heart shape would be the visible seam; the one-`ImageVector` cost is
+worth the consistency.
 
-Same mechanics as §4, deltas only:
+**The exercise browser does not disappear.** `AddExerciseScreen` in `BROWSE` mode is simply no
+longer reachable from the bottom nav — it stays exactly where §3.6.6's route table already has it
+reachable from, in `PICK` mode, from the live session's `+ Add Exercise` and the routine editor's
+`+ Add exercise`. Managing (renaming/archiving) a custom or imported exercise outside of adding one
+to something loses its dedicated nav slot; the pragmatic call, made here because the user
+explicitly called the old Exercises tab purposeless and this plan does not invent a replacement
+surface for a use nobody asked to keep: that management action moves to the exercise's row overflow
+wherever `PICK` mode already renders it (§3.7.3's "Row overflow" column, already `Edit` /
+`Archive`), which is unaffected by this change and needs no new work.
+
+**`HealthTabScreen` — the page itself:**
+
+```kotlin
+@Composable
+fun HealthTabScreen(
+    contentPadding: PaddingValues,             // from DaybookScaffold, carries Beast Mode's nav
+                                               // clearance, same as WorkoutHomeScreen (§3.7.4)
+    onOpenSettings: () -> Unit,                // -> "workout_settings" (§3.8.2), NOT a local gear —
+                                               // Beast Mode already has exactly one settings gear,
+                                               // on the Routines landing (§3.7.4); this screen
+                                               // reuses it rather than growing a second one
+    viewModel: HealthTabViewModel = hiltViewModel()
+)
+
+enum class HealthTabMode { DAY, AGGREGATE }
+```
+
+- **Chrome**: `ScreenHeader(title = "Health", subtitle = <day: the selected date, formatted;
+  aggregate: the range, formatted>)`, drawn with `BeastText`/`BeastPalette`, not `DaybookText`/
+  `DaybookColors` (§0.1, C5's Beast-Mode carve-out) — the same rule every other Beast Mode screen
+  already follows. Beast Mode's pill nav sits underneath, consuming `contentPadding` exactly like
+  `WorkoutHistoryScreen` (§3.7.6).
+- **A `SegmentedControl` right under the header**: **`Day` / `Range`** — the `HealthTabMode`
+  switch. Chosen over two separate nav rows or a toggle button because `SegmentedControl` is
+  already Daybook's existing two-state-switch component (§0) and the choice is mutually exclusive
+  by construction. Persisted in `app_settings.health_tab_last_mode` (§7.2) so re-opening the tab
+  remembers which mode was last used — this is the one piece of state that is genuinely "which
+  view was I in", not "what date am I looking at", and it is device-local by the same rule every
+  other Beast Mode preference already follows (§3.8.2).
+
+**`Day` mode — the calendar, byte-for-byte the same UI and the same implementation as Today's.**
+The user's instruction is exact: same UI, same behaviour as the Home/Today tab's existing calendar.
+Today's calendar is `ui/components/WeekStrip.kt`'s `WeekStrip` composable — a week-strip ⇄
+month-grid pager with the exact expand/collapse chevron, the "Back to today" fixed-height slot, and
+the future-day-is-shown-but-not-selectable rule (`ui/components/WeekStrip.kt:63-303`). **`Day` mode
+calls this same `WeekStrip` composable directly** — not a re-implementation, not a health-specific
+fork:
+
+```kotlin
+WeekStrip(
+    selectedDate = state.selectedDate,
+    today = state.today,
+    onSelect = viewModel::selectDate,
+    expanded = state.calendarExpanded,
+    onToggleExpanded = viewModel::toggleCalendarExpanded,
+    weekStart = state.weekStart          // same app_settings-backed preference Today reads
+)
+```
+
+This is not "the same look" achieved by copying `WeekStrip`'s code into a Beast-Mode-styled
+duplicate — it is a call to the identical function Today already uses, so any future fix or change
+to the week/month calendar behaviour applies to both call sites automatically and can never drift
+between them. `WeekStrip`'s own internals (`DaybookColors`, `LocalAccent`) are untouched by this —
+`LocalAccent` already resolves to `BeastAccentColor`'s current value inside Beast Mode via the
+existing accent-provider gate (§3.8.3), so the selected-day pill and the "today" dot render in
+Beast Mode's accent with zero code change to `WeekStrip` itself. Below the strip: the day's metric
+cards (next bullet) for whichever `LocalDate` is selected.
+
+**`Range` mode — the aggregate view.** A `GhostButton` row under the segmented control reading the
+current range (e.g. `Last 7 days`), tapping it opens `HealthAggregateSheet` — a `Sheets.kt` bottom
+sheet offering four preset ranges (**`Last 7 days`**, **`Last 30 days`**, **`This month`**, **`Last
+3 months`**) plus a **`Custom range`** row opening the existing two-date-picker pattern
+`DataSettingsScreen`'s "Export a date range" already uses (`DaybookDatePickerDialog` ×2 — the same
+component, not a re-implementation). **Default range: `Last 7 days`** — chosen because it is the
+shortest window that smooths day-to-day noise in steps/sleep/heart-rate without needing more than a
+handful of records hydrated, and it matches the "last week" framing already familiar from
+`WeekStrip`'s own default view. Below the range row: the same metric cards as `Day` mode, but each
+value is the range's mean (steps, distance, calories, heart rate, SpO₂, weight, hydration,
+nutrition) or sum where a sum is the meaningful figure (a range's total workouts, total sleep
+hours) — a pure `aggregateHealthDays(days: List<HealthDay>): HealthAggregate` function,
+unit-tested, decides per-metric whether it averages or sums, so this is not an ad-hoc per-card
+decision made in the composable. The aggregate sheet separately counts and shows how many of the
+range's days had *any* health data at all — e.g. `5 of 7 days have data` — so a mostly-empty range
+is legible rather than looking like a bug; this coverage line is a summary, not a substitute for
+the per-card hide rule below, which still applies to every individual card underneath it.
+
+**Metric cards — the MVP record set, unchanged from §6.1's scoping, only relocated:** steps +
+distance, calories (active/total), heart rate (avg/resting/min/max), sleep (with the
+deep/light/REM/awake breakdown), SpO₂, weight, hydration, the separate Nutrition card with its
+"From …" source-app subtitle (§6.1.6, unchanged), and the band's `HealthSession` rows for the
+selected day or range. Every card is a `SoftCard` built from `BeastComponents`, not
+`ui/components/Components.kt`'s plain `SoftCard` — Beast Mode's own visual identity (§0.1) applies
+here exactly as it does to every other Beast Mode screen.
+
+**Per-metric hide rule — new for this revision, binding on every card on this page, in both
+modes.** §6.2's degradation ladder governs whether the **whole page** has anything to show at all
+(unavailable / ungranted / a read failed); this rule is a separate, narrower one that applies
+**underneath** that ladder, once the page has *something* to show. **If a given metric's data was
+not actually fetched or is not available for the selected day (`Day` mode) or is absent for every
+day in the selected range (`Range` mode), that metric's card is not rendered at all** — not an
+empty card, not a card with a dash, not a "No data" placeholder card. This is the exact same rule
+the original plan already stated for the whole page in one place — "**the card renders nothing at
+all** when Health Connect is unavailable or ungranted… because [this] is not a settings screen"
+(the dropped Today-card version of this rule) and "show nothing for what wasn't [granted] (no
+empty stat with a dash)" (§6.2's "Partially granted" row) — now applied at the finer grain of one
+card among many on an otherwise-populated page: a user who has granted Steps and Sleep but not
+SpO₂, or whose band simply never reports Distance, sees a page with Steps and Sleep cards and *no
+gap, no dash, no "SpO₂: —" row* where the SpO₂ card would have been — the layout is exactly as long
+as the number of cards that have something to say. Concretely:
+- `Day` mode: a card renders only if that metric's `HealthDay` column for the selected date is
+  non-null (or, for `HealthSession` rows, only if at least one session exists that day).
+- `Range` mode: a card renders only if `aggregateHealthDays` found at least one non-null day for
+  that metric anywhere in the range; a metric present on some days and absent on others still
+  renders (averaged/summed over the days that had it), only a metric absent on **every** day in
+  the range is hidden.
+- This is independent of, and checked separately from, §6.2's ladder: a fully-granted, fully-
+  working connection can still legitimately hide individual cards simply because the band never
+  writes that record type (Floors, VO2 Max and similar LATER-scoped types aside — for the MVP set
+  itself, e.g. a Mi Band 10 that does not report Hydration on a given day) — this is normal, not a
+  degraded state, and must not be confused with the ladder's "read threw" or "ungranted" rows.
+- The Nutrition card follows the same rule using its own presence check (`nutritionCalories` et al.
+  all null on every day in scope ⇒ hidden), independent of every other card's state.
+- A pure `visibleHealthCards(day: HealthDay?, range: HealthAggregate?): Set<HealthCardKind>`
+  function (unit-tested) is the one choke point that decides this, mirroring `columnsFor` (§3.7.1)
+  and `aggregateHealthDays` in being a single, testable decision point rather than a scattered set
+  of `if (x != null)` checks repeated per composable.
+
+**Degradation ladder, relocated verbatim.** §6.2's entire availability/permission ladder table
+still applies, unchanged in content — only its destination changes: every row that said "Settings
+→ Health shows…" now means **Beast Mode Settings** (§3.8.2's screen, extended per this section),
+and every row that said "Today card hidden" / "Today card never renders" now means **the `Health`
+nav tab renders its empty/ungranted/help state on the tab itself**, since there is no separate
+summary card to hide — the tab **is** the summary. Concretely: `SDK_UNAVAILABLE` → the `Health` tab
+shows one muted `EmptyState` (`Health Connect isn't available on this phone.`); not-yet-granted →
+`EmptyState` with a `PrimaryButton` `Connect`, which is the same action Beast Mode Settings' new
+group also exposes — tapping either launches the same permission flow, so a user who lands on the
+tab first is never dead-ended into a screen with no way forward. Granted-but-zero-records and
+partially-granted keep their exact copy from §6.2, rendered on the tab instead of a card.
+
+**Why this reuses `WorkoutSettingsScreen`'s existing gear rather than adding a second settings
+entry point on this tab.** Beast Mode already has exactly one settings affordance, established by
+Round A (§3.7.4) and never varied since: the gear in the Routines landing header. Giving the Health
+tab its own second gear would mean two different-looking paths to the same settings screen and two
+places to keep in sync about which one is "the" way in. `onOpenSettings` on `HealthTabScreen`
+exists only for the `Connect` empty-state's button to jump straight to the right `SettingsGroup`
+when permissions are missing — a convenience shortcut into the one existing settings screen, not a
+second door.
+
+**Beast Mode Settings gains one new group — the entirety of Round B's user-facing settings surface,
+per the user's explicit "confined to that one tab plus Beast Mode's Settings screen" instruction:**
+
+| Row | Control | Notes |
+|---|---|---|
+| **`Connect Health Connect`** / **`Disconnect`** | `SettingsRow` with a trailing `PrimaryButton`/`GhostButton` depending on state | Launches or clears the permission flow. Label and control swap per §6.2's ladder — "Connect" when ungranted, a status line + "Disconnect" (opens the OS Health Connect app's own per-app revoke screen, since Daybook cannot itself revoke a Health Connect grant) when granted. |
+| **Status line** | plain text row, no control | `Last updated <relative time>.` / the last-failure copy from §6.2/§6.3, always present once connected — this is C9's "background failure must be readable somewhere" requirement (§1 C9.4), and this row is that somewhere. |
+| **`Refresh now`** | `GhostButton` | §6.3's manual refresh, exact copy unchanged. |
+| **`Import my past data`** | `GhostButton` | §6.3's history backfill, exact copy unchanged. |
+| **`Which data is shared`** | `SettingsRow` opening a read-only sheet | Lists the 12 MVP types (§6.1.8) each with a granted/not-shared indicator, mirroring §6.2's "Not shared:" list — decided here as a **sheet**, not an inline expanding list, because 12 rows inline would roughly double the settings screen's scroll length for a state most users check once; a `Sheets.kt` bottom sheet is the existing pattern for "more detail, on demand" (already used by the exercise picker's filter sheets, §3.7.3). Each row also carries a `Change what's shared` action at the sheet's bottom, deep-linking into the Health Connect app's own settings, exactly as §6.2 already specifies. |
+
+This group sits below the existing Hevy-import group and above `Leave Beast Mode`, in its own
+`SettingsGroup` titled **`Health Connect`** — five rows, the same count-and-shape discipline
+§3.8.2's original "four preferences and a door" rule set for the settings screen as a whole, now
+extended rather than violated: this is Round B's entire addition to that screen, no more.
+
+**Why not a card on Today, restated as the rejection it is.** The original plan's argument for a
+Today card was discovery-by-glance. That argument is explicitly overridden by the user's
+instruction, not re-litigated here — Beast Mode is already the mode you deliberately enter to see
+training/health context (its own long-press gesture, its own nav, its own settings), and Health
+Connect data belongs entirely inside that deliberate space. A user who does not open Beast Mode
+does not see health data, exactly as a user who does not open Beast Mode does not see their gym
+history — parity with how Round A already treats workout data, not a new asymmetry.
+
+### 7.5 Sync integration for health data, and the split export/import model
+
+#### 7.5.0 What changes and what does not
+
+**Health data syncs to the user's cloud account via the existing Firestore mechanism, unchanged in
+shape.** `DATA_TABLES`, month partitioning, the D2 conflict flow, `ContentHash` — none of it
+branches on "is this a health table" vs "is this a workout table" vs "is this a habit table".
+**What changes is the *manual JSON export/import* surface in Daybook's main Settings, per the
+user's explicit instruction to split it into two independent files.** This is a deliberate,
+justified asymmetry between the two mechanisms, argued in §7.5.2.
 
 - `DATA_TABLES` gains `"health_days"`, `"health_sessions"`; `DataTablesSyncTest` updated.
-- `BackupModel.DayEntry` gains one optional field:
+- `BackupModel.Definitions` and `DayEntry` gain no *new top-level classes* — health data joins the
+  same `DayEntry` shape workout data already uses (§0.1), as one more optional, default-absent
+  field:
   ```kotlin
+  // in DayEntry, alongside the existing `workouts` field (§0.1)
   @EncodeDefault(EncodeDefault.Mode.NEVER)
   val health: HealthDayLog? = null        // null == this day has no health data
-  ```
-  with `HealthDayLog` carrying the day metrics plus `sessions: List<HealthSessionLog>`. Nullable,
-  so `explicitNulls = false` omits it automatically — the hash-neutrality guarantee of §4.2 holds
-  identically. New `HealthDayHashTest` proves it.
-- `ExportImportRepository`: the same six call sites as §4.4. `evictMonth` is again the trap — it
-  must delete that month's `health_days` and `health_sessions` rows, or evicted months re-push
-  forever.
-- `Definitions` is not touched — health data has no definitions.
 
-**Why sync health data at all:** the Mi Band pairs with one phone, so a second device would
-otherwise show an empty Health section; Health Connect's own history is bounded and resets on
+  @Serializable
+  data class HealthDayLog(
+      val steps: Int? = null, val distanceMeters: Float? = null,
+      val activeCalories: Float? = null, val totalCalories: Float? = null,
+      val restingHeartRate: Int? = null, val avgHeartRate: Int? = null,
+      val minHeartRate: Int? = null, val maxHeartRate: Int? = null,
+      val sleepMinutes: Int? = null, val sleepDeepMinutes: Int? = null,
+      val sleepLightMinutes: Int? = null, val sleepRemMinutes: Int? = null,
+      val sleepAwakeMinutes: Int? = null,
+      val sleepStartMillis: Long? = null, val sleepEndMillis: Long? = null,
+      val spo2Percent: Float? = null, val weightKg: Float? = null,
+      val hydrationMl: Float? = null,
+      val nutritionCalories: Float? = null, val nutritionProteinGrams: Float? = null,
+      val nutritionCarbsGrams: Float? = null, val nutritionFatGrams: Float? = null,
+      val nutritionSourceApp: String? = null,
+      val sessions: List<HealthSessionLog> = emptyList()
+  )
+
+  @Serializable
+  data class HealthSessionLog(
+      val id: String, val exerciseType: Int, val title: String? = null,
+      val startMillis: Long, val endMillis: Long, val durationMinutes: Int,
+      val activeCalories: Float? = null, val distanceMeters: Float? = null,
+      val avgHeartRate: Int? = null, val sourceApp: String? = null
+  )
+  ```
+  Nullable, so `explicitNulls = false` omits it automatically — the hash-neutrality guarantee of
+  §4.2 holds identically. New `HealthDayHashTest` proves it.
+- `ExportImportRepository`: the same six call sites as §4.4, extended for `health_days` /
+  `health_sessions` the same way they were already extended for the workout tables. `evictMonth` is
+  again the trap — it must delete that month's `health_days` and `health_sessions` rows, or evicted
+  months re-push forever.
+- `Definitions` is not touched by health data — health has no definitions, same as before.
+
+**Why sync health data to the cloud at all:** the Mi Band pairs with one phone, so a second device
+would otherwise show an empty Health tab; Health Connect's own history is bounded and resets on
 reinstall; and the user's health context sitting next to their journal is the whole point of
 putting it in Daybook rather than opening Mi Fitness.
+
+#### 7.5.1 The split export/import model
+
+**Two independent manual export actions, two independent manual import actions, both living in
+`ui/settings/SettingsScreen.kt`'s existing `DataSettingsScreen`** (§0.1) — not a second screen, not
+a Beast-Mode-side export button. This placement is deliberate: exporting/importing files is a
+device-storage action, not a Beast Mode concept, and `DataSettingsScreen` is where every existing
+export/import action already lives; Beast Mode Settings (§7.4) stays confined to Health-Connect-
+specific settings, not general file I/O, matching the user's own framing that data-shape decisions
+belong with backup, not with the mode.
+
+**Shape.** Both files are still a `DaybookBackup` — no new root Kotlin class, no new wire-model
+shape to maintain in parallel with the existing one. The split is a **filter applied at
+serialisation time**, and a new discriminator field makes the two shapes self-identifying:
+
+```kotlin
+@Serializable
+data class BackupMeta(
+    val formatVersion: Int = FORMAT_VERSION,
+    val exportedAt: String,
+    val appVersionName: String,
+    val rangeStart: String? = null,
+    val rangeEnd: String? = null,
+    // New. Always present (not @EncodeDefault(NEVER)) — this is the one field whose entire job is
+    // to be readable at import time before anything else is parsed, so it must never be omittable.
+    // Safe to add unconditionally: ContentHash hashes `definitions + days` ONLY, never `meta`
+    // (§0's existing rule), so this field cannot destabilise a single existing contentHash or
+    // definitionsHash value (R1's guarantee is untouched).
+    val kind: String = KIND_DAYBOOK
+) {
+    companion object {
+        const val FORMAT_VERSION = 2
+        const val KIND_DAYBOOK = "daybook"
+        const val KIND_BEAST_MODE = "beast_mode"
+    }
+}
+```
+
+- **`exportBackup()` (existing, and its `exportRange`/`exportAllData` callers) produces the
+  "Daybook" file**: `meta.kind = KIND_DAYBOOK`; `definitions.customExercises = emptyList()`,
+  `definitions.routines = emptyList()`; every `DayEntry.workouts = emptyList()` and
+  `DayEntry.health = null`. Everything else — habits, intake reminders, custom categories/prompts,
+  habit logs, intake logs — is exactly what it already exports today. Because `customExercises`,
+  `routines`, `workouts` and `health` are all `@EncodeDefault(NEVER)`-empty/absent, zeroing them
+  here produces **exactly the bytes today's export already produces for a user with no Beast Mode
+  data**, and for a user *with* Beast Mode data, it now correctly omits it — this is not a new code
+  path, it is the existing filtering behaviour these four fields were already built for (§0.1),
+  applied deliberately instead of incidentally.
+- **A new `exportBeastModeBackup()` produces the "Beast Mode" file**: `meta.kind =
+  KIND_BEAST_MODE`; `definitions.habits = emptyList()`, `.intakeReminders = emptyList()`,
+  `.customCategories = emptyList()`, `.customPrompts = emptyList()` (kept: `.customExercises`,
+  `.routines`); `days` is filtered to only the entries that have non-empty `workouts` and/or
+  non-null `health` — every such `DayEntry` keeps `habitLogs = emptyList()`, `intakeLogs =
+  emptyList()`. A day with neither workouts nor health data is dropped from the list entirely
+  (mirroring `exportRange`'s existing clip-then-keep-only-what's-there style), so the Beast Mode
+  file's `days` list is exactly the days Beast Mode ever touched, nothing more.
+- **`exportRange(start, end)`** gains the same treatment on both new export functions — clip
+  `full.days` to the range first, then apply the Daybook or Beast Mode filter. No new date-range UI
+  is needed beyond what §7.4's aggregate range picker and `DataSettingsScreen`'s existing "Export a
+  date range" already offer; the **Daybook export button exports the picked range**, the **new
+  Beast Mode export button exports the same picked range** — one shared start/end date pair, two
+  filtered outputs, decided this way because asking the user to pick two separate ranges for two
+  files they'll usually want as a matched pair is friction with no benefit.
+
+**Import — two independent buttons, two independent validations:**
+
+- **`importAllData(json)` / `importRange(backup)` (existing "Import JSON" button, unchanged
+  location) — the Daybook import.** Reads `meta.kind`. **Accepts `KIND_DAYBOOK` or an absent/older
+  field** (every file exported before this round has no `kind` field at all, and `ignoreUnknownKeys`
+  / a missing-field default both make `kind` decode to `KIND_DAYBOOK` for them) — and imports
+  **everything the file actually contains**, exactly as today: if a pre-split legacy file happens to
+  carry `customExercises` / `routines` / `workouts` (every full export made before this round did),
+  those import too, unchanged behaviour. **Rejects `KIND_BEAST_MODE`** with a new, specific message
+  — `"This looks like a Beast Mode backup. Import it from Beast Mode Settings instead."` — reusing
+  `ExportImportRepository.friendlyImportError`'s idiom (§0) rather than inventing a new copy voice.
+  This choice — accept old-shaped files unconditionally, reject only the new Beast-Mode-only shape —
+  is what keeps every backup a user made before this round fully restorable with zero data loss,
+  which matters more than making the split airtight against a file that, by construction, cannot
+  exist yet for any pre-Round-B user.
+- **A new import action, `importBeastModeBackup(json)`, reached from a new button inside Beast
+  Mode Settings' `Health Connect` group area — specifically, from a new `Backup & data` sub-group
+  in `WorkoutSettingsScreen.kt`, not from Daybook's main Settings.** This is the one asymmetry
+  between export and import placement, and it is deliberate: exporting is a single, undirected
+  action a user does from "the place backups live" regardless of which file they're making, but
+  *importing* the Beast Mode file is meaningfully a Beast-Mode action — restoring gym history and
+  health history onto a phone is something a user thinks of as "getting my Beast Mode data back",
+  discovered from inside Beast Mode's own settings, mirroring where its Hevy-import row already
+  lives. **Requires `meta.kind == KIND_BEAST_MODE` exactly** — an absent or `KIND_DAYBOOK` value is
+  rejected with `"This looks like a Daybook backup, not a Beast Mode one. Import it from Settings →
+  Backup & data instead — your Beast Mode data will be restored from it too if the file has any."`
+  (the parenthetical clause matters: it tells the user the Daybook import path is not a dead end
+  for their workout/health data if that's the file they picked). On success, only `workout_*` and
+  `health_*` tables are touched — the transaction never references `habits`, `food_med_*`,
+  `custom_categories` or `custom_prompts` tables, so a Beast Mode restore can never clobber the
+  user's journal even if the file were somehow malformed into carrying journal-shaped content (a
+  defensive property, not just a documentation claim: `importBeastModeBackup` is implemented as its
+  own function reading only the Beast-Mode-relevant fields off the decoded `DaybookBackup`, never
+  calling into `importAllData`'s full-replace code path).
+
+**Filenames**, since the two files must be distinguishable at a glance in a downloads folder or a
+share sheet: **`Daybook-backup-<yyyyMMdd-HHmmss>.json`** (unchanged from today's existing
+convention — check `SettingsViewModel`'s current `shareLatestExport` naming before implementing and
+keep it byte-identical for this file) and **`Daybook-BeastMode-backup-<yyyyMMdd-HHmmss>.json`** for
+the new one. `meta.kind` is the authoritative shape check on import regardless of filename — the
+filename is a human convenience, not a validation input — so a renamed file still imports (or is
+still correctly rejected) exactly the same way.
+
+**`DataSettingsScreen` layout change**, minimal: the existing "Export a date range" `FormGroup`
+gains a second `PrimaryButton`/`GhostButton` pair — **`Export range`** (existing, now explicitly the
+Daybook file) and **`Export Beast Mode data`** (new) — sharing the same start/end date fields above
+them; the existing "Restore & share" group's **`Import JSON`** button is unchanged and explicitly
+re-labelled **`Import Daybook JSON`** in its own row for clarity now that a second import exists
+elsewhere; no new button is added to this screen for the Beast Mode import, since that lives in
+Beast Mode Settings per the placement decision above. The existing fixed-height result slot (§0)
+is reused for both new actions, unchanged pattern, no third UI mechanism.
+
+#### 7.5.2 Why Firestore cloud sync stays unified while the manual JSON split does not
+
+**Explicit call, with reasoning, per the task's requirement to decide rather than leave open.**
+Cloud sync (Firestore, via `CloudSyncRepository`) **does not split** — it stays exactly one
+account, one `users/{uid}` document tree, one push/pull loop, covering habits, intake, workout and
+health data together, unchanged from how Round A already added workout data to it. **Only the
+manual "download a JSON file" export/import surface splits, per the user's explicit instruction.**
+Three reasons this is the right split, not an inconsistency:
+
+1. **`CloudSyncRepository` has no concept of "which feature a table belongs to" today, and adding
+   one would be new architecture for a problem that does not exist.** Sync is keyed on `DATA_TABLES`
+   membership and month partitioning by `local_date`, full stop — Round A already proved this by
+   adding six workout tables to the same sync loop that already carried habits and intake, with no
+   branching on feature identity anywhere in `CloudSyncRepository`, `MonthPartitioner` or the D2
+   conflict flow (§4.5's "what does NOT change"). Splitting cloud sync into two independent
+   Firestore document trees per user would mean two conflict-resolution flows, two sets of
+   `contentHash`/`definitionsHash` bookkeeping, and two places `SyncStateStore` has to track
+   pending-push state — for a single human on one or two devices, which §2.1 already established is
+   the wrong-sized solution to a coordination problem Daybook does not have.
+2. **A manual JSON export is a portability/backup artifact a user actively chooses to make and hand
+   to themselves** (attach to an email, drop in a cloud drive folder, keep as an archive) —
+   splitting it by feature is a legitimate, low-cost product choice about *what one file means to a
+   human*, matching the user's own framing that Beast Mode's data should be a separable, self-
+   contained unit they can back up or restore on its own. Cloud sync is the opposite kind of
+   artifact — invisible infrastructure the user never directly inspects — so a distinction that
+   helps a human reading file names on their phone has no analogous benefit inside a sync protocol
+   nobody looks at.
+3. **Splitting cloud sync would be strictly worse for exactly the failure mode §7.5.0 already
+   guards against.** If workout+health lived in a second Firestore tree, a device that only ever
+   opens the main app (never Beast Mode) would still need to run a second sync loop just to keep
+   that second tree's month-eviction bookkeeping correct, or risk exactly R2/R11's silent-data-loss
+   class of bug in a code path that gets no manual testing because nobody who avoids Beast Mode
+   would ever notice it broke. One sync loop, exercised by every signed-in device regardless of
+   which features they use, is the more-tested, more-honest design.
+
+**What this means concretely for an implementer:** `CloudSyncRepository.DATA_TABLES`,
+`MonthPartitioner`, `ContentHash`, `SyncStateStore` and the D2 conflict flow need zero changes
+beyond the two new table names (§7.5.0) — health data rides the exact same push/pull/conflict
+machinery workout data already rides. The split lives entirely inside
+`data/ExportImportRepository.kt`'s two new export functions and one new import function (§7.5.1),
+and nowhere else.
 
 ### 7.6 Round B phase list
 
 | Phase | Work | Gate |
 |---|---|---|
 | B0 | Add the pinned dependency (§5.1) + the 12 manifest permissions of §6.1.8 in one request, none of §6.1.5's seven cycle-tracking permissions, `<queries>`, rationale activity. Build and install on the real phone before writing any feature code — confirm the Guava/R8 interaction and the APK size. First task: the API-surface compile check (§5.1) — reference `HealthConnectFeatures`, `PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND`, `PERMISSION_READ_HEALTH_DATA_HISTORY`, and every one of the 12 MVP record classes, and record which resolve. | `assembleRelease` green, app launches, a written list of which symbols resolved |
-| B1 | `HealthConnectAvailability`, `HealthPermissions`, rationale activity + privacy screen, Settings → Health with the Connect button. Verify on-device that the OS consent sheet appears and that the two optional permission strings are accepted. | permission grant works end-to-end |
-| B2 | `HealthModel.kt`, `HealthDao`, `MIGRATION_22_23`, `AppDatabase` v23, DI, `23.json`, `MigrationTest.migrate22To23` | tests green |
-| B3 | `HealthConnectReader` (aggregates + sessions + changes token), `HealthSyncStateStore`, `HealthRepository`; pure unit tests for the record→entity mappers and the changes-token fallback decision | tests green |
+| B1 | `HealthConnectAvailability`, `HealthPermissions`, rationale activity + privacy screen. No UI beyond the rationale activity itself in this phase — the Connect button lands in Beast Mode Settings in B6, per §7.4's placement. Verify on-device (a throwaway debug entry point is fine for this phase only) that the OS consent sheet appears and that the two optional permission strings are accepted. | permission grant works end-to-end |
+| B2 | `HealthModel.kt`, `HealthDao`, `MIGRATION_23_24`, `AppDatabase` v24, DI, `24.json`, `MigrationTest.migrate23To24` (including the new `health_tab_last_mode` column and the not-null-value-column guard extended to every `HealthDay` metric, per R18) | tests green |
+| B3 | `HealthConnectReader` (aggregates + sessions + changes token), `HealthSyncStateStore`, `HealthRepository`; pure unit tests for the record→entity mappers, the changes-token fallback decision, and the new `aggregateHealthDays` function (§7.4's `Range` mode) | tests green |
 | B4 | Cadence: on-resume pull throttled to once per 15 minutes, the daily call folded into the existing `WindowRefreshWorker`, a manual "Refresh now". No `HealthPullWorker`, no new periodic job (C7). "Import my past data": the automatic window is the last 30 days; this button requests `PERMISSION_READ_HEALTH_DATA_HISTORY` and pulls up to one year, and is the only thing that ever asks for that permission. | manual pass with the actual band |
-| B5 | Sync: `DayEntry.health`, `DATA_TABLES`, six `ExportImportRepository` call sites, `HealthDayHashTest`, eviction. | tests green — before any UI |
-| B6 | `HealthSummaryCard` on Today (§7.4's exact placement and three-stat rule — the Beast Mode row sits above it), `HealthScreen` including the separate `Nutrition` / "From …" card, `HealthSettingsScreen` (no `Add more health data` row, no cycle-tracking opt-in row), every row of §6.2's ladder including its exact copy, and §6.3's Refresh-now / Import-past-data outcome strings | manual pass, including with Health Connect uninstalled, with permissions fully denied, and with permissions PARTIALLY granted — the last is the most likely real-world state and the easiest to leave untested |
+| B5 | Sync: `DayEntry.health`, `DATA_TABLES`, the six `ExportImportRepository` call sites extended for the two new tables, `HealthDayHashTest`, eviction (§7.5.0) | tests green — before any UI |
+| B5a | **The split export/import** (§7.5.1): `BackupMeta.kind`, `exportBeastModeBackup()`, `importBeastModeBackup(json)`, the Daybook-import acceptance/rejection rule keyed on `kind`, filename convention, `BackupModelTest` extended with a round-trip of each new function and a case proving a pre-split legacy file (no `kind` field) still imports its embedded workout/health content via the Daybook path | tests green: a Daybook export contains zero workout/health bytes; a Beast Mode export contains zero habit/intake bytes; a legacy full export still round-trips through the Daybook import unchanged |
+| B6 | `HealthTabScreen` + `HealthTabViewModel` repurposing `WorkoutRoutes.LIBRARY`'s nav destination (§7.4) — the `Day`/`Range` `SegmentedControl`, the `WeekStrip` call for `Day` mode, `HealthAggregateSheet` + `aggregateHealthDays` for `Range` mode, the metric cards including the separate `Nutrition` / "From …" card, **the pure `visibleHealthCards` function and the per-metric hide rule it enforces (§7.4) — no empty/dashed card ever renders**, the relocated §6.2 degradation ladder rendered on the tab itself; the new `Health Connect` `SettingsGroup` in `WorkoutSettingsScreen.kt` (Connect/Disconnect, status line, Refresh now, Import my past data, Which data is shared sheet — no `Add more health data` row, no cycle-tracking opt-in row); `DaybookIcons.Heart`; the nav item relabel from `Exercises`/`Category` to `Health`/`Heart`; every row of §6.2's ladder including its exact copy, and §6.3's Refresh-now / Import-past-data outcome strings | manual pass, including with Health Connect uninstalled, with permissions fully denied, with permissions PARTIALLY granted, and with some MVP types granted but genuinely never written by the band (confirm those cards are absent, not dashed) — partial grant and partial data are the most likely real-world states and the easiest to leave untested; confirm the exercise picker (`PICK` mode) still works unchanged from the live session and routine editor even though its `BROWSE`-mode nav entry is gone |
 | B7 | Full `./gradlew test` + `assembleRelease`; signed APK | all tests green |
 
 ---
@@ -3459,6 +3930,11 @@ Round A; nothing else in §C.3 follows it.
 | R25 | The Beast Mode accent tints the screens but not the nav bar, because `FloatingPillNav` is drawn by `DaybookScaffold` — outside the `NavHost` — so a `CompositionLocalProvider` inside each workout route never reaches it. Result: a Coral screen sitting on a Lavender pill. | §3.8.3 moves the provider around the `DaybookScaffold` call, gated on `backStackRoute in WorkoutRoutes.ALL` — a shared constant, not an inline `setOf(...)`. Manual check at A5: open every one of the ten workout routes and confirm the pill nav, the header and the primary button are all the same colour. |
 | R26 | The way *out* of Beast Mode becomes as invisible as the way in — a press-and-hold has the identical accessibility problem R21 raises for the entrance. | Three independent floors, none a gesture: system back leaves from the landing unconditionally; `onLongClickLabel = "Leave Beast Mode"` puts the hold in TalkBack's and switch access's actions menu as a named action; the `Leave Beast Mode` row at the bottom of Beast Mode's own settings (§3.8.2), the exact counterpart of `Open Workout` in main Settings. All three are mandatory — dropping any one re-opens this risk in full. |
 | R27 | RepDB's images balloon the APK (~25 MB added) without the user seeing the cost stated plainly, or a future catalog swap silently changes `builtin:` ids and orphans historical `workout_sets` rows. | §3.3.5 states the size cost in one place, not buried. `builtin:` ids are RepDB's own slugs and are treated with the same Ri1 stability rule as the original hand-picked ones — never renamed once shipped, regardless of what a newer `repdb.json` calls the same exercise. A catalog update adds rows; it does not rename or remove existing ones. |
+| R28 | An implementer reads §5–§7's older cross-references literally and rebuilds the dropped Today card / main-Settings Health row / stacked `"health"` route, because those phrases still appear inside quoted ladder copy (§6.2) that this revision deliberately left byte-for-byte unchanged. | §7.4 states the superseding decision once, in full, at the top of the section, and the ladder table itself carries an explicit redirection note immediately above it mapping every "Today card" / "Settings → Health" phrase in its rows to their new meaning. §0.1 and §7.3 also state plainly that no `ui/health/` package, no `HealthSummaryCard.kt` and no `ui/settings/HealthSettingsScreen.kt` are ever built. |
+| R29 | The split export/import (§7.5.1) is implemented as two genuinely separate wire-model class hierarchies instead of one filtered `DaybookBackup`, so a future field added to `DayEntry` has to be remembered in two places and silently drifts — the same class of bug §4.4/§7.5.0 already exists to prevent for the *table* list. | §7.5.1 is explicit that both files stay the same `DaybookBackup`/`DayEntry`/`Definitions` Kotlin shapes, distinguished only by `BackupMeta.kind` and by which fields the two export functions zero out — one shape, two filtered views, not two shapes. |
+| R30 | A user imports a Beast Mode file through the main "Import JSON" button (or vice versa) and gets a confusing silent no-op, or worse, a partial import that looks successful but dropped half the file. | §7.5.1's two import functions validate `meta.kind` explicitly and reject the wrong shape with a specific, named-destination error message (`ExportImportRepository.friendlyImportError`'s idiom) rather than silently importing nothing or partially importing — satisfying C9 for this specific new failure mode. |
+| R31 | The Health tab's `Range`/aggregate mode is implemented as one more ad-hoc per-card averaging decision inside the composable, so a future metric added to `HealthDay` has no defined aggregate behaviour and an implementer guesses. | §7.4 requires a single pure, unit-tested `aggregateHealthDays` function as the one place that decides mean-vs-sum per metric — the same "one choke point" discipline Ri2 already applies to `trackingMode`. |
+| R32 | A card for a metric with no data renders as an empty shell or a dash instead of being hidden — easy to ship by accident, since every other list-of-cards screen in the app (e.g. §7.4's own Nutrition card copying the old "From …" pattern) is written assuming its data exists. | §7.4's explicit per-metric hide rule, checked through a single pure `visibleHealthCards` function rather than scattered per-composable null checks — the same choke-point discipline as R31. Manual pass at B6 must include a day/range with several MVP types granted but genuinely empty (e.g. no Hydration ever written) and confirm no gap or dash renders. |
 
 ---
 
@@ -3471,10 +3947,12 @@ Every decision below is final. This is a lookup table, not a discussion.
 | Health library version | Pin `health-connect-client:1.1.0-alpha08` (§5.1). Toolchain upgrade is a separate later round. |
 | Band-data refresh cadence | On-resume pull throttled to once per 15 min + the existing daily `WindowRefreshWorker` pass + a manual "Refresh now". No new worker. |
 | First-connect history window | Last 30 days automatically; "Import my past data" backfills up to 365 days. |
-| Where band data appears | Summary card on Today + a stacked Health screen. Not a tab. |
-| Sync band data to the cloud? | Yes (§7.5), and it also appears in the manual "Export JSON" backup via the shared `BackupModel`. |
+| Where band data appears | Inside Beast Mode only — the repurposed third nav slot (`WorkoutRoutes.LIBRARY`, relabelled `Health`), with a day calendar (the same `WeekStrip` Today uses) and an aggregate/range mode (§7.4). No Today card, no main-Settings Health entry, no non-Beast-Mode route of any kind. |
+| Health Connect settings placement | Entirely inside Beast Mode Settings' new `Health Connect` group — connect/disconnect, status, refresh now, import past data, which types are shared. Nothing in Daybook's main Settings (§7.4). |
+| Sync band data to the cloud? | Yes, via the unchanged Firestore/`DATA_TABLES` mechanism (§7.5.0) — cloud sync stays a single unified account sync, not split by feature (§7.5.2). Manual JSON export is a separate question, answered next. |
+| Manual JSON export/import | Split into two independent files — "Daybook" (habits/intake, no workout/health) and "Beast Mode" (workout + health together), distinguished by `BackupMeta.kind`, both exported from `DataSettingsScreen`; Daybook import accepts old unsplit files too, Beast Mode import is reached from Beast Mode Settings (§7.5.1). |
 | Write back to Health Connect | Never. Read-only; no write permission is ever declared. |
-| Band workouts inside Beast Mode | No. Band-recorded sessions live on the Health surface only (§6.4). |
+| Band workouts inside Beast Mode's Routines/History | No. Band-recorded sessions live on the `Health` tab only, in their own `health_sessions` table, never merged with `workout_sessions` (§6.4). |
 | How you enter Beast Mode | Long-press "Today" in the bottom nav; tap still opens Today. Full-screen mode with its own three-item nav. |
 | Built-in exercise catalog | RepDB's free tier, ≈525 usable exercises after excluding `stretching`-category rows, with real illustrations (§3.3). |
 | Rest timer | Yes, in-app only. No notification, no service, no alarm. Alerts-while-closed is a separate future round. |
@@ -3496,7 +3974,11 @@ Every decision below is final. This is a lookup table, not a discussion.
 | Nutrition from other apps | Read it, show it in its own card labelled with the source app. Never merged into Intake. |
 | 12 permissions or 6+6 | All twelve in one request. No `Add more health data` row. |
 | Pinned per-exercise note | Yes — in Round A, phase A6b. No schema cost. |
-| Version numbers | 25 / 0.5.7 (shipped) → 26 / 0.6 (Round A) → 27 / 0.6.1 (Round B). |
+| Version numbers | 25 / 0.5.7 (shipped) → 26 / 0.6 (Round A, shipped) → 34 / 0.6.2 (Beast Mode bug-fix pass, shipped, current baseline) → 35 / 0.6.5 (Round B, this revision — §2). |
+| Round B's migration | `MIGRATION_23_24`, DB v23 → v24 — `MIGRATION_22_23` was already consumed by a shipped, unrelated Beast-Mode-accent-settings migration (§0.1). |
+| C5 inside Beast Mode | Superseded by a shipped carve-out: Beast Mode draws from its own `BeastTheme.kt`/`BeastComponents.kt` (own accent palette, own ground, own numeral treatment), not `DaybookColors`/`AppShapes`/`DaybookText`. C5 still governs the main app (§1). |
+| The old "Exercises" nav tab | Repurposed, not removed — same `WorkoutRoutes.LIBRARY` slot now shows the `Health` tab. The exercise browser (`AddExerciseScreen` `BROWSE` mode) survives only in `PICK` mode, reached from a session or routine editor (§7.4). |
+| Per-metric cards with no data | Hidden entirely, not shown empty/dashed — checked per card, independent of §6.2's whole-page ladder, in both `Day` and `Range` mode (§7.4's per-metric hide rule). |
 | Visible way into Beast Mode | The hold + a Settings row + a Today row. All three ship. |
 | One-time tip + the dot | Keep both. Neither can ever come back once dismissed/used. |
 | Size of Routines | A list you start from, no programme layer. Tap starts it immediately; deleting a routine never deletes its workouts. |
@@ -3551,3 +4033,134 @@ Every decision below is final. This is a lookup table, not a discussion.
   0.5.7, which Round 0 already shipped.
 - Write a `HEALTH_AND_WORKOUT_PROGRESS.md` checkpoint every 2–3 phases, in the style of
   `UX_REFINEMENT_PROGRESS.md`, so the round is resumable.
+
+---
+
+## 11. Health UI revamp — post-launch pass (user-requested, PLAN ONLY, not yet implemented)
+
+Written after Round B actually shipped and the user used the real `HealthTabScreen` on-device.
+Three concrete complaints, from two screenshots of the shipped grid and one screenshot of Mi
+Fitness's "Stress" detail screen (an inspiration reference, not a spec to copy verbatim — §11.2
+explains where it diverges and why). Nothing in this section is implemented; it is the plan for
+the next pass over `ui/workout/health/`.
+
+### 11.1 Card size must not vary
+
+**Symptom:** in the shipped 2-column grid (`HealthTabScreen.kt`'s `HealthContent`), each
+`MetricCard` sizes to its own content — a card with two `MetricRow`s (Calories: Active + Total) is
+taller than a card with one (Oxygen: SpO₂ only), so paired cards in the same grid row don't line
+up and the whole page reads uneven, unlike the fixed-size tiles in the Mi Fitness reference.
+
+**Decision:** every two-column metric tile (Steps, Calories, Heart rate, Sleep, Oxygen, Weight,
+Hydration — everything except the full-span Nutrition card and session rows) gets one fixed
+height constant, applied via `Modifier.height(...)` on the `SoftCard` itself rather than left to
+wrap content. Width is already uniform for free (`GridCells.Fixed(2)` sizes both columns equally)
+— the fixed height is the only real gap, but pin both explicitly on the same constant so a future
+card with three rows of content can never re-introduce the mismatch by accident.
+
+- New constant, e.g. `private val HealthTileHeight = 148.dp` (picked to fit: icon-badge + title
+  row, two `MetricRow`s, comfortable padding — measure against the tallest existing card, Calories,
+  once this is built, and adjust the one constant rather than hand-tuning per card).
+- A card with only one `MetricRow` (Oxygen, Weight, Hydration) keeps the second row's vertical
+  space as blank space (content top-aligned in the fixed-height card), not stretched or centered —
+  matches how the reference screenshot's shorter cards still sit in a same-height tile.
+- The per-metric hide rule (R32, §7.4) is unaffected — a card still either renders at the fixed
+  size or doesn't render at all; there is no partial/collapsed state.
+
+### 11.2 A real detail screen with a trend graph, not a rows-only sheet
+
+**What the user asked for:** something closer to the Mi Fitness "Stress" screen — a back-arrow
+header, a D/W/M range switcher, a big headline number, and a plotted graph — in place of the
+current `HealthDetailSheet` bottom sheet, which is text rows only.
+
+**What the reference screenshot actually shows, and why Daybook can't draw the same chart
+honestly:** Mi Fitness's chart plots individual timestamped samples across one day (dots at
+13:20, 13:37, …). Daybook's Health Connect reads are deliberately aggregate-only — `HeartRateRecord`
+etc. are read via `AggregateRequest` (avg/min/max), never as raw per-sample records (§6.1.9's
+"Never, at any point, for any version" list, and R31/R32's whole design). `HealthDay` stores one
+row per calendar day, not one row per sample. Building the screenshot's literal chart would mean
+reversing that rule — reading and storing every raw sample — which is a real battery-cost and
+schema decision, not a UI tweak, and is called out separately below rather than silently assumed.
+
+**Recommended shape — Option A, a trend-across-days chart (no schema change, no new Health
+Connect reads, ships now):**
+
+- Replace `HealthDetailSheet`'s bottom sheet with a real stacked screen,
+  `ui/workout/health/HealthMetricDetailScreen.kt`, pushed via a new route,
+  `WorkoutRoutes.HEALTH_METRIC_DETAIL = "health_metric_detail/{kind}"` (same
+  `WorkoutRoutes.detail(...)`-style helper function pattern already used for `SESSION`/`DETAIL`),
+  reached by tapping a card instead of opening a sheet. `HealthSessionDetailSheet` (band workout
+  sessions) is untouched — a session is one point-in-time event, not a trending metric, so it
+  keeps its current simple sheet.
+- Screen layout, top to bottom: a back-arrow `ScreenHeader`-style bar with the metric's title; a
+  `D` / `W` / `M` `SegmentedControl` (reusing the exact sliding-filled-pill component and visual
+  language already in `ui/components/SegmentedControl.kt` — no new control); a headline number in
+  `BeastText.BigNumber` with its date/time context underneath, mirroring the reference's "37
+  Mild / 13:37" treatment; the trend chart; the same supporting rows `HealthDetailSheet` already
+  renders today (avg/min/max, sleep stages, macro split, the SpO₂/weight honesty captions) below
+  the chart, unchanged.
+- **`D`** plots nothing new — a single day has one aggregate value, so `D` mode is the existing
+  headline number with no chart, same information as today's sheet.
+- **`W`** and **`M`** plot the metric's daily value across 7 or 30 calendar days —
+  `HealthDao.observeDaysInRange` already returns exactly this list (it's what `Range` mode's
+  aggregate already reads). One point per day, so a week is 7 points and a month is ~30 — well
+  within what a small line/bar chart can render legibly without gridline crowding.
+- **New chart component:** nothing in the codebase charts anything yet (Round A explicitly
+  deferred progression charts to Round C for the same reason — "new visual vocabulary worth doing
+  properly rather than rushed," §3.1's deferred list). This is small enough (single series, ≤31
+  points, no zoom/pan/tooltip) not to justify a third-party charting dependency — build one
+  reusable Compose `Canvas` line-chart composable, `ui/components/TrendChart.kt` — gridlines in
+  `DaybookColors.Hairline`, line/dots in the calling card's `CardTint.accent`, axis labels in
+  `DaybookColors.TextMuted`, no new colour literal (C5). This becomes the one general-purpose trend
+  chart primitive the app has — nothing else needs to build its own.
+- Empty state: a metric with fewer than 2 days of data in the selected window shows the headline
+  number and a muted one-line caption ("Not enough history yet for a trend") instead of an empty
+  or single-point chart — same "never a placeholder that looks broken" instinct as R32's per-card
+  hide rule, applied to the chart specifically.
+
+**Option B — true intraday chart (the literal screenshot), named but NOT recommended for this
+pass:** capture and store raw per-sample Health Connect records (steps per bucket, HR samples,
+SpO₂ samples) instead of just the daily `AggregateRequest` figure, so `D` mode could plot real
+dots across 00:00–24:00 like the reference. This requires: new Health Connect read calls beyond
+`AggregateRequest`, a new samples table per metric (or a shared `health_samples` table), another
+migration, and materially more data pulled per sync — a direct reversal of §6.1.9's "raw
+per-sample series... would be a battery regression (C7)" rule, decided on purpose earlier in this
+document. If the user wants the literal per-sample intraday chart later, it is its own scoped
+phase with its own explicit battery-cost sign-off — not bundled into this pass, and not assumed.
+
+### 11.3 Selected bottom-nav item gets a filled pill, not just a colour change
+
+**Current behaviour:** `ui/components/FloatingPillNav` (`Navigation.kt:71`) — the one shared nav
+component both the main app's Today/Habits/Intake bar *and* Beast Mode's Routines/History/Health
+bar already render through (`ui/workout/WorkoutRoutes.NAV` supplies Beast Mode's three items to
+the same composable) — only tints the selected item's icon and label to the accent colour
+(`tint`/`holdTint`, `Navigation.kt:134-176`). No background. Fixing it here automatically covers
+"both modes," per the user's ask, with one change.
+
+**Decision — reuse `SegmentedControl`'s exact sliding-pill idiom** (`SegmentedControl.kt:79-97`):
+an `animateDpAsState`-driven filled `Box` that tracks the selected item's position and width,
+clipped to a rounded shape, filled with `LocalAccent.current`, sitting behind that item's icon +
+label column. Concretely:
+
+- The pill is sized to hug one nav item's column width (not the full bar, unlike
+  `SegmentedControl`'s track-width pill) with a small inset so it reads as a soft chip floating in
+  the bar, not a full-height segment divider.
+- Selected item's icon/label switch to `DaybookColors.OnAccent` (the same rule
+  `SegmentedControl.kt:102` already uses for its selected segment's content colour) so text stays
+  legible sitting on a solid accent fill; unselected items keep today's `DaybookColors.TextMuted`.
+- The existing long-press-to-enter/exit-Beast-Mode gesture and its hold-scale/hold-tint animation
+  (`holdActive`, `holdScale`, `holdTint`, `Navigation.kt:145-176`) are untouched — the pill is an
+  added background layer under the existing icon/label, not a replacement for that logic. While
+  `holdActive` is ramping (the long-press-in-progress state), the pill's position/visibility
+  follows `currentRoute` exactly as it does today — a long-press never itself counts as "selecting"
+  the item, so the pill doesn't move until the route actually changes.
+- Respects `LocalReduceMotion` the same way `SegmentedControl`'s pill does — `snap()` instead of
+  the placement spring.
+
+### 11.4 What ships together
+
+All three are pure UI-layer changes inside `ui/workout/health/` (11.1, 11.2) and
+`ui/components/Navigation.kt` (11.3) — no migration, no new Room column, no new Health Connect
+permission, no change to `DATA_TABLES` or the split export/import wire model from §7.5. 11.2 is
+the only one with a real design fork (Option A vs. B); this document recommends A and treats B as
+an explicitly separate, not-yet-approved future phase.

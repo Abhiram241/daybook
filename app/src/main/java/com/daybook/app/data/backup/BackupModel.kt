@@ -45,9 +45,22 @@ data class BackupMeta(
      * A restore branches on `rangeStart != null` to pick the non-destructive merge path.
      */
     val rangeStart: String? = null,
-    val rangeEnd: String? = null
+    val rangeEnd: String? = null,
+    /**
+     * Round B (§7.5.1) — the split export/import discriminator. Always present (never
+     * `@EncodeDefault(NEVER)`) so it's readable at import time before anything else is parsed.
+     * Safe to add unconditionally: `ContentHash` hashes `definitions + days` ONLY, never `meta`
+     * (§0's existing rule), so this field cannot destabilise a single existing `contentHash` or
+     * `definitionsHash` value. Every file exported before this round has no `kind` field at all —
+     * `ignoreUnknownKeys` / this field's default both make it decode as [KIND_DAYBOOK].
+     */
+    val kind: String = KIND_DAYBOOK
 ) {
-    companion object { const val FORMAT_VERSION = 2 }
+    companion object {
+        const val FORMAT_VERSION = 2
+        const val KIND_DAYBOOK = "daybook"
+        const val KIND_BEAST_MODE = "beast_mode"
+    }
 }
 
 @Serializable
@@ -202,7 +215,76 @@ data class DayEntry(
     /** A4 (§4.2) — that local date's workout sessions. `@EncodeDefault(NEVER)` so a non-workout
      *  day's `contentHash` is byte-identical before/after this build. */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
-    val workouts: List<WorkoutLog> = emptyList()
+    val workouts: List<WorkoutLog> = emptyList(),
+
+    /** Round B (§7.5.0) — that local date's Health Connect data, if any. `@EncodeDefault(NEVER)`
+     *  (and simply `null` by default, so `explicitNulls = false` already omits it) so a day with
+     *  no health data is byte-identical to before this build. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val health: HealthDayLog? = null,
+
+    /** DAILY_REPORT_PLAN.md §3.6 — that local date's cached AI summary, if one was ever generated.
+     *  `@EncodeDefault(NEVER)` so a day with no summary is byte-identical to before this build,
+     *  same rule as [health]. The API key used to generate it never travels here (§3.2/§3.6). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val aiSummary: DailyReportAiSummaryLog? = null
+)
+
+/** DAILY_REPORT_PLAN.md §3.6 — one cached AI summary per day; regenerating replaces it in place,
+ *  never a history of regenerations. */
+@Serializable
+data class DailyReportAiSummaryLog(
+    val provider: String,
+    val model: String,
+    val summaryText: String,
+    val generatedAt: Long,
+    /** BEAST_HEALTH_REPORT_AUDIT.md M4 — null for a summary generated before this field existed
+     *  (or restored from an older export), same "unknown, so don't claim it's fresh" meaning as
+     *  the Room column it mirrors. */
+    val settingsFingerprint: String? = null
+)
+
+@Serializable
+data class HealthDayLog(
+    val steps: Int? = null, val distanceMeters: Float? = null,
+    val activeCalories: Float? = null, val totalCalories: Float? = null,
+    val restingHeartRate: Int? = null, val avgHeartRate: Int? = null,
+    val minHeartRate: Int? = null, val maxHeartRate: Int? = null,
+    val sleepMinutes: Int? = null, val sleepDeepMinutes: Int? = null,
+    val sleepLightMinutes: Int? = null, val sleepRemMinutes: Int? = null,
+    val sleepAwakeMinutes: Int? = null,
+    val sleepStartMillis: Long? = null, val sleepEndMillis: Long? = null,
+    val spo2Percent: Float? = null,
+    /** HEALTH_VITALS_RICHNESS_PLAN.md §5 — `@EncodeDefault(NEVER)` so a day predating this round
+     *  (or with no SpO2 reading at all) stays byte-identical: absent, not `null`. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val spo2MinPercent: Float? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val spo2MaxPercent: Float? = null,
+    val weightKg: Float? = null,
+    val hydrationMl: Float? = null,
+    val nutritionCalories: Float? = null, val nutritionProteinGrams: Float? = null,
+    val nutritionCarbsGrams: Float? = null, val nutritionFatGrams: Float? = null,
+    val nutritionSourceApp: String? = null,
+    val sessions: List<HealthSessionLog> = emptyList(),
+    /** HEALTH_VITALS_RICHNESS_PLAN.md §5 — empty == omitted, same explicitNulls=false
+     *  hash-neutrality rule as every other list field on this model. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val weightReadings: List<HealthWeightReadingLog> = emptyList()
+)
+
+@Serializable
+data class HealthSessionLog(
+    val id: String, val exerciseType: Int, val title: String? = null,
+    val startMillis: Long, val endMillis: Long, val durationMinutes: Int,
+    val activeCalories: Float? = null, val distanceMeters: Float? = null,
+    val avgHeartRate: Int? = null, val sourceApp: String? = null
+)
+
+/** HEALTH_VITALS_RICHNESS_PLAN.md §5 — one raw weight reading. */
+@Serializable
+data class HealthWeightReadingLog(
+    val atMillis: Long, val weightKg: Float, val sourceApp: String? = null
 )
 
 @Serializable

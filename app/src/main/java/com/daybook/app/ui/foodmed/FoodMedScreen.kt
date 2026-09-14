@@ -222,6 +222,11 @@ private fun FoodMedCard(
 ) {
     var sheetOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
+    val hapticArchiveToggle: () -> Unit = {
+        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        onArchiveToggle()
+    }
     SoftCard(tint = tint, onClick = onOpenDetail, modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconTile(icon = Icons.getIcon(item.iconKey), tint = tint)
@@ -263,8 +268,8 @@ private fun FoodMedCard(
         onDismiss = { sheetOpen = false },
         actions = listOf(
             SheetAction(MI.Filled.Edit, "Edit", onClick = onEdit),
-            if (item.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = onArchiveToggle)
-            else SheetAction(DaybookIcons.Archive, "Archive", onClick = onArchiveToggle),
+            if (item.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = hapticArchiveToggle)
+            else SheetAction(DaybookIcons.Archive, "Archive", onClick = hapticArchiveToggle),
             SheetAction(MI.Filled.Delete, "Delete", destructive = true, onClick = { confirmDelete = true })
         )
     )

@@ -51,7 +51,9 @@ fun calculateHabitStreaks(
 ): StreakResult =
     computeStreaks(
         fullyCompletedDates(
-            occurrences.map { it.scheduledFor to daySatisfies(it.status, Occurrence.Status.COMPLETED, mode) }
+            occurrences.map {
+                Triple(it.localDate, it.scheduledFor, daySatisfies(it.status, Occurrence.Status.COMPLETED, mode))
+            }
         ),
         asOf, restDays
     )
@@ -65,26 +67,36 @@ fun calculateFoodMedStreaks(
 ): StreakResult =
     computeStreaks(
         fullyCompletedDates(
-            occurrences.map { it.scheduledFor to daySatisfies(it.status, Occurrence.Status.LOGGED, mode) }
+            occurrences.map {
+                Triple(it.localDate, it.scheduledFor, daySatisfies(it.status, Occurrence.Status.LOGGED, mode))
+            }
         ),
         asOf, restDays
     )
 
 /**
- * v0.5.3 Phase 3 (A4): streaks from a `(scheduled_for, status)` projection rather than full
- * occurrence rows. The Detail screen pages the timeline but still needs the whole history for the
- * streak / completion numbers — this lets the stats fold read the lightweight projection.
+ * v0.5.3 Phase 3 (A4): streaks from a `(local_date, scheduled_for, status)` projection rather than
+ * full occurrence rows. The Detail screen pages the timeline but still needs the whole history for
+ * the streak / completion numbers — this lets the stats fold read the lightweight projection.
  * [doneStatus] is `COMPLETED` for habits, `LOGGED` for intake.
+ *
+ * BUG_AUDIT_REPORT.md §1.7: [scheduledStatuses] now carries each row's stored `local_date` (may be
+ * null for a pre-migration row) alongside `scheduledFor`, so the fold below can bucket on it
+ * instead of recomputing the day from the epoch millis in the *current* device zone.
  */
 fun streaksFromScheduledStatuses(
-    scheduledStatuses: List<Pair<Long, Occurrence.Status>>,
+    scheduledStatuses: List<Triple<String?, Long, Occurrence.Status>>,
     doneStatus: Occurrence.Status,
     asOf: LocalDate = LocalDate.now(),
     mode: StreakMode = StreakMode.STRICT,
     restDays: Set<DayOfWeek> = emptySet()
 ): StreakResult =
     computeStreaks(
-        fullyCompletedDates(scheduledStatuses.map { it.first to daySatisfies(it.second, doneStatus, mode) }),
+        fullyCompletedDates(
+            scheduledStatuses.map { (localDateStr, scheduledFor, status) ->
+                Triple(localDateStr, scheduledFor, daySatisfies(status, doneStatus, mode))
+            }
+        ),
         asOf, restDays
     )
 
@@ -109,11 +121,23 @@ internal fun daySatisfies(status: Occurrence.Status, doneStatus: Occurrence.Stat
  * occurrence rows at all is simply absent (it breaks the run — unless it is a rest weekday, see
  * [computeStreaks]).
  *
- * @param scheduledAndDone (scheduledFor epoch millis, satisfies) for each occurrence considered.
+ * BUG_AUDIT_REPORT.md §1.7: buckets on the row's stored `local_date` string when present — the
+ * same timezone-stable column `exportDateFor` and everything else in the sync/export path already
+ * prefer — instead of recomputing the day from `scheduledFor` in the *current* device zone, which
+ * silently re-buckets historical rows (and can flip a day from complete to incomplete) after a
+ * timezone change or a DST transition. Falls back to the epoch recompute only for a row with no
+ * `local_date` (pre-migration data, or an unparseable value).
+ *
+ * @param entries (local_date string or null, scheduledFor epoch millis, satisfies) per occurrence.
  */
-private fun fullyCompletedDates(scheduledAndDone: List<Pair<Long, Boolean>>): List<LocalDate> =
-    scheduledAndDone
-        .groupBy({ localDate(it.first) }, { it.second })
+private fun fullyCompletedDates(entries: List<Triple<String?, Long, Boolean>>): List<LocalDate> =
+    entries
+        .groupBy(
+            { (localDateStr, scheduledFor, _) ->
+                localDateStr?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: localDate(scheduledFor)
+            },
+            { it.third }
+        )
         .filterValues { doneFlags -> doneFlags.isNotEmpty() && doneFlags.all { it } }
         .keys
         .sorted()

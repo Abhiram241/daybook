@@ -16,6 +16,12 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +29,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
@@ -561,6 +569,12 @@ fun PrimaryButton(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed && enabled) 0.97f else 1f, Motion.pressSpring(), label = "pbScale")
     val accent = LocalAccent.current
+    // Polish pass — PrimaryButton is the app's one "main confirm" control (Save / Add / Log /
+    // Complete / Continue / Fix / Export), so a light tap-confirm haptic lives here once instead
+    // of at each of the ~20 call sites. HapticFeedbackType.LongPress is the only generic "tick"
+    // this Compose version exposes (Confirm/Reject land in a later compose-ui release) — the
+    // platform still renders it as a short, single click, not an actual long-press gesture.
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -568,7 +582,12 @@ fun PrimaryButton(
             .heightIn(min = 50.dp)
             .clip(AppShapes.button)
             .background(if (enabled) accent else DaybookColors.SurfaceElevated)
-            .clickableImpl(interaction) { if (enabled && !loading) onClick() },
+            .clickableImpl(interaction) {
+                if (enabled && !loading) {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onClick()
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         if (loading) {
@@ -649,17 +668,67 @@ fun GhostButton(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            if (leadingIcon != null && !loading) {
+            if (loading) {
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    color = DaybookColors.TextPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+            } else if (leadingIcon != null) {
                 leadingIcon()
                 Spacer(Modifier.width(8.dp))
             }
             Text(
-                if (loading) "…" else text,
+                text,
                 style = MaterialTheme.typography.labelLarge,
                 color = if (enabled) DaybookColors.TextPrimary else DaybookColors.TextFaint,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/**
+ * Polish pass — a small "typing"/"thinking" indicator: three dots pulsing in sequence, replacing
+ * a static "…" text bubble for an in-flight AI chat reply. Purely decorative (no dependency on
+ * caller state beyond "is the AI still responding"); respects reduce-motion by freezing the dots
+ * at a fixed mid-pulse alpha instead of animating.
+ */
+@Composable
+fun TypingDots(modifier: Modifier = Modifier, dotColor: Color = DaybookColors.TextMuted) {
+    val reduceMotion = LocalReduceMotion.current
+    val transition = rememberInfiniteTransition(label = "typingDots")
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { index ->
+            val alpha = if (reduceMotion) {
+                0.6f
+            } else {
+                val delayMillis = index * 160
+                val anim by transition.animateFloat(
+                    initialValue = 0.3f,
+                    targetValue = 0.3f,
+                    animationSpec = infiniteRepeatable(
+                        animation = keyframes {
+                            durationMillis = 900
+                            0.3f at 0
+                            1f at 300 + delayMillis using LinearEasing
+                            0.3f at 700 + delayMillis using LinearEasing
+                        },
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "typingDot$index"
+                )
+                anim
+            }
+            Box(
+                Modifier
+                    .padding(horizontal = 2.dp)
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(dotColor.copy(alpha = alpha))
             )
         }
     }

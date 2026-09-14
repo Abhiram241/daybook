@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.FoodMedRepository
 import com.daybook.app.data.HabitRepository
+import com.daybook.app.data.HapticsPrefs
 import com.daybook.app.ui.theme.AccentColor
 import com.daybook.app.ui.theme.DarkStyle
 import com.daybook.app.ui.theme.DEFAULT_CORNER_SCALE
@@ -152,7 +153,8 @@ fun hasExistingData(habitCount: Int, intakeCount: Int): Boolean = habitCount + i
 class OnboardingViewModel @Inject constructor(
     private val settingsRepository: AppSettingsRepository,
     private val habitRepository: HabitRepository,
-    private val foodMedRepository: FoodMedRepository
+    private val foodMedRepository: FoodMedRepository,
+    private val hapticsPrefs: HapticsPrefs
 ) : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -255,6 +257,11 @@ class OnboardingViewModel @Inject constructor(
     val reduceMotion: StateFlow<Boolean> = settingsRepository.observeSettings()
         .map { it.reduceMotion }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Settings > Appearance > Feel — the app-wide "Vibration / Haptics" preference, fed to
+     *  [com.daybook.app.ui.theme.DaybookTheme]. SharedPreferences-backed (see [HapticsPrefs]),
+     *  not Room — already the correct current value on first read, so it's exposed directly. */
+    val hapticsEnabled: StateFlow<Boolean> = hapticsPrefs.hapticsEnabled
 
     /**
      * UX overhaul item 4 — the app-wide theme mode, fed to [com.daybook.app.ui.theme.DaybookTheme].

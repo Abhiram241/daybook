@@ -130,7 +130,10 @@ class AuthRepository @Inject constructor(
             is TokenResult.Failed -> return AuthOutcome.Error(r.message)
         }
         return try {
-            auth.currentUser?.reauthenticate(GoogleAuthProvider.getCredential(idToken, null))?.awaitCompat()
+            // BUG_AUDIT_REPORT.md §1.2: a null currentUser must never resolve to Success — the
+            // null-safe call would otherwise short-circuit silently and report the re-auth worked.
+            val user = auth.currentUser ?: return AuthOutcome.Error("You're signed out — sign in again.")
+            user.reauthenticate(GoogleAuthProvider.getCredential(idToken, null)).awaitCompat()
             AuthOutcome.Success
         } catch (t: Throwable) {
             AuthOutcome.Error(mapAuthError(t))
@@ -144,7 +147,11 @@ class AuthRepository @Inject constructor(
      * signed in more than a few minutes).
      */
     suspend fun deleteAccount(): AuthOutcome = try {
-        auth.currentUser?.delete()?.awaitCompat()
+        // BUG_AUDIT_REPORT.md §1.2: same null-safe trap — a session that dies between the
+        // Firestore delete and this call (token revocation racing the delete) must not report
+        // "Account deleted" for an account that still exists.
+        val user = auth.currentUser ?: return AuthOutcome.Error("You're signed out — sign in again to finish deleting your account.")
+        user.delete().awaitCompat()
         runCatching { credentialManager.clearCredentialState(ClearCredentialStateRequest()) }
         AuthOutcome.Success
     } catch (t: Throwable) {

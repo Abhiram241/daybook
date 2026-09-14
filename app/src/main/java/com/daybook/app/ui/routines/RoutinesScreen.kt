@@ -230,6 +230,11 @@ private fun HabitCard(
     var confirmBroken by remember { mutableStateOf(false) }
     // Task C (C1/Phase 9) — the backdated "Start" date picker, capped at today.
     var showStartPicker by remember { mutableStateOf(false) }
+    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
+    val hapticArchiveToggle: () -> Unit = {
+        haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        onArchiveToggle()
+    }
     if (showStartPicker) {
         com.daybook.app.ui.DaybookDatePickerDialog(
             initial = java.time.LocalDate.now(),
@@ -396,8 +401,8 @@ private fun HabitCard(
             // Task C (C3) — "Mark as broken" moved fully onto the card itself (above); no longer
             // duplicated in this menu.
             add(
-                if (habit.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = onArchiveToggle)
-                else SheetAction(DaybookIcons.Archive, "Archive", onClick = onArchiveToggle)
+                if (habit.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = hapticArchiveToggle)
+                else SheetAction(DaybookIcons.Archive, "Archive", onClick = hapticArchiveToggle)
             )
             add(SheetAction(MI.Filled.Delete, "Delete", destructive = true, onClick = { confirmDelete = true }))
         }

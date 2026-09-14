@@ -23,6 +23,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.daybook.app.ui.components.BackHeader
@@ -116,10 +118,14 @@ fun HabitJournalChatScreen(
                         minLines = 1,
                         modifier = Modifier.weight(1f)
                     )
+                    val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
                     CircleIconButton(
                         icon = DaybookIcons.Send,
                         contentDescription = "Send",
-                        onClick = vm::sendAnswer,
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.sendAnswer()
+                        },
                         style = CircleStyle.Tonal,
                         enabled = state.draftAnswer.isNotBlank() && !state.busy
                     )
