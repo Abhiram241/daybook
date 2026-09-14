@@ -31,9 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 40          // v0.7.2 build 40 — reply field no longer gets partially covered
-                                   // by the keyboard (DaybookTextField now tracks the IME's actual
-                                   // animated height instead of guessing with a fixed delay).
+        versionCode = 41          // v0.7.2 build 41 — actual fix for the keyboard-cover bug: build
+                                   // 40's WindowInsets.ime read was always zero (consumed by the
+                                   // ancestor LazyColumn's imePadding()), so it never fired. Now
+                                   // retries bringIntoView() on a timer instead of that dead signal.
         versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter + keyboard-cover fixes
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
