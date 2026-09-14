@@ -179,8 +179,9 @@ class HealthConnectReader(private val context: Context) {
         )
     }
 
-    /** The day's sleep, if the session STARTED on this local date (a session spanning midnight is
-     *  attributed to the night it started, matching how a user thinks about "last night's sleep"). */
+    /** The day's sleep, if the session ENDED on this local date (a session spanning midnight is
+     *  attributed to the day the user WOKE UP, not the night they went to bed — matching how a
+     *  user thinks about "today's sleep" showing up on the morning they actually see it). */
     data class SleepSummary(
         val totalMinutes: Int, val deepMinutes: Int, val lightMinutes: Int,
         val remMinutes: Int, val awakeMinutes: Int, val startMillis: Long, val endMillis: Long
@@ -188,14 +189,14 @@ class HealthConnectReader(private val context: Context) {
 
     suspend fun sleepForDay(date: LocalDate, zoneId: ZoneId): SleepSummary? {
         // Widen the read window a few hours either side of midnight so a session that started the
-        // evening before (and thus belongs to "last night") is still captured.
+        // evening before (and thus ends, and is attributed to, this date) is still captured.
         val start = date.minusDays(1).atStartOfDay(zoneId).toInstant()
         val end = date.plusDays(1).atStartOfDay(zoneId).toInstant()
         val sessions = client().readRecords(
             ReadRecordsRequest(SleepSessionRecord::class, TimeRangeFilter.between(start, end))
         ).records
         val forThisDay = sessions.filter {
-            it.startTime.atZone(zoneId).toLocalDate() == date
+            it.endTime.atZone(zoneId).toLocalDate() == date
         }
         if (forThisDay.isEmpty()) return null
         if (forThisDay.size > 1) {

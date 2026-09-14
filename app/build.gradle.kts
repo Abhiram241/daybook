@@ -31,9 +31,9 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 38          // v0.7.1 build 38 — Daily Report round 2: model pickers, expand-on-tap
-                                   // Intake/Habits, streak-aware habit rows, AI chat, markdown rendering.
-        versionName = "0.7.1"     // v0.7.1 — Daily Report round 2
+        versionCode = 39          // v0.7.2 build 39 — sleep bucketed to wake-up day (was bedtime
+                                   // day); Today "show completed" filter is session-only again.
+        versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter fix
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

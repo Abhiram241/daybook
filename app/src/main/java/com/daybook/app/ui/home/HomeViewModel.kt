@@ -403,9 +403,12 @@ class HomeViewModel @Inject constructor(
     fun toggleFilter(f: ReminderFilter) {
         _typeFilter.value = _typeFilter.value.let { if (f in it) it - f else it + f }
     }
+    // Session-scoped only (matches _typeFilter above) — flipping this in the Today filter sheet
+    // must not silently overwrite the user's persisted "Hide resolved reminders by default"
+    // Settings choice. It always reseeds from that setting in init()/resetReminderFilter(), so a
+    // restart returns to the configured default regardless of what was toggled mid-session.
     fun setShowResolved(v: Boolean) {
         _showResolved.value = v
-        safeLaunch { settingsRepository.setHomeHideResolved(!v) }
     }
     fun resetReminderFilter() {
         _typeFilter.value = emptySet()
