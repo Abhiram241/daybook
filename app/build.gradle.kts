@@ -31,10 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 41          // v0.7.2 build 41 — actual fix for the keyboard-cover bug: build
-                                   // 40's WindowInsets.ime read was always zero (consumed by the
-                                   // ancestor LazyColumn's imePadding()), so it never fired. Now
-                                   // retries bringIntoView() on a timer instead of that dead signal.
+        versionCode = 42          // v0.7.2 build 42 — keyboard-cover fix #3: bring-into-view now
+                                   // targets the whole field / whole reply card (+16dp margin)
+                                   // instead of the bare inner BasicTextField, whose bounds left
+                                   // the box padding + send button under the keyboard.
         versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter + keyboard-cover fixes
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

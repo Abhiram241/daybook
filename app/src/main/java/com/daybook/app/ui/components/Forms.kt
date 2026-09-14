@@ -46,7 +46,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import com.daybook.app.data.model.DayOfWeek
 import com.daybook.app.data.model.RedFlag
 import com.daybook.app.ui.theme.AppShapes
@@ -117,31 +125,15 @@ fun DaybookTextField(
     val boxBg = tint?.fillRaised ?: DaybookColors.SurfaceElevated
     val textColor = tint?.onFill ?: DaybookColors.TextPrimary
     val cursorColor = tint?.accent ?: DaybookColors.TextPrimary
-    // Bug fix — a focused field near the bottom of a scrolling screen (e.g. this screen's last
-    // form field, or a card's notes field low in a list) could end up entirely covered by the
-    // IME with no automatic scroll to reveal it: `imePadding()` alone shrinks the scrollable
-    // area but doesn't reposition it, and Compose's built-in bring-into-view can lose the race
-    // against the keyboard's own resize animation. The keyboard's show animation runs on its own
-    // (OS/OEM-controlled) timeline, so a single delayed call is always a guess that can fire
-    // before it settles — verified on-device: the field ends up with its bottom half still under
-    // the keyboard. Re-reading `WindowInsets.ime` here to know when the animation settles doesn't
-    // work either, because the ancestor scrollable's own `imePadding()` CONSUMES that inset for
-    // every descendant (that's what `imePadding()` is documented to do), so this composable would
-    // just see it as permanently zero. Instead, re-issue `bringIntoView()` repeatedly for a short
-    // window after focus: each attempt re-evaluates the field's position against the ancestor's
-    // CURRENT (correctly shrinking) viewport, so it converges to the right scroll position once
-    // the keyboard — and any card-expand animation racing it — finishes, however long that takes.
-    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    // Keyboard-cover bug (builds 40/41 failed, see KEYBOARD_COVER_BUG_HANDOVER.md) — the real
+    // cause was geometric, not timing: the requester sat on the inner `BasicTextField`, whose
+    // bounds exclude the 14dp box padding around it. A scrollable parent's bring-into-view scrolls
+    // the *minimum* distance, so it stopped as soon as the bare text line touched the keyboard's
+    // top edge — leaving the box's bottom padding (and anything beside it, like the Home reply's
+    // send button) under the keyboard however many times / however late it was re-issued. The
+    // requester now covers the whole field (label, box, supporting text) plus a small margin.
     var isFieldFocused by remember { mutableStateOf(false) }
-    LaunchedEffect(isFieldFocused) {
-        if (isFieldFocused) {
-            repeat(15) {
-                bringIntoViewRequester.bringIntoView()
-                delay(40)
-            }
-        }
-    }
-    Column(modifier) {
+    Column(modifier.bringIntoViewWhileImeOpens(isFieldFocused)) {
         if (label != null) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = DaybookColors.TextMuted)
             Spacer(Modifier.height(6.dp))
@@ -181,7 +173,6 @@ fun DaybookTextField(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .bringIntoViewRequester(bringIntoViewRequester)
                     .onFocusEvent { state -> isFieldFocused = state.isFocused }
             )
         }
@@ -194,6 +185,44 @@ fun DaybookTextField(
             )
         }
     }
+}
+
+/** Breathing room kept between a revealed element's bottom edge and the keyboard's top edge. */
+private val ImeRevealMargin = 16.dp
+
+/**
+ * While [active], keeps this element's WHOLE bounds (plus [ImeRevealMargin] below) scrolled into
+ * view of the nearest scrollable ancestor as the keyboard opens. Apply it to the outermost thing
+ * that must stay visible — a whole card, not just the text field inside it.
+ *
+ * Re-issued on every frame of the IME inset animation (`WindowInsets.ime` is the raw window inset;
+ * an ancestor's `imePadding()` only marks it consumed for other padding modifiers, it doesn't zero
+ * this read — `WorkoutSessionScreen`'s set cells rely on the same thing), and once more after a
+ * short settle for any expand animation still running inside the target.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun Modifier.bringIntoViewWhileImeOpens(active: Boolean): Modifier {
+    val requester = remember { BringIntoViewRequester() }
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(active) {
+        if (!active) return@LaunchedEffect
+        val reveal: suspend () -> Unit = {
+            val marginPx = with(density) { ImeRevealMargin.toPx() }
+            requester.bringIntoView(
+                Rect(0f, 0f, size.width.toFloat(), size.height.toFloat() + marginPx)
+            )
+        }
+        coroutineScope {
+            launch { snapshotFlow { imeInsets.getBottom(density) }.collectLatest { reveal() } }
+            launch { delay(350); reveal() }
+        }
+    }
+    return this
+        .onSizeChanged { size = it }
+        .bringIntoViewRequester(requester)
 }
 
 @Composable

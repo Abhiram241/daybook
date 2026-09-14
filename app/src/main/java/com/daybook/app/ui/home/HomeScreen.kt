@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -570,7 +571,17 @@ private fun ReminderCard(
     // v0.5.3 Phase 5 (§5.4) — no size animation on the SoftCard root (it fought animateItem on
     // the same LazyColumn node). v0.5.3 Phase 7 (#38) — the inline reply now animates via
     // AnimatedVisibility below rather than animateContentSize on an inner Column.
-    SoftCard(tint = tint, onClick = onOpen, modifier = modifier.fillMaxWidth()) {
+    // Keyboard-cover bug — focusing a field in the inline reply reveals the WHOLE card (send
+    // button, trigger-flag row, suspected-food field) above the keyboard, not just the field.
+    var replyHasFocus by remember(item.id) { mutableStateOf(false) }
+    SoftCard(
+        tint = tint,
+        onClick = onOpen,
+        modifier = modifier
+            .fillMaxWidth()
+            .bringIntoViewWhileImeOpens(replyOpen && replyHasFocus)
+            .onFocusChanged { replyHasFocus = it.hasFocus }
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconTile(icon = Icons.getIcon(item.iconKey), tint = tint, contentDescription = item.title)
             Spacer(Modifier.width(12.dp))
