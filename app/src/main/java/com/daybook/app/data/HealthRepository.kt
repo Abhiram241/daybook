@@ -125,18 +125,32 @@ class HealthRepository(
                 // branch for the life of the install. Mint it now, exactly like the expired-token
                 // branch below already does, WITHOUT clearing anything on failure (`getOrNull()`
                 // just leaves it null, same as it already was).
-                stateStore.changesToken = runCatchingCancellable { reader.changesToken() }.getOrNull()
+                stateStore.changesToken = runCatchingCancellable { reader.changesToken(granted) }.getOrNull()
                 if (forcedResync) stateStore.sleepDedupResyncPending = false
                 true
             }
         } else {
             runCatchingCancellable {
-                val changes = reader.changes(token)
+                // Bug fix — user report: a device with even one of the 12 MVP read permissions
+                // NOT granted (e.g. "Total calories burned" left off) hard-failed every refresh
+                // ("Couldn't refresh your health data right now") forever, despite `dayAggregate`
+                // already correctly degrading to "that metric is absent" for a partial grant.
+                // Root cause: `reader.changes(token)` throws `SecurityException` if the token's
+                // scope covers a record type whose read permission isn't currently held — and the
+                // token used to always be minted covering all 12 types regardless of what was
+                // granted at mint time (see `HealthConnectReader.changesToken`'s KDoc for the mint
+                // side of this fix). Guard the call itself and treat a throw exactly like an
+                // expired token — this is self-healing even for a token minted before this fix
+                // shipped: the very next pull falls back to a full re-read and mints a fresh,
+                // correctly-scoped token instead of re-throwing forever.
+                val changesResult = runCatchingCancellable { reader.changes(token) }
+                changesResult.exceptionOrNull()?.let { t -> Log.w(TAG, "reader.changes(token) threw, treating as expired", t) }
+                val changes = changesResult.getOrNull()
                 when {
-                    changes.expired -> {
+                    changes == null || changes.expired -> {
                         // Silent-but-visible fallback (§6.3): re-read the last 30 days, mint a new
                         // token, and record when this happened WITHOUT clearing the old token
-                        // first — if the re-read below throws, the old (still-expired) token stays
+                        // first — if the re-read below throws, the old (still-bad) token stays
                         // in place rather than being nulled out, which would otherwise force a
                         // full re-read on every subsequent pull forever (a silent battery
                         // regression, §6.3).
@@ -146,10 +160,10 @@ class HealthRepository(
                         // mint failure, contradicting this very comment's "without clearing the
                         // old token first" — that's the one way the system could re-enter H1's
                         // permanent-full-resync state after being fixed. Only overwrite on an
-                        // actual new token; a mint failure now leaves the expired-but-non-null
-                        // token in place (still forces one more full re-read next time via
-                        // `changes.expired`, but doesn't null it out for good).
-                        runCatchingCancellable { reader.changesToken() }.getOrNull()?.let { stateStore.changesToken = it }
+                        // actual new token; a mint failure now leaves the old, still-bad token in
+                        // place (still forces one more full re-read next time, but doesn't null it
+                        // out for good).
+                        runCatchingCancellable { reader.changesToken(granted) }.getOrNull()?.let { stateStore.changesToken = it }
                         true
                     }
                     changes.hasChanges -> {

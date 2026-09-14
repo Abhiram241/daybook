@@ -309,6 +309,12 @@ class HealthTabViewModel @Inject constructor(
                 // below — `finally` already reset it on a thrown exception, this covers a hang that
                 // never throws at all.
                 val r = kotlinx.coroutines.withTimeoutOrNull(20_000) { healthRepository.refreshNow() }
+                // Bug fix — only the Success branch used to bump `_refreshToastToken`, so a failed
+                // manual refresh set `_actionResult` (this state field has no reader anywhere in
+                // `HealthTabScreen.kt` — dead state) and otherwise produced no visible feedback at
+                // all: the spinner just stopped with nothing shown. Every branch now goes through
+                // the same `UndoSnack` toast the success case already used, so a failure is always
+                // visible, not just a successful refresh.
                 when (r) {
                     is HealthRepository.PullOutcome.Success -> {
                         // User request — no more persistent "Up to date…" caption; a toast that
@@ -317,13 +323,24 @@ class HealthTabViewModel @Inject constructor(
                         _refreshToastMessage.value = if (r.hasNewData) "Last updated just now." else "Up to date — nothing new from your band."
                         _refreshToastToken.value += 1
                     }
-                    is HealthRepository.PullOutcome.Failure -> _actionResult.value = r.message
+                    is HealthRepository.PullOutcome.Failure -> {
+                        _actionResult.value = r.message
+                        _refreshToastMessage.value = r.message
+                        _refreshToastToken.value += 1
+                    }
                     // H5 fix — see WorkoutSettingsViewModel.refreshHealthNow's identical fix.
-                    HealthRepository.PullOutcome.PermissionsMissing ->
-                        _actionResult.value = "Daybook no longer has access to your health data. Tap Connect to share it again."
+                    HealthRepository.PullOutcome.PermissionsMissing -> {
+                        val msg = "Daybook no longer has access to your health data. Tap Connect to share it again."
+                        _actionResult.value = msg
+                        _refreshToastMessage.value = msg
+                        _refreshToastToken.value += 1
+                    }
                     null -> {
                         recordUnhandledException(java.util.concurrent.TimeoutException("HealthTabViewModel.refreshNow timed out after 20s"))
-                        _actionResult.value = "Refresh took too long. Try again."
+                        val msg = "Refresh took too long. Try again."
+                        _actionResult.value = msg
+                        _refreshToastMessage.value = msg
+                        _refreshToastToken.value += 1
                     }
                 }
                 _ladderRefresh.value += 1

@@ -296,16 +296,35 @@ class HealthConnectReader(private val context: Context) {
         }
     }
 
-    suspend fun changesToken(): String = client().getChangesToken(
-        ChangesTokenRequest(
-            recordTypes = setOf(
-                StepsRecord::class, DistanceRecord::class, ActiveCaloriesBurnedRecord::class,
-                TotalCaloriesBurnedRecord::class, ExerciseSessionRecord::class, SleepSessionRecord::class,
-                HeartRateRecord::class, RestingHeartRateRecord::class, OxygenSaturationRecord::class,
-                WeightRecord::class, HydrationRecord::class, NutritionRecord::class
-            )
+    // Bug fix — user report: refresh permanently fails ("Couldn't refresh your health data right
+    // now") on a device that has NOT granted every one of the 12 MVP read permissions (e.g. "Total
+    // calories burned" left off). Root cause: this used to unconditionally request a changes token
+    // scoped to all 12 record types regardless of what was actually granted. Health Connect's
+    // `getChanges()` requires every permission a token's scope covers to still be held at call
+    // time or it throws `SecurityException` for the WHOLE call — the exact same "all or nothing"
+    // constraint `dayAggregate`'s `metricPermissions` filtering (H2, above) already works around
+    // for the aggregate path, but this mint call was never given the same treatment. Every
+    // subsequent incremental pull then re-threw on `reader.changes(token)` forever, which is a
+    // strictly worse failure than the "missing 1 permission" case ever needed to be — it should
+    // just mean that one metric family is silently absent, matching every other metric here.
+    suspend fun changesToken(granted: Set<String>): String {
+        val recordTypePermissions: List<Pair<kotlin.reflect.KClass<out androidx.health.connect.client.records.Record>, String>> = listOf(
+            StepsRecord::class to HealthPermission.getReadPermission(StepsRecord::class),
+            DistanceRecord::class to HealthPermission.getReadPermission(DistanceRecord::class),
+            ActiveCaloriesBurnedRecord::class to HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+            TotalCaloriesBurnedRecord::class to HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+            ExerciseSessionRecord::class to HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+            SleepSessionRecord::class to HealthPermission.getReadPermission(SleepSessionRecord::class),
+            HeartRateRecord::class to HealthPermission.getReadPermission(HeartRateRecord::class),
+            RestingHeartRateRecord::class to HealthPermission.getReadPermission(RestingHeartRateRecord::class),
+            OxygenSaturationRecord::class to HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+            WeightRecord::class to HealthPermission.getReadPermission(WeightRecord::class),
+            HydrationRecord::class to HealthPermission.getReadPermission(HydrationRecord::class),
+            NutritionRecord::class to HealthPermission.getReadPermission(NutritionRecord::class)
         )
-    )
+        val recordTypes = recordTypePermissions.filter { it.second in granted }.map { it.first }.toSet()
+        return client().getChangesToken(ChangesTokenRequest(recordTypes = recordTypes))
+    }
 
     data class ChangesResult(val hasChanges: Boolean, val expired: Boolean, val nextToken: String?)
 

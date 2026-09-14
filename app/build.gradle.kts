@@ -31,9 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 45          // v0.7.4 build 45 — hydration habit (+ Health Connect write, DB v31),
-                                   // sleep shown on both dates + "Count sleep hours on" setting,
-                                   // AI Summary food macros, Health grid odd-count layout.
+        versionCode = 46          // v0.7.4 build 46 — Health Connect refresh no longer hard-fails
+                                   // on a partial permission grant (changes-token was minted
+                                   // covering all 12 types regardless of what was granted); manual
+                                   // refresh on the Health tab now shows a toast on failure too.
         versionName = "0.7.4"     // v0.7.4 — hydration habit, sleep attribution, food macros
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
