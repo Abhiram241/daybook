@@ -31,9 +31,10 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 39          // v0.7.2 build 39 — sleep bucketed to wake-up day (was bedtime
-                                   // day); Today "show completed" filter is session-only again.
-        versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter fix
+        versionCode = 40          // v0.7.2 build 40 — reply field no longer gets partially covered
+                                   // by the keyboard (DaybookTextField now tracks the IME's actual
+                                   // animated height instead of guessing with a fixed delay).
+        versionName = "0.7.2"     // v0.7.2 — sleep-date + Today filter + keyboard-cover fixes
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

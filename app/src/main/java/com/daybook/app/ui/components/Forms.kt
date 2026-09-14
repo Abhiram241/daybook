@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -47,7 +48,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.daybook.app.data.model.DayOfWeek
 import com.daybook.app.data.model.RedFlag
@@ -123,10 +123,23 @@ fun DaybookTextField(
     // form field, or a card's notes field low in a list) could end up entirely covered by the
     // IME with no automatic scroll to reveal it: `imePadding()` alone shrinks the scrollable
     // area but doesn't reposition it, and Compose's built-in bring-into-view can lose the race
-    // against the keyboard's own resize animation. Requesting it explicitly, after a short delay
-    // for that animation to settle, makes the field reliably scroll into view on focus.
+    // against the keyboard's own resize animation. A single delayed call used to be the fix, but
+    // the keyboard's show animation runs on its own (OS/OEM-controlled) timeline — a 250 ms guess
+    // can fire before it settles, especially on a slower device or a taller keyboard (number row +
+    // suggestion strip), leaving the field re-covered by however much more the keyboard still had
+    // to grow. Re-issuing `bringIntoView()` every time the measured IME height itself changes
+    // tracks the animation's actual progress instead of guessing its duration, so the field ends
+    // up correctly placed once the keyboard (and any card-expand animation racing it) settles,
+    // however long that takes on this device.
     val bringIntoViewRequester = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
+    var isFieldFocused by remember { mutableStateOf(false) }
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(isFieldFocused, imeBottomPx) {
+        if (isFieldFocused && imeBottomPx > 0) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
     Column(modifier) {
         if (label != null) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = DaybookColors.TextMuted)
@@ -169,11 +182,11 @@ fun DaybookTextField(
                     .fillMaxWidth()
                     .bringIntoViewRequester(bringIntoViewRequester)
                     .onFocusEvent { state ->
+                        isFieldFocused = state.isFocused
                         if (state.isFocused) {
-                            scope.launch {
-                                delay(250)
-                                bringIntoViewRequester.bringIntoView()
-                            }
+                            // Also try immediately, in case the IME is already open (e.g. tabbing
+                            // between fields) so imeBottomPx never changes to re-trigger the effect.
+                            scope.launch { bringIntoViewRequester.bringIntoView() }
                         }
                     }
             )
