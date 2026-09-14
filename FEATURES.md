@@ -1,12 +1,25 @@
 # Daybook — feature inventory
 
-What the app does, area by area. Written against **versionCode 20 / versionName 0.5.6 / Room DB v19**.
+What the app does, area by area. Written against **versionCode 38 / versionName 0.7.1 / Room DB v30**.
 Package `com.daybook.app`. Android-only, offline-first, dark-only.
 
 Each feature has a one-to-three-sentence description and, in parentheses, the main files/screens
 that implement it. "Where the setting lives" is called out wherever a feature is configurable.
 
 **Rounds since the journal-habit round (v0.5.5 / DB v17), newest last:**
+
+- **Beast Mode workout feature + UI redesign** (v0.6.1, build 33) and **Beast Mode bug-fix pass**
+  (v0.6.2, build 34) — a full workout tracker (routines, sessions, exercise catalog, sets/reps/
+  weight logging) added as a fourth tracking domain alongside Habits/Intake/Journal, plus an
+  accent-aware UI pass. See §13.
+- **Health Connect integration round** (DB v24→v29, several migrations) — reads step count,
+  sleep, heart rate, SpO2, weight, hydration, calories and exercise sessions from Android Health
+  Connect and surfaces them as read-only cards on the Workout tab. See §14.
+- **Daily Report round 1 & 2** (DB v29→v30, `MIGRATION_29_30`; versionCode 35→38) — a new "Daily
+  Report" screen that assembles the day's habits/intake/health/workout data into one place and
+  (optionally) sends it to a user-chosen AI provider for a written summary; per-field AI exclusions,
+  model pickers, expand-on-tap Intake/Habits rows, streak-aware habit rows, an AI chat, and
+  markdown rendering in round 2. See §15.
 
 - **Login-redesign round** — sign-in gate + onboarding reworked (bottom-anchored "Continue with
   Google", name asked once only when unknown, conflict/restore dialog, four-stage launch gate);
@@ -511,9 +524,9 @@ is gone** (journal-habit round) — question sets are now configured per-habit i
   instead as an ordinary string column on `Habit` (`journalQuestionsJson`). Occurrences are
   concrete scheduled instances; events are an append-only log with an identical shape on both
   sides. (`data/model/DataModel.kt`)
-- **DB version history.** Currently **v19**. Exported schemas live in
-  `app/schemas/com.daybook.app.data.local.AppDatabase/` (`3.json` … `19.json`); migrations in
-  `data/local/Migrations.kt` (`MIGRATION_2_3` … `MIGRATION_18_19`), registered in
+- **DB version history.** Currently **v30**. Exported schemas live in
+  `app/schemas/com.daybook.app.data.local.AppDatabase/` (`3.json` … `30.json`); migrations in
+  `data/local/Migrations.kt` (`MIGRATION_2_3` … `MIGRATION_29_30`), registered in
   `di/DatabaseModule.kt` with `fallbackToDestructiveMigrationFrom(1)` +
   `fallbackToDestructiveMigrationOnDowngrade()`.
   - `MIGRATION_16_17` (journal-habit round) adds `habits.journal_questions_json` and
@@ -533,3 +546,90 @@ is gone** (journal-habit round) — question sets are now configured per-habit i
   automatically — so not backing up is safe by default. JSON export and Firestore are *derived*
   mirrors, never the source of truth. Every network call is failure-inert; none blocks a launch
   or a screen render. The one deliberate exception is the sign-in gate.
+
+## 13. Workout tracking ("Beast Mode")
+
+A fourth tracking domain (alongside Habits / Intake / Journal), added as a fourth bottom-nav
+destination. Routines, sessions, and a bundled exercise catalog with images.
+
+- **Routines and sessions.** Build a routine (an ordered list of exercises with target sets/reps/
+  weight), then run it as a logged session — set-by-set weight/reps entry, rest timer, per-exercise
+  history lookup while logging. (`ui/workout/RoutineEditScreen.kt`, `ui/workout/WorkoutSessionScreen.kt`,
+  `ui/workout/WorkoutSessionViewModel.kt`, `data/workout/WorkoutLogic.kt`, `data/local/WorkoutDao.kt`)
+- **Exercise catalog.** A bundled, curated set of exercises (with thumbnail images) categorised by
+  muscle group/equipment; a user can also add their own custom exercise.
+  (`data/workout/ExerciseCatalog.kt`, `data/workout/ExerciseTaxonomy.kt`, `ui/workout/AddExerciseScreen.kt`,
+  `ui/workout/ExerciseFormScreen.kt`, `ui/workout/ExerciseThumbnail.kt`)
+- **Hevy CSV import.** Existing lifting history from the Hevy app can be imported from its CSV
+  export — parsed, validated, and matched against the local exercise catalog by name.
+  (`data/workout/HevyCsvParser.kt`, `data/workout/HevyCsvValidator.kt`, `data/workout/HevyExerciseMatcher.kt`,
+  `data/workout/HevyImporter.kt`)
+- **Workout history + detail.** Past sessions listed and viewable in detail (sets/reps/weight per
+  exercise, session duration). (`ui/workout/WorkoutHistoryScreen.kt`, `ui/workout/WorkoutDetailScreen.kt`)
+- **Workout settings.** Weight unit (kg/lb), workout-specific font choice, and other per-domain
+  prefs, kept separate from the app-wide Settings hub. (`ui/workout/WorkoutSettingsScreen.kt`,
+  `data/workout/WorkoutFontPrefs.kt`)
+- **Live elapsed-time during a session** ticks in real time on screen, not a value frozen at
+  session start (a fixed bug — see [[appforfood-workout-feedback]] class of issue).
+
+## 14. Health Connect
+
+Read-only integration with Android Health Connect, surfaced as cards on the Workout tab. Daybook
+never writes to Health Connect — it only reads what other apps (a phone's built-in step counter, a
+wearable's companion app, etc.) have already recorded there.
+
+- **Metrics read.** Steps, sleep sessions, heart rate (including resting HR), SpO2, weight,
+  hydration, active/total calories burned, distance, and exercise sessions.
+  (`data/health/HealthConnectReader.kt`, using `androidx.health.connect.client` record types)
+- **Permission flow.** A dedicated rationale screen requests only the Health Connect permissions
+  the enabled cards need; availability (Health Connect installed / needs update / unsupported) is
+  checked before asking. (`data/health/HealthConnectAvailability.kt`, `data/health/HealthPermissions.kt`,
+  `ui/workout/health/HealthPermissionsRationaleActivity.kt`)
+- **Per-day aggregation + card rendering.** Raw records are aggregated into one `HealthDay` snapshot
+  per calendar day (min/max/avg where relevant, e.g. SpO2 min/max), cached in Room
+  (`health_days` table) so the UI doesn't re-query Health Connect on every recomposition.
+  (`data/health/HealthAggregation.kt`, `data/health/HealthCardMetrics.kt`, `data/local/HealthDao.kt`,
+  `data/model/HealthModel.kt`)
+- **Sleep-session merge.** Adjacent/overlapping sleep records from multiple sources are merged into
+  one logical night rather than double-counting. (`data/health/SleepSessionMerge.kt`)
+- **Health tab UI.** A dedicated sub-screen off the Workout tab: a summary sheet, per-metric detail
+  sheets, and individual metric cards, each independently toggle-able.
+  (`ui/workout/health/HealthTabScreen.kt`, `ui/workout/health/HealthTabViewModel.kt`,
+  `ui/workout/health/HealthMetricCard.kt`, `ui/workout/health/HealthAggregateSheet.kt`,
+  `ui/workout/health/HealthDetailSheet.kt`)
+- **Sync-state tracking.** A Health Connect "changes token" is persisted so a refresh only re-reads
+  what changed since the last read, not the whole history every time.
+  (`data/health/HealthSyncStateStore.kt`)
+
+## 15. Daily Report & AI providers
+
+A new "Daily Report" screen (DAILY_REPORT_PLAN.md) that pulls the day's habits, intake, health, and
+workout data into one place, with an optional AI-written narrative summary on top — the AI call is
+opt-in per the user's own API key, never required to use the report.
+
+- **Report screen.** Sections render only when they have data for the viewed day (habits, intake,
+  health snapshot, workout session), each expandable; an "Ask AI" action sends the assembled context
+  to the user's chosen provider/model and renders the reply as markdown.
+  (`ui/report/DailyReportScreen.kt`, `ui/report/DailyReportViewModel.kt`,
+  `data/DailyReportRepository.kt`, `data/DailyReportContext.kt`, `data/DailyReportPrompt.kt`)
+- **Multi-provider AI support.** A pluggable `AiProvider` interface with seven registered providers:
+  OpenAI, OpenRouter (free-tier-only models), NVIDIA NIM, OpenCode / OpenCode Zen, Google AI Studio,
+  and Anthropic — five of the seven share one generic OpenAI-compatible adapter, Google AI Studio and
+  Anthropic get their own. Each user supplies their own API key (stored via `AiKeyStore`, exportable/
+  importable with the rest of Settings via `ApiKeysExport`); a model picker lists that provider's
+  available models. (`data/ai/AiProvider.kt`, `data/ai/AiProviderRegistry.kt`,
+  `data/ai/OpenAiCompatibleProvider.kt`, `data/ai/GoogleAiStudioProvider.kt`,
+  `data/ai/AnthropicProvider.kt`, `data/ai/AiKeyStore.kt`, `ui/settings/AiProvidersSettingsScreen.kt`,
+  `ui/settings/AiProvidersViewModel.kt`, `ui/settings/ApiKeysExport.kt`)
+- **AI chat exclusions.** A per-field opt-out list so specific habits/intake items/health cards can
+  be excluded from what's sent to the AI (e.g. a sensitive habit name), configured in its own
+  Settings screen. (`data/AiExclusions.kt`, `data/model/AiExclusion.kt`, `data/local/AiExclusionDao.kt`,
+  `ui/settings/AiExclusionsScreen.kt`, `ui/settings/AiExclusionsViewModel.kt`)
+- **Cached AI summaries.** A generated Daily Report summary is cached (`DailyReportAiSummaryDao`)
+  keyed by a content hash of the inputs, so re-opening the same day's report doesn't re-call the AI
+  provider (and re-spend API quota) unless the underlying data changed.
+  (`data/local/DailyReportAiSummaryDao.kt`, `data/backup/AiSyncModel.kt`,
+  `data/sync/DailyReportAiSummaryHashTest.kt`)
+- **Settings.** A dedicated "Daily Report AI" settings screen: pick provider, pick model, manage
+  keys, manage exclusions. (`ui/settings/DailyReportAiSettingsScreen.kt`,
+  `ui/settings/DailyReportAiSettingsViewModel.kt`)

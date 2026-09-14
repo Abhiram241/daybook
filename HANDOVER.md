@@ -112,13 +112,23 @@ these. When you are unsure whether a change fits, check it against them.
 | Thing | Value |
 |---|---|
 | App name / package | Daybook / `com.daybook.app` |
-| `versionName` (human) | `0.5.6` |
-| `versionCode` (update counter) | `20` |
-| Room database schema version | `19` |
+| `versionName` (human) | `0.7.1` |
+| `versionCode` (update counter) | `38` |
+| Room database schema version | `30` |
 | Platforms | Android only. `minSdk 26` (Android 8.0), `targetSdk 34` (Android 14) |
 | Theme | Dark only |
 | Data | Offline-first; optional Google sign-in + cloud sync |
 | Source control | Git. GitHub: `https://github.com/Abhiram241/daybook` |
+
+**A note on scope:** Modules 1–15 below were written when the app had three tracking domains
+(Habits, Intake, Journal) at `versionCode 20` / DB v19, and they still teach those fundamentals
+accurately — Compose, Room, the scheduler, sync, and the release process have not changed shape.
+Three whole feature areas have shipped since and are **not** covered by a dedicated module: a
+fourth tracking domain, **workout logging ("Beast Mode")**; a read-only **Health Connect**
+integration; and an opt-in, bring-your-own-key **AI Daily Report**. All three follow the exact
+same layered pattern (Compose screen → ViewModel → Repository → Room/DAO) this document already
+teaches — there's no new architecture to learn, just new files in that same shape. See
+`FEATURES.md` §13–§15 for what they do and where they live.
 
 ### The big-picture shape
 
@@ -655,7 +665,7 @@ why it is nearly empty.
 ```bash
 cd /home/abhiram/Downloads/app-for-food
 mkdir -p /tmp/apk-peek && cd /tmp/apk-peek
-unzip -o /home/abhiram/Downloads/app-for-food/Daybook-v0.5.6-build20-release.apk >/dev/null
+unzip -o /home/abhiram/Downloads/app-for-food/Daybook-v0.7.1-build38-release.apk >/dev/null
 ls -la
 ```
 
@@ -782,8 +792,8 @@ Open **`app/build.gradle.kts`** and read it top to bottom (about 200 lines):
   if the file is absent the release build falls back to the debug key so it still assembles.
 - `android { }`:
   - `namespace`, `compileSdk = 34`.
-  - `defaultConfig { applicationId; minSdk = 26; targetSdk = 34; versionCode = 20;
-    versionName = "0.5.6" }` — **these are the lines you bump for a release.** The inline
+  - `defaultConfig { applicationId; minSdk = 26; targetSdk = 34; versionCode = 38;
+    versionName = "0.7.1" }` — **these are the lines you bump for a release.** The inline
     comments record what each recent build changed.
   - `javaCompileOptions { ... "room.schemaLocation" ... }` — tells Room to *export* the database
     schema as JSON into `app/schemas/` on every build (Module 7 depends on this).
@@ -1204,13 +1214,17 @@ new schema disagree even slightly.
     accent feature. **Those two columns (`habits_accent_color`, `intake_accent_color`) are now
     dead** — the feature was reverted in the next round, but dropping columns is risky, so they
     were left in place, unread and unwritten.
-  - `MIGRATION_18_19` (the newest) — a single additive column:
+  - `MIGRATION_18_19` (one example; more have shipped since — see `FEATURES.md` §12 for the full,
+    current list through `MIGRATION_29_30`) — a single additive column:
     `ALTER TABLE app_settings ADD COLUMN check_for_updates_enabled INTEGER NOT NULL DEFAULT 1`,
     the flag behind the "Check for updates" setting (Module 15).
-- **`app/schemas/com.daybook.app.data.local.AppDatabase/`** — `3.json` through `19.json`. Open
-  `19.json`: it is the *generated* description of the current schema — every table's `createSql`,
-  every column, every index, plus the `identityHash`. You never edit this file; the build writes
-  it.
+- **`app/schemas/com.daybook.app.data.local.AppDatabase/`** — `3.json` through `30.json` (the
+  current schema as of this writing). Open the highest-numbered one: it is the *generated*
+  description of the current schema — every table's `createSql`, every column, every index, plus
+  the `identityHash`. You never edit this file; the build writes it. (The rest of this module
+  walks through `MIGRATION_18_19` / `18.json`→`19.json` purely as a worked example — the mechanics
+  are identical for any migration, so the example stays useful even though `19` is no longer the
+  latest version.)
 - **`app/src/androidTest/java/com/daybook/app/data/local/MigrationTest.kt`** — the pattern:
   `helper.createDatabase(TEST_DB, 18).close()` then
   `helper.runMigrationsAndValidate(TEST_DB, 19, true, MIGRATION_18_19)` then a `SELECT` to assert
@@ -2162,15 +2176,18 @@ match it byte for byte (`1`).
 
 ### Step 2 — the migration (`data/local/Migrations.kt`)
 
-You **cannot** edit `MIGRATION_18_19` — treat any migration whose `.json` is committed as frozen.
-Add a new one at the end:
+You **cannot** edit an existing migration — treat any migration whose `.json` is committed as
+frozen. Check `Migrations.kt` for the current highest version before you start (it has moved on
+since this document was first written — at the time of this update it was `MIGRATION_29_30`, i.e.
+schema v30); substitute today's actual next number everywhere below instead of copying `30`/`31`
+literally if more migrations have shipped since. Add a new one at the end:
 
 ```kotlin
 /**
- * v19 -> v20 (first-change exercise). One additive column on `app_settings`, no table rebuild.
+ * v30 -> v31 (first-change exercise). One additive column on `app_settings`, no table rebuild.
  * NOT NULL DEFAULT 1 byte-matches @ColumnInfo(name = "confirm_before_delete", defaultValue = "1").
  */
-val MIGRATION_19_20 = object : Migration(19, 20) {
+val MIGRATION_30_31 = object : Migration(30, 31) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN confirm_before_delete INTEGER NOT NULL DEFAULT 1")
     }
@@ -2179,22 +2196,22 @@ val MIGRATION_19_20 = object : Migration(19, 20) {
 
 ### Step 3 — bump the version (`data/local/AppDatabase.kt`)
 
-`@Database(entities = [ ... ], version = 20, exportSchema = true)`
+`@Database(entities = [ ... ], version = 31, exportSchema = true)`
 
 ### Step 4 — register it (`di/DatabaseModule.kt`)
 
 Add the import, then append to the chain:
-`.addMigrations(MIGRATION_2_3, ..., MIGRATION_18_19, MIGRATION_19_20)`
+`.addMigrations(MIGRATION_2_3, ..., MIGRATION_29_30, MIGRATION_30_31)`
 
 ### Step 5 — regenerate and commit the schema JSON
 
 ```bash
 ./gradlew clean assembleDebug
-git add app/schemas/com.daybook.app.data.local.AppDatabase/20.json
-git diff --cached --stat        # should show ONLY 20.json added
+git add app/schemas/com.daybook.app.data.local.AppDatabase/31.json
+git diff --cached --stat        # should show ONLY 31.json added
 ```
 
-Open `20.json`, confirm `"version": 20` and that the only difference from `19.json` is the one
+Open `31.json`, confirm `"version": 31` and that the only difference from `30.json` is the one
 `confirm_before_delete` column.
 
 ### Step 6 — DAO and repository
@@ -2233,10 +2250,10 @@ exercise — wiring the setting through is the lesson; a consumer just proves it
 
 ### Step 9 — tests
 
-- **Migration test** — in `MigrationTest.kt`, add a `migrate19To20_addsConfirmBeforeDeleteColumn()`
-  case following the `migrate18To19` pattern: create at 19, run `MIGRATION_19_20`, assert
-  `app_settings` now has a `confirm_before_delete` column and a pre-existing row reads `1`. Add
-  the new version to the "migrate all the way" chain case.
+- **Migration test** — in `MigrationTest.kt`, add a `migrate30To31_addsConfirmBeforeDeleteColumn()`
+  case following the existing single-step migration tests' pattern: create at 30, run
+  `MIGRATION_30_31`, assert `app_settings` now has a `confirm_before_delete` column and a
+  pre-existing row reads `1`. Add the new version to the "migrate all the way" chain case.
 - **A tiny unit test** if you extracted any pure logic in Step 8.
 
 ### Step 10 — the 4-gate, clean
@@ -2253,12 +2270,12 @@ new toggle defaults to on.
 
 ```bash
 git add -A
-git commit -m "First change: 'confirm before deleting' setting, end to end (DB v20)"
+git commit -m "First change: 'confirm before deleting' setting, end to end (DB v31)"
 ```
 
 **Graduation question:** without looking, list every file you had to touch and why. You should
 get: `DataModel.kt` (column), `Migrations.kt` (migration), `AppDatabase.kt` (version),
-`DatabaseModule.kt` (register), `20.json` (generated + committed), `AppSettingsDao.kt` +
+`DatabaseModule.kt` (register), `31.json` (generated + committed), `AppSettingsDao.kt` +
 `AppSettingsRepository.kt` (write path), `SettingsViewModel.kt` + `SettingsScreen.kt` (the
 toggle), a consumer, the migration test, and the 4-gate.
 
@@ -2419,7 +2436,8 @@ A blunt list. Each of these has bitten someone.
   coroutine or another `suspend fun`.
 - **versionCode / versionName** — an integer update counter (must strictly increase to install as
   an update) and a human-readable string. In `app/build.gradle.kts` `defaultConfig`. Currently
-  `20` / `"0.5.6"`.
+  `38` / `"0.7.1"` (check `app/build.gradle.kts` for the current values — they change every
+  release).
 - **ViewModel** — the state-and-logic holder for one screen; survives configuration changes;
   exposes `StateFlow`s, runs work in `viewModelScope`.
 - **WorkManager** — the OS-friendly scheduler for deferrable background jobs (here:
@@ -2436,7 +2454,7 @@ A blunt list. Each of these has bitten someone.
 | **The single Activity, launch gate, navigation** | `ui/MainActivity.kt`, `ui/NavConfig.kt`, `ui/components/Navigation.kt` |
 | **Theme (dark only)** | `ui/theme/Theme.kt`, `ui/theme/Tokens.kt` (colours, spacing, shapes, motion), `ui/theme/Type.kt` (5 fonts, default Literata), `ui/theme/Accent.kt` (5 accents, default Lavender) |
 | **Data model (every table + every enum)** | `data/model/DataModel.kt` |
-| **Room: database, DAOs, migrations** | `data/local/AppDatabase.kt`, `data/local/*Dao.kt`, `data/local/Migrations.kt`, `app/schemas/.../3.json … 19.json` |
+| **Room: database, DAOs, migrations** | `data/local/AppDatabase.kt`, `data/local/*Dao.kt`, `data/local/Migrations.kt`, `app/schemas/.../3.json … 30.json` |
 | **Repositories (the boring middle layer)** | `data/HabitRepository.kt`, `data/FoodMedRepository.kt`, `data/AppSettingsRepository.kt`, `data/CustomCategoryRepository.kt`, `data/CustomPromptRepository.kt`, `data/ExportImportRepository.kt` |
 | **The reminder engine** | `data/OccurrenceScheduler.kt`, `data/QuietHours.kt` |
 | **Alarms + notifications** | `util/alarm/AlarmReceiver.kt`, `util/alarm/BootCompletedReceiver.kt`, `util/alarm/NotificationActionReceiver.kt`, `util/notification/NotificationUtils.kt`, `util/notification/NotificationIdSequence.kt` |
