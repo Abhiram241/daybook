@@ -1,9 +1,13 @@
 package com.daybook.app.data.hydration
 
 import com.daybook.app.data.hydration.HydrationIntakeSync.Companion.hydrationTimesJson
+import com.daybook.app.data.hydration.HydrationIntakeSync.Companion.resolveCanonical
+import com.daybook.app.data.model.FoodMedTask
+import com.daybook.app.data.model.TaskType
 import com.daybook.app.util.DateTimeUtils
 import java.time.LocalTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -40,5 +44,56 @@ class HydrationIntakeSyncTest {
                 "input=$bad", listOf(LocalTime.of(21, 0)), DateTimeUtils.jsonToTimes(hydrationTimesJson(bad))
             )
         }
+    }
+
+    // ---------------------------------------------------------------- build 57: duplicate dedupe
+
+    private fun task(id: String, createdAt: Long) =
+        FoodMedTask(id = id, label = "Hydration", type = TaskType.HYDRATION, createdAt = createdAt)
+
+    @Test fun `the pointed-at row is kept and every other row is a duplicate`() {
+        val a = task("a", 100)
+        val b = task("b", 200)
+        val (canonical, dupes) = resolveCanonical(listOf(a, b), "b")
+        assertEquals(b, canonical)
+        assertEquals(listOf(a), dupes)
+    }
+
+    @Test fun `a null pointer keeps the oldest row, not an arbitrary one`() {
+        // The lost-update race (two bootstraps both inserting) leaves rows with no pointer at all.
+        // Oldest wins so the row carrying the real logging history survives.
+        val a = task("a", 100)
+        val b = task("b", 200)
+        val (canonical, dupes) = resolveCanonical(listOf(a, b), null)
+        assertEquals(a, canonical)
+        assertEquals(listOf(b), dupes)
+    }
+
+    @Test fun `a dangling pointer falls back to the oldest row instead of creating another`() {
+        // What a cloud definitions prune leaves behind: hydration_task_id names a deleted row.
+        val a = task("a", 100)
+        val (canonical, dupes) = resolveCanonical(listOf(a), "deleted-id")
+        assertEquals(a, canonical)
+        assertEquals(emptyList<FoodMedTask>(), dupes)
+    }
+
+    @Test fun `the single-row steady state reports no duplicates`() {
+        val a = task("a", 100)
+        val (canonical, dupes) = resolveCanonical(listOf(a), "a")
+        assertEquals(a, canonical)
+        assertEquals(emptyList<FoodMedTask>(), dupes)
+    }
+
+    @Test fun `no rows means nothing to keep and nothing to delete`() {
+        val (canonical, dupes) = resolveCanonical(emptyList(), null)
+        assertNull(canonical)
+        assertEquals(emptyList<FoodMedTask>(), dupes)
+    }
+
+    @Test fun `three racing rows collapse to one`() {
+        val rows = listOf(task("a", 100), task("b", 110), task("c", 120))
+        val (canonical, dupes) = resolveCanonical(rows, null)
+        assertEquals("a", canonical?.id)
+        assertEquals(listOf("b", "c"), dupes.map { it.id })
     }
 }

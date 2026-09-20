@@ -51,6 +51,23 @@ interface FoodMedTaskDao {
     @Query("DELETE FROM food_med_tasks WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
+    /**
+     * Build 57 — every system-managed Hydration row, oldest first.
+     *
+     * `HydrationIntakeSync` used to find its row ONLY through the `app_settings.hydration_task_id`
+     * pointer, which is what let two concurrent bootstraps (Application.onCreate and
+     * HomeViewModel.init, added in builds 54/55) both read a null pointer and both insert a row —
+     * the duplicate Hydration in Intake. Adopting whatever is already in the table makes creation
+     * idempotent regardless of the pointer, and lets the extras be cleaned up.
+     * The type is matched as a literal because Room stores the enum by name.
+     */
+    @Query("SELECT * FROM food_med_tasks WHERE type = 'HYDRATION' ORDER BY created_at ASC, id ASC")
+    suspend fun getHydrationTasks(): List<FoodMedTask>
+
+    /** Build 57 — ids only, for [com.daybook.app.data.ExportImportRepository]'s prune guard. */
+    @Query("SELECT id FROM food_med_tasks WHERE type = 'HYDRATION'")
+    suspend fun hydrationTaskIds(): List<String>
+
     /** Customization round (SD-6): per-intake "why this matters" note. Single-column write. */
     @Query("UPDATE food_med_tasks SET motivation = :v WHERE id = :taskId")
     suspend fun updateMotivation(taskId: String, v: String?)

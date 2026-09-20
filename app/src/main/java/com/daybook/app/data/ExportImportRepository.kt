@@ -1264,7 +1264,20 @@ class ExportImportRepository @Inject constructor(
                 }
                 val (_, staleHabits) = defsDelta(database.habitDao().allIds().toSet(), remoteHabitIds)
                 if (staleHabits.isNotEmpty()) database.habitDao().deleteByIds(staleHabits.toList())
-                val (_, staleTasks) = defsDelta(database.foodMedTaskDao().allIds().toSet(), remoteTaskIds)
+                // Build 57 — NEVER prune the system-managed Hydration task, even when the remote
+                // definitions don't carry it. It is created locally by `HydrationIntakeSync`, so
+                // there is always a window (a first launch after upgrade, or any pull that lands
+                // before the next push) where the cloud parent doc predates it and this delta
+                // would classify it as stale. Deleting it here was the other half of the "shows in
+                // Intake but not on Today" report: `food_med_occurrences` has NO foreign key, so
+                // the occurrence rows survived the task's deletion as orphans that Today silently
+                // drops (`buildItems` does `tasksById[occurrence.taskId] ?: return@forEach`), while
+                // the next bootstrap dutifully recreated the task under a NEW id — which is also
+                // how a second Hydration appeared in Intake. Hydration's schedule is owned locally
+                // and re-established on every launch, so excluding it loses nothing.
+                val hydrationIds = database.foodMedTaskDao().hydrationTaskIds().toSet()
+                val (_, staleTasksAll) = defsDelta(database.foodMedTaskDao().allIds().toSet(), remoteTaskIds)
+                val staleTasks = staleTasksAll - hydrationIds
                 if (staleTasks.isNotEmpty()) database.foodMedTaskDao().deleteByIds(staleTasks.toList())
 
                 // A4: upsert incoming custom exercises, delete local ones absent from the remote set.

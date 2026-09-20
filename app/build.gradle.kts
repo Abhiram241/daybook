@@ -31,7 +31,20 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 56          // v0.8.0 build 56 (2026-09-20) — ROOT CAUSE of the missing
+        versionCode = 57          // v0.8.0 build 57 (2026-09-20) — the remaining two hydration
+                                   // faults behind "in Intake but not on Today, and now there are
+                                   // two of it": (1) a lost-update race between the builds 54/55
+                                   // bootstraps inserted a second Hydration task — sync() is now
+                                   // mutexed, adopts any existing row instead of trusting the
+                                   // settings pointer, and deletes the extras with their
+                                   // occurrences; (2) a cloud definitions apply pruned the
+                                   // locally-created Hydration task, orphaning its occurrences
+                                   // (no FK, and Today drops occurrences whose task is missing)
+                                   // and prompting the bootstrap to recreate it under a new id —
+                                   // the prune now skips system-managed Hydration. Also: today's
+                                   // slot is created even if its time already passed, so the fix
+                                   // shows up the moment it is installed instead of tomorrow.
+                                   // v0.8.0 build 56 (2026-09-20) — ROOT CAUSE of the missing
                                    // hydration reminder, at last: `times_json` is comma-separated
                                    // bare "HH:mm" (not JSON, despite the name), but
                                    // HydrationIntakeSync wrote a JSON-array literal. The reader
@@ -152,16 +165,23 @@ android {
             // CLI command (both work; the CLI needs no Gradle DSL at all and is documented as
             // the primary path — see ACCENT_UPDATES_PLAN.md Phase 6 / the regression doc).
             firebaseAppDistribution {
-                releaseNotes = "Hydration reminder is fixed — really this time.\n\n" +
-                    "The root cause is found: the Hydration reminder was being saved with its " +
-                    "time in the wrong format, so the app read it as having no time at all and " +
-                    "never created the daily reminder. Nothing was ever scheduled, which is why " +
-                    "it showed up nowhere and why the last two \"fixes\" appeared to work but " +
-                    "changed nothing.\n\n" +
-                    "After installing this build, just open the app: Hydration repairs itself " +
-                    "automatically and appears on Today and in Intake straight away — tap it to " +
-                    "log your water any time of day, not only at the reminder time. The reminder " +
-                    "itself now fires at the time set in Settings > Hydration."
+                releaseNotes = "Hydration on Today, and the duplicate Hydration, both fixed.\n\n" +
+                    "Three separate faults were stacked on top of each other:\n\n" +
+                    "1. The reminder was saved with its time in the wrong format, so the app read " +
+                    "it as having no time at all and never scheduled anything (fixed in the last " +
+                    "build).\n" +
+                    "2. Two startup repair checks added in earlier builds could run at the same " +
+                    "moment and each create their own Hydration reminder — that is the duplicate " +
+                    "you are seeing. The app now keeps the original one (with all its history) " +
+                    "and removes the extra automatically.\n" +
+                    "3. Syncing could delete the Hydration reminder and immediately recreate it " +
+                    "under a new identity, which orphaned that day\'s entry and left it showing " +
+                    "in Intake but not on Today. Sync no longer touches it.\n\n" +
+                    "Also, Hydration now appears on Today even if you install or open the app " +
+                    "after its reminder time has already passed, so you can log water at any " +
+                    "hour instead of waiting for the next day.\n\n" +
+                    "Just open the app after installing — all of this repairs itself, with " +
+                    "nothing to toggle."
                 groups = "testers"
             }
         }

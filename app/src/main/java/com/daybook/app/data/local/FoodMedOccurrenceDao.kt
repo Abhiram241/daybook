@@ -134,6 +134,15 @@ interface FoodMedOccurrenceDao {
     @Query("DELETE FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from")
     suspend fun deleteFuturePendingForTask(taskId: String, from: Long)
 
+    /**
+     * Build 57 — every occurrence for [taskId], resolved ones included. Used only when a duplicate
+     * system-managed Hydration task is removed: its rows would otherwise survive as orphans that
+     * no screen can render (every render path joins occurrence -> task and drops the row when the
+     * task is missing), while still occupying the unique `(task_id, scheduled_for)` index.
+     */
+    @Query("DELETE FROM food_med_occurrences WHERE task_id = :taskId")
+    suspend fun deleteAllForTask(taskId: String)
+
     /** v0.5.3 Phase 3 (A2) — see [HabitOccurrenceDao.deleteFuturePendingExcept]; food/med side. */
     @Query("DELETE FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from AND id NOT IN (:keep)")
     suspend fun deleteFuturePendingExcept(taskId: String, from: Long, keep: List<String>)

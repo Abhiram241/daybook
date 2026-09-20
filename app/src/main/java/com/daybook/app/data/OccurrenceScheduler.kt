@@ -264,6 +264,49 @@ class OccurrenceScheduler @Inject constructor(
         notificationUtils.scheduleReminderAlarm(next.id, next.notificationId, isHabit = false, triggerAtMillis = triggerAt)
     }
 
+    /**
+     * Build 57 — make sure TODAY's slots for [taskId] exist as PENDING rows even if their clock
+     * time has already gone by, without arming anything.
+     *
+     * [syncTaskInternal] deliberately skips any slot older than `now - 60s`, so a task whose row is
+     * created (or repaired) later in the day gets NO occurrence for today at all — its first row is
+     * tomorrow's. For an ordinary food/med reminder that is right: a reminder you never had should
+     * not retroactively appear as missed. For Hydration it is wrong, and it is the second half of
+     * the "not on Today" report: install the fix at 11pm, hydration's 9pm slot is already past, so
+     * Today stays empty until the next calendar day even though everything else is now correct.
+     * Hydration is a thing you log, not a prompt you answer, and the owner asked to be able to log
+     * it at any hour — "at least it should show in case I want to log early" cuts both ways.
+     *
+     * Deliberately does NOT arm an alarm: the row is for the Today/Intake list only, so healing an
+     * already-past slot can never fire a surprise late-night notification. `insert` is
+     * OnConflictStrategy.IGNORE, so an existing row (including a resolved one) is never disturbed,
+     * which also makes this safe to call on every launch.
+     */
+    suspend fun ensureTodaySlots(taskId: String) = syncMutex.withLock {
+        val task = db.foodMedTaskDao().getTaskById(taskId) ?: return@withLock
+        if (task.isArchived) return@withLock
+        val times = DateTimeUtils.jsonToTimes(task.timesJson)
+        if (times.isEmpty()) return@withLock
+        val today = LocalDate.now()
+        val activeDays = DateTimeUtils.jsonToDays(task.activeDaysJson)   // empty => every day
+        if (activeDays.isNotEmpty() && activeDays.none { it.name == today.dayOfWeek.name }) return@withLock
+        val zone = ZoneId.systemDefault()
+        val dao = db.foodMedOccurrenceDao()
+        for (t in times) {
+            val millis = today.atTime(t).atZone(zone).toInstant().toEpochMilli()
+            dao.insert(
+                FoodMedOccurrence(
+                    id = occId(taskId, millis),
+                    taskId = taskId,
+                    scheduledFor = millis,
+                    status = Occurrence.Status.PENDING,
+                    notificationId = notificationIds.next(),
+                    localDate = DateTimeUtils.timestampToLocalDate(millis).toString()
+                )
+            )
+        }
+    }
+
     suspend fun cancelTask(taskId: String) = syncMutex.withLock { cancelTaskInternal(taskId) }
 
     private suspend fun cancelTaskInternal(taskId: String) {
