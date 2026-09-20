@@ -121,6 +121,14 @@ class SettingsViewModel @Inject constructor(
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
 
+    /** Item 1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the exercise ids a Hevy import just
+     *  auto-created (empty after any other import path, or once dismissed/navigated away from).
+     *  `SettingsScreen` shows a "Add details for N new exercises" prompt underneath the success
+     *  message when this is non-empty. */
+    private val _newHevyExerciseIds = MutableStateFlow<List<String>>(emptyList())
+    val newHevyExerciseIds: StateFlow<List<String>> = _newHevyExerciseIds.asStateFlow()
+    fun dismissNewHevyExercisePrompt() { _newHevyExerciseIds.value = emptyList() }
+
     // v0.5.3 Phase 6 (D2): (done, total) while a signed-in date-range export hydrates the cloud
     // months it spans; null when no hydration is running.
     private val _hydrateProgress = MutableStateFlow<Pair<Int, Int>?>(null)
@@ -464,6 +472,7 @@ class SettingsViewModel @Inject constructor(
         safeLaunch {
             _isImporting.value = true
             _importResult.value = null
+            _newHevyExerciseIds.value = emptyList()
             try {
                 val size = storageUtils.fileSizeBytes(uri)
                 if (size != null && size > MAX_IMPORT_BYTES) {
@@ -479,6 +488,11 @@ class SettingsViewModel @Inject constructor(
                 _importResult.value = when (outcome) {
                     is HevyImportOutcome.Success -> outcome.message
                     is HevyImportOutcome.Failure -> outcome.message
+                }
+                // Item 1 — offer the review flow only on a genuine import (not the "nothing new,
+                // all duplicates" neutral success, which carries no new ids anyway).
+                if (outcome is HevyImportOutcome.Success && outcome.newExerciseIds.isNotEmpty()) {
+                    _newHevyExerciseIds.value = outcome.newExerciseIds
                 }
             } catch (t: Throwable) {
                 _importResult.value = "Couldn't import: something went wrong and nothing was changed."

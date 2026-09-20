@@ -964,7 +964,7 @@ fun NotificationSettingsScreen(
         }
 
         // ---- Hydration habit ------------------------------------------------------------
-        HydrationSettingsSection()
+        HydrationSettingsSection(clock24h = clock24h)
 
         // UX overhaul item 5 / 8.4 / 8.5 — "Updates" (Check for updates) and "Diagnostics"
         // (Send test notification, Re-arm all reminders) moved to About & help.
@@ -978,11 +978,16 @@ fun NotificationSettingsScreen(
 @Composable
 fun DataSettingsScreen(
     onNavigateBack: () -> Unit = {},
+    // Item 1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md, step D) — "Add details for N new exercises"
+    // after a successful Hevy import, navigating into Beast Mode's review queue scoped to exactly
+    // this import's new ids.
+    onReviewNewExercises: (List<String>) -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
     val importResult by viewModel.importResult.collectAsStateWithLifecycle()
+    val newHevyExerciseIds by viewModel.newHevyExerciseIds.collectAsStateWithLifecycle()
     val isExporting by viewModel.isExporting.collectAsStateWithLifecycle()
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     // v0.5.3 Phase 6 (D2) — (done, total) while a signed-in range export hydrates cloud months.
@@ -1213,12 +1218,28 @@ fun DataSettingsScreen(
         Spacer(Modifier.height(Spacing.listGap))
         SectionHeader("Import from another app")
         FormGroup(title = null) {
-            GhostButton(
-                text = if (isImporting) "Importing…" else "Import from Hevy (CSV)",
-                onClick = { confirmHevyImport = true },
-                enabled = !isImporting,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                GhostButton(
+                    text = if (isImporting) "Importing…" else "Import from Hevy (CSV)",
+                    onClick = { confirmHevyImport = true },
+                    enabled = !isImporting,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Item 1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md, step D) — offered once, right after
+                // a successful import that auto-created custom exercises; declining is fine, item
+                // 2's "missing details" popup catches it later on Beast Mode's Routines landing.
+                if (newHevyExerciseIds.isNotEmpty()) {
+                    PrimaryButton(
+                        text = "Add details for ${newHevyExerciseIds.size} new " +
+                            (if (newHevyExerciseIds.size == 1) "exercise" else "exercises"),
+                        onClick = {
+                            onReviewNewExercises(newHevyExerciseIds)
+                            viewModel.dismissNewHevyExercisePrompt()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
         }
     }
 }

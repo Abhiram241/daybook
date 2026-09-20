@@ -32,6 +32,7 @@ import com.daybook.app.data.health.HealthConnectAvailability
 import com.daybook.app.data.health.HealthConnectHydrationWriter
 import com.daybook.app.data.health.HealthConnectSdkState
 import com.daybook.app.data.health.HealthPermissions
+import com.daybook.app.data.hydration.HydrationIntakeSync
 import com.daybook.app.data.hydration.HydrationRepository
 import com.daybook.app.data.hydration.HydrationUnits
 import com.daybook.app.data.model.AppSettings
@@ -39,12 +40,16 @@ import com.daybook.app.ui.components.FormGroup
 import com.daybook.app.ui.components.PrimaryButton
 import com.daybook.app.ui.components.SectionHeader
 import com.daybook.app.ui.components.UnitDropdown
+import com.daybook.app.ui.TimePickerDialog
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.Spacing
+import com.daybook.app.util.DateTimeUtils
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -55,6 +60,7 @@ import kotlinx.coroutines.flow.stateIn
 class HydrationSettingsViewModel @Inject constructor(
     private val settingsRepository: AppSettingsRepository,
     private val hydrationRepository: HydrationRepository,
+    private val hydrationIntakeSync: HydrationIntakeSync,
     @ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
     val settings = settingsRepository.observeSettings()
@@ -68,9 +74,20 @@ class HydrationSettingsViewModel @Inject constructor(
 
     fun refreshPermission() = safeLaunch { _hcWriteGranted.value = hydrationRepository.hasHealthConnectWrite() }
 
-    fun setEnabled(enabled: Boolean) = safeLaunch { settingsRepository.setHydrationEnabled(enabled) }
+    fun setEnabled(enabled: Boolean) = safeLaunch {
+        settingsRepository.setHydrationEnabled(enabled)
+        hydrationIntakeSync.sync(enabled, settingsRepository.getSettings().hydrationReminderTime)
+    }
     fun setUnit(unit: String) = safeLaunch { settingsRepository.setHydrationUnit(unit) }
     fun setGoalMl(ml: Int) = safeLaunch { settingsRepository.setHydrationGoalMl(ml) }
+
+    /** Owner feedback round 3 (2026-09-20) — the Hydration Intake reminder's configurable time.
+     *  Re-syncs the underlying system-managed `food_med_tasks` row so the next alarm reflects it. */
+    fun setReminderTime(t: LocalTime) = safeLaunch {
+        val hhmm = t.format(DateTimeFormatter.ofPattern("HH:mm"))
+        settingsRepository.setHydrationReminderTime(hhmm)
+        hydrationIntakeSync.sync(settingsRepository.getSettings().hydrationEnabled, hhmm)
+    }
 }
 
 /**
@@ -79,7 +96,10 @@ class HydrationSettingsViewModel @Inject constructor(
  * the habit is logged from its card on Today.
  */
 @Composable
-fun HydrationSettingsSection(viewModel: HydrationSettingsViewModel = hiltViewModel()) {
+fun HydrationSettingsSection(
+    clock24h: Boolean = false,
+    viewModel: HydrationSettingsViewModel = hiltViewModel()
+) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val granted by viewModel.hcWriteGranted.collectAsStateWithLifecycle()
     LifecycleResumeEffect(Unit) { viewModel.refreshPermission(); onPauseOrDispose { } }
@@ -151,6 +171,33 @@ fun HydrationSettingsSection(viewModel: HydrationSettingsViewModel = hiltViewMod
                 style = DaybookText.Caption,
                 color = DaybookColors.TextMuted
             )
+
+            // Owner feedback round 3 (2026-09-20) — Hydration-as-Intake: a configurable reminder
+            // time, so it appears in the Intake tab and on Today at a set time like every other
+            // intake item, instead of "no reminders" (its old behavior).
+            Spacer(Modifier.height(Spacing.md))
+            HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)
+            Spacer(Modifier.height(Spacing.md))
+            var showTimePicker by rememberSaveable { mutableStateOf(false) }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reminder time", style = androidx.compose.material3.MaterialTheme.typography.bodyLarge, color = DaybookColors.TextPrimary)
+                    Text("Appears in Intake and Today at this time each day.", style = DaybookText.Metadata, color = DaybookColors.TextMuted)
+                }
+                com.daybook.app.ui.components.GhostButton(
+                    text = DateTimeUtils.formatTime(DateTimeUtils.stringToTime(s.hydrationReminderTime), clock24h),
+                    onClick = { showTimePicker = true },
+                    modifier = Modifier.width(110.dp)
+                )
+            }
+            if (showTimePicker) {
+                TimePickerDialog(
+                    initial = DateTimeUtils.stringToTime(s.hydrationReminderTime),
+                    onDismiss = { showTimePicker = false },
+                    onConfirm = { t -> viewModel.setReminderTime(t); showTimePicker = false },
+                    force24h = clock24h
+                )
+            }
 
             Spacer(Modifier.height(Spacing.md))
             HorizontalDivider(color = DaybookColors.Hairline, thickness = 1.dp)

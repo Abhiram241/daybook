@@ -5,10 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.CatalogExercise
+import com.daybook.app.data.WorkoutPhotoCloudSync
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.model.WorkoutExercise
 import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.model.WorkoutSessionPhoto
 import com.daybook.app.data.model.WorkoutSet
+import com.daybook.app.data.workout.MuscleGroup
 import com.daybook.app.data.workout.SessionStats
 import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.parseWeightUnit
@@ -31,6 +34,7 @@ import javax.inject.Inject
 @HiltViewModel
 class WorkoutDetailViewModel @Inject constructor(
     private val repo: WorkoutRepository,
+    private val photoCloudSync: WorkoutPhotoCloudSync,
     appSettingsRepository: AppSettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -55,7 +59,12 @@ class WorkoutDetailViewModel @Inject constructor(
         // (name, trackingMode, imageId, hasStartPeak), replacing the old id-shape-guessing
         // fallback so custom exercises show their real name and every exercise can show its
         // real RepDB thumbnail.
-        val exerciseInfo: Map<String, CatalogExercise> = emptyMap()
+        val exerciseInfo: Map<String, CatalogExercise> = emptyMap(),
+        // Fix 3 (owner report, 2026-09-20: "redesign this aswell with same specs") — this screen
+        // gets the same muscle-group volume breakdown and photo strip `WorkoutHistoryScreen`'s
+        // session rows already have, via the exact same `WorkoutRepository` sources those use.
+        val muscleVolume: List<Pair<MuscleGroup, Float>> = emptyList(),
+        val photos: List<WorkoutSessionPhoto> = emptyList()
     )
 
     private val base = combine(
@@ -65,9 +74,24 @@ class WorkoutDetailViewModel @Inject constructor(
     ) { session, exercises, sets -> Triple(session, exercises, sets) }
 
     private val _exerciseInfo = MutableStateFlow<Map<String, CatalogExercise>>(emptyMap())
+    private val _muscleVolume = MutableStateFlow<List<Pair<MuscleGroup, Float>>>(emptyList())
+    // Firebase Storage backup round (2026-09-20), §3.5 — lazy, display-triggered rehydration:
+    // this ViewModel only exists while the session DETAIL screen is open, so the miss-check below
+    // (a local file stat, only touching the network on an actual miss) never runs on the history
+    // list or on app start. Runs off the main thread; falls back to the original `filePath`
+    // unchanged if rehydration fails, so a broken image is at worst today's behavior.
+    private val photos = repo.observePhotosForSession(sessionId)
+        .map { list ->
+            list.map { photo ->
+                val rehydrated = photoCloudSync.rehydrateIfMissing(photo)
+                if (rehydrated != null && rehydrated != photo.filePath) photo.copy(filePath = rehydrated) else photo
+            }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val state = combine(base, _exerciseInfo) { (session, exercises, sets), info ->
-        DetailState(session, exercises, sets, sessionStats(sets), info)
+    val state = combine(base, _exerciseInfo, _muscleVolume, photos) { (session, exercises, sets), info, volume, photoList ->
+        DetailState(session, exercises, sets, sessionStats(sets), info, volume, photoList)
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DetailState())
 
@@ -79,7 +103,23 @@ class WorkoutDetailViewModel @Inject constructor(
                 _exerciseInfo.update { it + resolved }
             }
         }.launchIn(viewModelScope)
+
+        // Reruns on every session/set change (a set edited after the fact shifts volume), reusing
+        // History's own batched query with a single-element id list rather than adding a
+        // single-session-shaped duplicate of it.
+        base.onEach { (_, _, sets) ->
+            _muscleVolume.value = if (sets.isEmpty()) emptyList()
+                else repo.muscleGroupVolumeForSessions(listOf(sessionId))[sessionId].orEmpty()
+        }.launchIn(viewModelScope)
     }
+
+    // [owner feedback, 2026-09-20] — the Exercises list below has no filter at all; mirrors
+    // `WorkoutHistoryViewModel.selectedMuscleGroupFilter`'s on/off single-select semantics. Kept
+    // out of `DetailState`/`state` deliberately: the stat card above must keep reflecting the
+    // full session regardless of which cards the filter hides, so filtering happens screen-side.
+    private val _muscleGroupFilter = MutableStateFlow<MuscleGroup?>(null)
+    val muscleGroupFilter = _muscleGroupFilter.asStateFlow()
+    fun setMuscleGroupFilter(group: MuscleGroup?) { _muscleGroupFilter.value = group }
 
     private val _newSessionId = MutableStateFlow<String?>(null)
     val newSessionId = _newSessionId.asStateFlow()

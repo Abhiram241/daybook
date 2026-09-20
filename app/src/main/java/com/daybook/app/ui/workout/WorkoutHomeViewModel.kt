@@ -19,10 +19,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
@@ -36,6 +37,23 @@ class WorkoutHomeViewModel @Inject constructor(
         .map { parseWeightUnit(it.weightUnit) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeightUnit.KG)
 
+    // Item 2 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the "some exercises are missing details"
+    // popup's two inputs: how many exercises currently match the predicate, and whether the user
+    // already said "Never ask again". The popup's own once-per-visit "Later" dismissal is
+    // deliberately NOT here — it's screen-local `rememberSaveable` state (see `WorkoutHomeScreen`).
+    val exercisesNeedingDetailsCount = repo.observeExercisesNeedingDetailsCount()
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val exerciseDetailsPromptDismissed = appSettingsRepository.observeSettings()
+        .map { it.exerciseDetailsPromptDismissed }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    private val appSettingsRepo = appSettingsRepository
+    fun neverAskAboutExerciseDetailsAgain() = safeLaunch {
+        appSettingsRepo.setExerciseDetailsPromptDismissed(true)
+    }
+
     val routines = repo.observeRoutineSummaries()
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<RoutineSummary>())
@@ -47,23 +65,34 @@ class WorkoutHomeViewModel @Inject constructor(
     // Bug fix — the home card's "up for" label was a one-shot `remember` snapshot computed only
     // when the card first appeared (frozen while you sat on this screen), which read as a stuck
     // clock: the real session duration kept moving in the background the whole time, so reopening
-    // the session showed it had visibly "jumped". Ticks every second instead, same pattern as
-    // `WorkoutSessionViewModel._elapsedSeconds`, so the card is a live clock like the rest of the
-    // app expects.
-    private val _elapsedSeconds = MutableStateFlow(0L)
-    val elapsedSeconds = _elapsedSeconds.asStateFlow()
-
-    init {
-        viewModelScope.launch {
-            while (true) {
-                val startedAt = activeSession.value?.startedAt
-                _elapsedSeconds.value = if (startedAt != null) {
-                    ((System.currentTimeMillis() - startedAt) / 1000).coerceAtLeast(0)
-                } else 0L
-                kotlinx.coroutines.delay(1000)
+    // the session showed it had visibly "jumped". It is a live, per-second clock instead — and it
+    // must STAY one ([[appforfood-workout-feedback]]); do not re-freeze it.
+    //
+    // Item 8 / battery audit B-5 (Beast Mode round 2026-09-16) — how it ticks changed, what it
+    // shows did not. It used to be a `MutableStateFlow` fed by an unconditional `while (true)`
+    // 1Hz coroutine launched in `init`, which ran for the ViewModel's entire lifetime including
+    // while the app was backgrounded and, worse than its `WorkoutSessionViewModel` twin, kept
+    // writing `0L` over `0L` once a second forever when there was no active session at all. Now
+    // derived from `activeSession` via `flatMapLatest`, the same shape
+    // `WorkoutSessionViewModel.restRemainingSeconds` established: the ticking coroutine exists
+    // only while there IS a started session, and `WhileSubscribed(5_000)` stops it ~5s after the
+    // landing screen stops being visible. The value is always recomputed from `startedAt`, never
+    // accumulated, so it is correct the instant the screen comes back.
+    val elapsedSeconds: kotlinx.coroutines.flow.StateFlow<Long> = activeSession
+        .map { it?.startedAt }
+        .distinctUntilChanged()
+        .flatMapLatest { startedAt ->
+            if (startedAt == null) {
+                kotlinx.coroutines.flow.flowOf(0L)
+            } else {
+                kotlinx.coroutines.flow.flow {
+                    while (true) {
+                        emit(((System.currentTimeMillis() - startedAt) / 1000).coerceAtLeast(0))
+                        kotlinx.coroutines.delay(1000)
+                    }
+                }
             }
-        }
-    }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
 
     // BEAST_MODE_REDESIGN_PLAN.md §3.3 item 3 — the "This week" stat grid. Fixed Monday-start ISO
     // week (doesn't read `app_settings.week_start`, unlike the Habits week-strip — a deliberate

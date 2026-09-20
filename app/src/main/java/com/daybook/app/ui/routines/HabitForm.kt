@@ -148,6 +148,7 @@ fun HabitFormScaffold(
                                 }
                             })
                     }
+                    Spacer(Modifier.height(Spacing.sm))
                     Text(
                         when (state.type) {
                             HabitType.BATCH ->

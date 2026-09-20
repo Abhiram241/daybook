@@ -31,11 +31,58 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 46          // v0.7.4 build 46 — Health Connect refresh no longer hard-fails
-                                   // on a partial permission grant (changes-token was minted
-                                   // covering all 12 types regardless of what was granted); manual
-                                   // refresh on the Health tab now shows a toast on failure too.
-        versionName = "0.7.4"     // v0.7.4 — hydration habit, sleep attribution, food macros
+        versionCode = 53          // v0.8.0 build 53 (2026-09-20) — Beast Mode Settings
+                                   // reorganized into categorized sub-screens with clearer
+                                   // explanations. Data source priority is now a ranked list per
+                                   // data point (falls back to the next app if the top one has no
+                                   // data that day), and changing it now re-applies to past days
+                                   // too. Hydration moved out of Beast Mode into Intake — turn it
+                                   // on in Settings, log it from Intake/Today with a configurable
+                                   // reminder (default 9pm), still synced to Health Connect.
+                                   // Workout session photos now back up to the cloud. Fixed
+                                   // several spacing/alignment glitches (New habit form, workout
+                                   // detail/session screens, History's filter row).
+                                   // v0.8.0 build 52 (2026-09-20) — fixed filter chips (muscle
+                                   // filter on Workout detail, and History's Muscle Group/Exercise/
+                                   // Date filters) rendering with no visible label text. Health
+                                   // Connect "Data source priority" now has a separate setting per
+                                   // data point (Steps, Distance, Calories, Heart rate, SpO2,
+                                   // Hydration, Weight, Nutrition) instead of one combined switch,
+                                   // and the app picker for each now discovers every app actually
+                                   // syncing into Health Connect (fixes Mi Fitness not appearing).
+                                   // v0.8.0 build 51 (2026-09-20) — Workout detail: muscle-group
+                                   // filter chips + muscle pill on each exercise card + tighter
+                                   // card spacing. Equipment thumbnails now always sit on a white
+                                   // backing (fixes the dark icon in History). Health Connect: when
+                                   // two apps report the same metric, the app now picks one source
+                                   // instead of summing both (new "Data source priority" setting in
+                                   // Beast Mode Settings) and old health tiles now show which app a
+                                   // value came from, not just today's.
+                                   // v0.8.0 build 50 (2026-09-20) — Health tab: aggregated
+                                   // "Walking"-style session tiles (grouped by exercise type +
+                                   // day, tap-to-split) instead of one raw tile per Health Connect
+                                   // segment, plus a data-source line on every tile; fixed a
+                                   // build-49 regression where Home and Health's month-eviction
+                                   // pins shared one set (R-1); rest-timer alert now plays on the
+                                   // media volume stream with a user-choosable tone; Routines'
+                                   // settings gear now matches History/Health's tinted style.
+                                   // v0.8.0 build 49 (2026-09-20) — health-sync battery fixes
+                                   // (capped automatic resync window, delta-pull scope limited to
+                                   // the daily worker, no-op writes skipped), import data-loss
+                                   // fixes (evicted months rehydrate for the Health tab, null
+                                   // reads no longer overwrite stored metrics), and a settings
+                                   // gear added to Beast Mode's History and Health tabs.
+                                   // v0.8.0 build 48 — filter bar single-row + elapsed-time-on-edit
+                                   // fix + Detail screen redesign parity with History.
+                                   // v0.8.0 build 47 — the Beast Mode round: all 4 Critical +
+                                   // both in-scope High audit findings fixed (sync data-loss,
+                                   // downgrade wipe, Hevy import race, sleep-dedup continuation
+                                   // bug, Health Connect scope/backfill), battery B-1/B-2/B-3,
+                                   // exercise picker performance, Hevy review queue + missing-
+                                   // details prompt, rest-timer sound, workout session photos,
+                                   // History tab muscle-group filter/grouping, and more — see
+                                   // major-fixes-17-spet/PROGRESS.md for the full round.
+        versionName = "0.8.0"     // v0.8.0 — the Beast Mode "major fixes" round (see PROGRESS.md)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -84,7 +131,18 @@ android {
             // CLI command (both work; the CLI needs no Gradle DSL at all and is documented as
             // the primary path — see ACCENT_UPDATES_PLAN.md Phase 6 / the regression doc).
             firebaseAppDistribution {
-                releaseNotes = "See commit history for what changed in this build."
+                releaseNotes = "Beast Mode Settings is reorganized into Appearance / Workout " +
+                    "defaults / Health Connect sync / Data source priority / Import & backup, " +
+                    "with clearer explanations. Data source priority is now a ranked list per " +
+                    "data point (Steps, Distance, Calories, Heart rate, SpO2, Hydration, Weight, " +
+                    "Nutrition) — set an order of apps to trust, and if your top choice has no " +
+                    "data for a day it falls back to the next one; changing the order now also " +
+                    "re-applies to your past days, not just new syncs. Hydration has moved out " +
+                    "of Beast Mode into Intake — turn it on in Settings, then log water and set " +
+                    "its reminder time (default 9pm) from Intake or Today, same as other intake " +
+                    "items; it still logs to Health Connect. Workout session photos now back up " +
+                    "to the cloud. Fixed spacing/alignment issues on the New habit form, workout " +
+                    "detail and session screens, and made History's 3 filter chips equal width."
                 groups = "testers"
             }
         }
@@ -155,6 +213,9 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
+    // Workout session photos → Firebase Storage backup round (2026-09-20). Version comes from the
+    // firebase-bom platform above, same as firebase-auth/firebase-firestore.
+    implementation("com.google.firebase:firebase-storage")
     // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 10 (C-18): version comes from the BoM above.
     implementation("com.google.firebase:firebase-crashlytics")
     // Accent-updates round (Phase 6) — in-app update checks via updateIfNewReleaseAvailable().

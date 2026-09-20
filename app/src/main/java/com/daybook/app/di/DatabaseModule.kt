@@ -7,36 +7,8 @@ import com.daybook.app.data.CustomCategoryRepository
 import com.daybook.app.data.CustomPromptRepository
 import com.daybook.app.data.FoodMedRepository
 import com.daybook.app.data.HabitRepository
+import com.daybook.app.data.local.ALL_MIGRATIONS
 import com.daybook.app.data.local.AppDatabase
-import com.daybook.app.data.local.MIGRATION_2_3
-import com.daybook.app.data.local.MIGRATION_3_4
-import com.daybook.app.data.local.MIGRATION_4_5
-import com.daybook.app.data.local.MIGRATION_5_6
-import com.daybook.app.data.local.MIGRATION_6_7
-import com.daybook.app.data.local.MIGRATION_7_8
-import com.daybook.app.data.local.MIGRATION_8_9
-import com.daybook.app.data.local.MIGRATION_9_10
-import com.daybook.app.data.local.MIGRATION_10_11
-import com.daybook.app.data.local.MIGRATION_11_12
-import com.daybook.app.data.local.MIGRATION_12_13
-import com.daybook.app.data.local.MIGRATION_13_14
-import com.daybook.app.data.local.MIGRATION_14_15
-import com.daybook.app.data.local.MIGRATION_15_16
-import com.daybook.app.data.local.MIGRATION_16_17
-import com.daybook.app.data.local.MIGRATION_17_18
-import com.daybook.app.data.local.MIGRATION_18_19
-import com.daybook.app.data.local.MIGRATION_19_20
-import com.daybook.app.data.local.MIGRATION_20_21
-import com.daybook.app.data.local.MIGRATION_21_22
-import com.daybook.app.data.local.MIGRATION_22_23
-import com.daybook.app.data.local.MIGRATION_23_24
-import com.daybook.app.data.local.MIGRATION_24_25
-import com.daybook.app.data.local.MIGRATION_25_26
-import com.daybook.app.data.local.MIGRATION_26_27
-import com.daybook.app.data.local.MIGRATION_27_28
-import com.daybook.app.data.local.MIGRATION_28_29
-import com.daybook.app.data.local.MIGRATION_29_30
-import com.daybook.app.data.local.MIGRATION_30_31
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.HealthRepository
 import com.daybook.app.data.health.HealthConnectReader
@@ -61,11 +33,20 @@ object DatabaseModule {
             AppDatabase::class.java,
             "daybook_database"
         )
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31)
+            // DI-2 fix (AUDIT_2026-09-16.md) — was a hand-maintained list duplicating
+            // `MigrationTest.fullOpenAtLatestVersion()`'s own hand-maintained list; the two had
+            // already drifted two versions apart with nothing to catch it. Both now read
+            // `ALL_MIGRATIONS` (Migrations.kt) — add a new migration there once.
+            .addMigrations(*ALL_MIGRATIONS)
             // No 1->2 path exists, so a v1 database would otherwise throw on open and every DB
             // touch (including the alarm receiver's) would fail silently behind runCatching.
             .fallbackToDestructiveMigrationFrom(1)
-            .fallbackToDestructiveMigrationOnDowngrade()
+            // DI-1 fix (AUDIT_2026-09-16.md) — deliberately NOT
+            // .fallbackToDestructiveMigrationOnDowngrade(). That line silently dropped every table
+            // whenever the on-disk schema version was higher than the running build's — exactly
+            // what happens side-loading an older APK over a newer one, which this repo's own
+            // workflow does routinely (see old-apks-DO-NOT-INSTALL/README.txt). A downgrade must
+            // throw on open (loud, recoverable by reinstalling the newer build), never wipe data.
             .build()
     }
 
@@ -119,9 +100,12 @@ object DatabaseModule {
         database: AppDatabase,
         exerciseCatalog: ExerciseCatalog,
         appSettingsRepository: AppSettingsRepository,
-        hevyImporter: com.daybook.app.data.workout.HevyImporter
+        hevyImporter: com.daybook.app.data.workout.HevyImporter,
+        workoutPhotoStore: com.daybook.app.data.WorkoutPhotoStore,
+        workoutPhotoCloudSync: com.daybook.app.data.WorkoutPhotoCloudSync,
+        @ApplicationContext context: Context
     ): WorkoutRepository =
-        WorkoutRepository(database, exerciseCatalog, appSettingsRepository, hevyImporter)
+        WorkoutRepository(database, exerciseCatalog, appSettingsRepository, hevyImporter, workoutPhotoStore, workoutPhotoCloudSync, context)
 
     // B3: Round B (Health Connect, §7.3).
     @Provides
@@ -144,9 +128,10 @@ object DatabaseModule {
     fun provideHealthRepository(
         database: AppDatabase,
         reader: HealthConnectReader,
-        stateStore: HealthSyncStateStore
+        stateStore: HealthSyncStateStore,
+        appSettingsRepository: AppSettingsRepository
     ): HealthRepository =
-        HealthRepository(database, reader, stateStore)
+        HealthRepository(database, reader, stateStore, appSettingsRepository)
 
     // DAILY_REPORT_PLAN.md §4.
     @Provides

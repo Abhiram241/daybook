@@ -101,6 +101,13 @@ class OccurrenceScheduler @Inject constructor(
         const val TAG = "OccurrenceScheduler"
         const val WINDOW_DAYS = 7L
         const val STALE_AFTER_MS = 24L * 60 * 60 * 1000  // auto-skip prompts older than this
+        /** B-2 fix (AUDIT_2026-09-16.md) — caps `AlarmReceiver`'s automatic re-nag chain. Before
+         *  this, an ignored reminder re-armed itself unconditionally, waking the device every
+         *  snooze interval (floor 10 min) for as long as [STALE_AFTER_MS] — up to ~48h and
+         *  ~150-300 exact wakeups, since the 24h clock only starts ticking down from when the
+         *  occurrence was first due, not from when refiring began. This bounds it independently:
+         *  whichever of "N refires" or "STALE_AFTER_MS since due" is reached first stops the chain. */
+        const val MAX_AUTO_REFIRES = 12
         const val CATCHUP_DELAY_MS = 5_000L
         /** Fallback when app_settings has no row / an unparseable "HH:mm". */
         const val DEFAULT_CHECKIN = "21:00"
@@ -418,9 +425,17 @@ class OccurrenceScheduler @Inject constructor(
         // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 12 (N-3): an in-flight snooze (persisted, survives
         // this call) must win over the next scheduled check-in — otherwise any `syncAll()` sweep
         // that re-arms this alarm (a routine sweep, not just a user action) would silently discard
-        // it. A snooze already in the past is stale and ignored (max() with `trigger` handles that
-        // for free — the next real check-in wins once the snooze has expired).
-        trigger = maxOf(trigger, syncState.batchSnoozeUntil)
+        // it. A snooze already in the past is stale and ignored.
+        //
+        // SB-1 fix (AUDIT_2026-09-16.md) — this used to be `maxOf(trigger, snooze)`, which is only
+        // correct when `trigger` is still TODAY's check-in time. Once today's check-in has already
+        // passed, `trigger` above has already rolled to TOMORROW — so `maxOf` picked tomorrow over
+        // an in-flight snooze for later TODAY, discarding it, exactly the opposite of this
+        // comment's own stated intent. The fix: an active (still-future) snooze must always win
+        // over the next scheduled check-in, whichever of today/tomorrow that is — use `minOf` so
+        // the SOONER of the two fires, and only when the snooze is still ahead of `now`.
+        val snooze = syncState.batchSnoozeUntil
+        trigger = if (snooze > now) minOf(trigger, snooze) else trigger
         notificationUtils.scheduleBatchCheckInAlarm(quietDefer(trigger))
     }
 
@@ -455,6 +470,13 @@ class OccurrenceScheduler @Inject constructor(
         notificationUtils.cancelNotification(NotificationUtils.BATCH_NOTIFICATION_ID)
     }
 
+    /** SB-1 fix (AUDIT_2026-09-16.md) — called from `fireBatch`'s `finally` once the alarm that
+     *  just fired (whether the regular check-in or a snoozed one) has been handled, so a consumed
+     *  snooze can never leak into a later `armBatchCheckInInternal` re-arm decision. */
+    suspend fun clearBatchSnooze() = syncMutex.withLock {
+        syncState.batchSnoozeUntil = 0L
+    }
+
     /** Snooze on the combined notification: re-post after the global default interval. */
     suspend fun snoozeBatchCheckIn() = syncMutex.withLock {
         // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 12 (N-3): take syncMutex for symmetry with
@@ -477,6 +499,33 @@ class OccurrenceScheduler @Inject constructor(
         } else {
             db.foodMedOccurrenceDao().getOccurrenceById(occurrenceId)?.let { "food_med" to it.taskId }
         }
+
+    // ------------------------------------------------------------------ B-2 fix: bounded re-nag
+
+    /** B-2 fix (AUDIT_2026-09-16.md) — called from `AlarmReceiver.fireHabit` before it re-arms a
+     *  refire. Returns `true` when another refire may be armed; `false` when the chain must stop
+     *  here, having already marked [occ] SKIPPED (same shape as the periodic stale sweep: status
+     *  only, no event, no `responded_at` — this was never answered, so it is not a response). */
+    suspend fun shouldRefireHabit(occ: HabitOccurrence): Boolean = syncMutex.withLock {
+        if (occ.snoozeCount >= MAX_AUTO_REFIRES || System.currentTimeMillis() - occ.scheduledFor > STALE_AFTER_MS) {
+            db.habitOccurrenceDao().autoSkipOccurrence(occ.id)
+            false
+        } else {
+            db.habitOccurrenceDao().bumpSnooze(occ.id)
+            true
+        }
+    }
+
+    /** See [shouldRefireHabit] — identical contract, `food_med_occurrences` side. */
+    suspend fun shouldRefireFoodMed(occ: FoodMedOccurrence): Boolean = syncMutex.withLock {
+        if (occ.snoozeCount >= MAX_AUTO_REFIRES || System.currentTimeMillis() - occ.scheduledFor > STALE_AFTER_MS) {
+            db.foodMedOccurrenceDao().autoSkipOccurrence(occ.id)
+            false
+        } else {
+            db.foodMedOccurrenceDao().bumpSnooze(occ.id)
+            true
+        }
+    }
 
     /** v0.5.2 §3: true when this food/med occurrence belongs to a JOURNAL task — the notification
      *  tap and the Today card both route to the journal page instead of the detail screen. */

@@ -162,6 +162,24 @@ fun RespondScreen(
                     }
                 }
                 RespondViewModel.Kind.INTAKE -> {
+                    // Hydration-as-Intake (2026-09-20): renders the shared liters dialog instead of
+                    // the generic text field — no trigger-flag UI (HYDRATION is never FOOD).
+                    if (state.isHydration) {
+                        item {
+                            var dialogOpen by remember(vm) { mutableStateOf(true) }
+                            if (dialogOpen) {
+                                com.daybook.app.ui.components.HydrationAmountDialog(
+                                    unit = state.hydrationUnit,
+                                    goalMl = state.hydrationGoalMl,
+                                    currentMl = state.hydrationAmountMl,
+                                    onUnitChange = vm::setHydrationUnit,
+                                    onSave = { ml -> dialogOpen = false; vm.logHydration(ml) },
+                                    onDismiss = { dialogOpen = false; onDone() }
+                                )
+                            }
+                        }
+                        return@LazyColumn
+                    }
                     item {
                         // Journal Mode: INTAKE always opens editable + pre-filled — no
                         // read-only recorded-text / "Undo" / "Edit" intermediate. A resolved
@@ -232,7 +250,9 @@ fun RespondScreen(
                         )
                     }
                 }
-                RespondViewModel.Kind.INTAKE -> {
+                // Hydration-as-Intake (2026-09-20): HydrationAmountDialog carries its own Save/
+                // Cancel — the sticky bar renders nothing while it's up.
+                RespondViewModel.Kind.INTAKE -> if (!state.isHydration) {
                     PrimaryButton(
                         text = if (state.isEdit) "Save" else "Log",
                         onClick = { vm.log() },

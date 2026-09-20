@@ -260,19 +260,33 @@ fun DaybookChip(
                 } else Modifier
             )
             .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (leadingIcon != null) {
             Icon(leadingIcon, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
         }
+        // Bug fix (owner report, 2026-09-20) — `weight(1f, fill = false)` here relied on the
+        // *outer* Row having a bounded max width (true when a caller applies its own
+        // `fillMaxWidth()`/`weight()` to this whole chip, e.g. `PickerDockedBar`). But this chip
+        // is also placed bare inside a `horizontalScroll` Row (WorkoutDetailScreen's muscle
+        // filter, WorkoutHistoryScreen's `HistoryFilterBar`) — a scrollable Row measures its
+        // children with an *infinite* max width, and Compose's Row/Column weight distribution
+        // resolves an infinite main axis to a zero weight-unit space, so the weighted Text was
+        // measured at width 0 and rendered no visible glyphs (the chip's background/border still
+        // showed, which is exactly the reported "no text labels" blank-pill symptom). Dropping the
+        // weight lets Text size to its own intrinsic width in both contexts: in a scrollable Row
+        // that's the correct "size to content" behavior already documented at
+        // `WorkoutHistoryScreen.HistoryFilterBar`; in a bounded Row (whole chip has its own
+        // `weight`/`fillMaxWidth`), Text still receives that bounded max width from its parent so
+        // `maxLines = 1` + ellipsis keeps truncating long labels correctly.
         Text(
             label,
             style = MaterialTheme.typography.labelLarge,
             color = fg,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false)
+            overflow = TextOverflow.Ellipsis
         )
         if (count != null) {
             Spacer(Modifier.width(6.dp))

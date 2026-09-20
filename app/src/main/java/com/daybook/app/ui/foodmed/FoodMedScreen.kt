@@ -266,12 +266,19 @@ private fun FoodMedCard(
     BottomSheetMenu(
         visible = sheetOpen,
         onDismiss = { sheetOpen = false },
-        actions = listOf(
-            SheetAction(MI.Filled.Edit, "Edit", onClick = onEdit),
-            if (item.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = hapticArchiveToggle)
-            else SheetAction(DaybookIcons.Archive, "Archive", onClick = hapticArchiveToggle),
-            SheetAction(MI.Filled.Delete, "Delete", destructive = true, onClick = { confirmDelete = true })
-        )
+        actions = buildList {
+            // Hydration-as-Intake (2026-09-20): the Hydration task's label/icon/schedule are
+            // system-managed by HydrationIntakeSync (from Settings > Hydration), not through this
+            // general Edit form — omit the Edit action for it.
+            if (item.type != TaskType.HYDRATION.name) {
+                add(SheetAction(MI.Filled.Edit, "Edit", onClick = onEdit))
+            }
+            add(
+                if (item.isArchived) SheetAction(DaybookIcons.Unarchive, "Unarchive", onClick = hapticArchiveToggle)
+                else SheetAction(DaybookIcons.Archive, "Archive", onClick = hapticArchiveToggle)
+            )
+            add(SheetAction(MI.Filled.Delete, "Delete", destructive = true, onClick = { confirmDelete = true }))
+        }
     )
     ConfirmDeleteDialog(
         visible = confirmDelete,

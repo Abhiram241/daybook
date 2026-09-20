@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -96,6 +98,11 @@ fun HealthTabScreen(
     var pendingCustomStart by remember { mutableStateOf(state.range.start) }
     var detailKind by remember { mutableStateOf<HealthCardKind?>(null) }
     var detailSession by remember { mutableStateOf<HealthSession?>(null) }
+    // R-2 fix (HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md) — the "split" sheet for a tapped
+    // aggregated session tile (e.g. "Walking, 1h 46m" made of 3 segments). Only ever shown for a
+    // group with more than one session — a lone session opens `detailSession` (the existing
+    // per-session sheet) directly, same as before this fix.
+    var detailSessionGroup by remember { mutableStateOf<com.daybook.app.data.health.HealthSessionGroup?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = viewModel.requestPermissionsContract()
@@ -111,6 +118,17 @@ fun HealthTabScreen(
                     formatHealthRangeSubtitle(state.range.start, state.range.end)
                 },
                 actions = {
+                    // UI fix (AUDIT_2026-09-20.md §3) — Health had a filter button but no settings
+                    // entry point. Same Tonal/Lg style as the filter button beside it, which keeps
+                    // its existing badge behaviour untouched.
+                    com.daybook.app.ui.components.CircleIconButton(
+                        icon = Icons.Filled.Settings,
+                        contentDescription = "Beast Mode settings",
+                        onClick = onOpenSettings,
+                        style = com.daybook.app.ui.components.CircleStyle.Tonal,
+                        size = com.daybook.app.ui.theme.IconButtonSize.Lg.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
                     Box {
                         com.daybook.app.ui.components.CircleIconButton(
                             icon = DaybookIcons.FilterList,
@@ -157,7 +175,7 @@ fun HealthTabScreen(
                 HealthLadderState.NotConnected -> EmptyState(
                     icon = DaybookIcons.Heart,
                     title = "Connect Health Connect",
-                    body = "Daybook only reads. It never writes anything to Health Connect.",
+                    body = "Daybook reads what you share here. The only thing it writes back is your Hydration habit's water amount, if you turn that on.",
                     modifier = Modifier.padding(horizontal = 20.dp),
                     actionLabel = "Connect",
                     onAction = { permissionLauncher.launch(viewModel.initialPermissionSet()) }
@@ -269,6 +287,7 @@ fun HealthTabScreen(
                             onOpenRangeSheet = { showRangeSheet = true },
                             onOpenDetail = { detailKind = it },
                             onOpenSessionDetail = { detailSession = it },
+                            onOpenSessionGroupDetail = { detailSessionGroup = it },
                             contentPadding = contentPadding
                         )
                     }
@@ -314,6 +333,14 @@ fun HealthTabScreen(
         session = detailSession,
         onDismiss = { detailSession = null }
     )
+    // R-2 fix — the "split" sheet: tapping an aggregated tile ("Walking, 1h 46m") lists its
+    // individual segments; tapping one of those opens the existing per-session detail sheet above
+    // (which already surfaces distance/duration/avg heart rate/source, per fix #1's other ask).
+    HealthSessionGroupDetailSheet(
+        group = detailSessionGroup,
+        onDismiss = { detailSessionGroup = null },
+        onOpenSession = { detailSessionGroup = null; detailSession = it }
+    )
 
     // User request — "hide parameters I don't want to see in health section". Reuses the shared
     // sort/filter sheet's facet-only mode (no sort rows) exactly like the Home "Reminders" filter
@@ -355,6 +382,7 @@ private fun HealthContent(
     onOpenRangeSheet: () -> Unit,
     onOpenDetail: (HealthCardKind) -> Unit,
     onOpenSessionDetail: (HealthSession) -> Unit,
+    onOpenSessionGroupDetail: (com.daybook.app.data.health.HealthSessionGroup) -> Unit,
     contentPadding: PaddingValues
 ) {
     // User request — "hide parameters I don't want to see": subtract the user's hidden set after
@@ -496,9 +524,23 @@ private fun HealthContent(
         }
 
         if (HealthCardKind.SESSIONS in visible) {
-            items(sessions) { session ->
+            // R-2 fix — one tile per (exerciseType, localDate) group instead of one raw tile per
+            // Health Connect session; the same choke point for both Day and Range mode (this
+            // block already renders whichever of daySessions/rangeSessions the mode picked, see
+            // `sessions`' own definition above), closing the "duplicate Walking tiles" gap R-2
+            // found — there was no grouping in either mode before this.
+            val sessionGroups = com.daybook.app.data.health.groupSessionsForDisplay(sessions)
+            items(sessionGroups) { group ->
                 Box(Modifier.padding(horizontal = 20.dp)) {
-                    SessionRow(session, onClick = { onOpenSessionDetail(session) })
+                    SessionGroupRow(
+                        group,
+                        onClick = {
+                            // A lone segment has nothing to "split" — go straight to its own
+                            // detail sheet, exactly like tapping a session used to.
+                            if (group.sessions.size == 1) onOpenSessionDetail(group.sessions.first())
+                            else onOpenSessionGroupDetail(group)
+                        }
+                    )
                 }
             }
         }
@@ -559,6 +601,27 @@ private fun SessionRow(session: HealthSession, onClick: () -> Unit) {
         Text(
             formatHealthDuration(session.durationMinutes) +
                 (session.activeCalories?.let { " · " + formatHealthCalories(it) } ?: ""),
+            style = DaybookText.Caption, color = CardTints.Lavender.onFillMuted
+        )
+    }
+}
+
+/** R-2 fix — one tile per [com.daybook.app.data.health.HealthSessionGroup]: the owner's ask was
+ *  "a single tile showing total distance for that activity type, not N separate rows" — duration
+ *  and calories are summed the same way for consistency, and a "N segments" caption appears only
+ *  when there's actually something to split (a group of one renders identically to the old
+ *  [SessionRow], so a normal single-session day looks unchanged). */
+@Composable
+private fun SessionGroupRow(group: com.daybook.app.data.health.HealthSessionGroup, onClick: () -> Unit) {
+    SoftCard(tint = CardTints.Lavender, onClick = onClick, contentPadding = 14.dp, modifier = Modifier.fillMaxWidth()) {
+        Text(group.label, style = DaybookText.CardTitle, color = CardTints.Lavender.onFill)
+        Text(
+            buildString {
+                append(formatHealthDuration(group.totalDurationMinutes))
+                group.totalDistanceMeters?.let { append(" · " + formatHealthDistanceKm(it)) }
+                group.totalActiveCalories?.let { append(" · " + formatHealthCalories(it)) }
+                if (group.sessions.size > 1) append(" · ${group.sessions.size} segments")
+            },
             style = DaybookText.Caption, color = CardTints.Lavender.onFillMuted
         )
     }

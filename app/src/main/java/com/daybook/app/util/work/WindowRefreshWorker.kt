@@ -3,6 +3,7 @@ package com.daybook.app.util.work
 import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -10,6 +11,7 @@ import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import com.daybook.app.data.HealthRepository
 import com.daybook.app.data.OccurrenceScheduler
+import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.sync.CloudSyncRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -29,7 +31,8 @@ class WindowRefreshWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val scheduler: OccurrenceScheduler,
     private val cloudSync: CloudSyncRepository,
-    private val healthRepository: HealthRepository
+    private val healthRepository: HealthRepository,
+    private val workoutRepository: WorkoutRepository
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
@@ -42,6 +45,11 @@ class WindowRefreshWorker @AssistedInject constructor(
         // and silent-but-visible: HealthRepository already records the outcome to its own status
         // line (C9.4); a failure here must not fail the whole window-refresh pass.
         runCatching { healthRepository.pullDaily() }
+        // Item 12 — cheap insurance against every explicit cleanup path above missing a photo
+        // file (a crash between the row delete and the file delete, or one of the bulk-wipe/
+        // eviction paths that only clean up rows and rely on this sweep for the files — see
+        // `WorkoutPhotoStore.sweepOrphans`'s KDoc).
+        runCatching { workoutRepository.sweepOrphanedSessionPhotos() }
         Result.success()
     } catch (t: Throwable) {
         Log.e(TAG, "window refresh failed", t)
@@ -57,9 +65,14 @@ class WindowRefreshWorker @AssistedInject constructor(
 
         /** Idempotent: safe to call from every process start / reboot. */
         fun enqueue(context: Context) {
+            // B-4 fix (AUDIT_2026-09-20.md) — this is the heaviest scheduled job in the app
+            // (health pull + full-DB maintenance export + photo sweep) and had no `Constraints` at
+            // all. `setRequiresBatteryNotLow` is free and stops it from firing at 3%.
             val request = PeriodicWorkRequestBuilder<WindowRefreshWorker>(
                 24, TimeUnit.HOURS,
                 6, TimeUnit.HOURS
+            ).setConstraints(
+                Constraints.Builder().setRequiresBatteryNotLow(true).build()
             ).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_NAME,

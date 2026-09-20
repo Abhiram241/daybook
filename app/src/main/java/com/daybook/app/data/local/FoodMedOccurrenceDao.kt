@@ -97,6 +97,12 @@ interface FoodMedOccurrenceDao {
     @Query("UPDATE food_med_occurrences SET snooze_count = snooze_count + 1 WHERE id = :occurrenceId")
     suspend fun bumpSnooze(occurrenceId: String)
 
+    /** B-2 fix (AUDIT_2026-09-16.md) — status-only, single-row auto-skip: the refire chain giving
+     *  up on one occurrence, as opposed to [skipStaleForTask]'s batch-by-task-and-age sweep. No
+     *  event, no `responded_at`, matching that sweep's own shape exactly. */
+    @Query("UPDATE food_med_occurrences SET status = 'SKIPPED' WHERE id = :occurrenceId AND status = 'PENDING'")
+    suspend fun autoSkipOccurrence(occurrenceId: String)
+
     /** v0.5.3 undo: back to a blank PENDING slot — status, timestamp, snooze, AND the entered
      *  reply/description/qa_json are cleared so the reminder is fully blank again. Events kept. */
     @Query("UPDATE food_med_occurrences SET status = 'PENDING', responded_at = NULL, snooze_count = 0, " +

@@ -7,10 +7,14 @@ import com.daybook.app.data.CatalogExercise
 import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.local.SessionAggregate
 import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.model.WorkoutSessionPhoto
 import com.daybook.app.data.workout.MuscleGroup
 import com.daybook.app.data.workout.WeightUnit
 import com.daybook.app.data.workout.bucketByHistorySection
+import com.daybook.app.data.workout.bucketByMuscleGroup
+import com.daybook.app.data.workout.dominantMuscleGroup
 import com.daybook.app.data.workout.parseWeightUnit
+import com.daybook.app.data.workout.pickThumbnailExerciseId
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +32,10 @@ import java.time.LocalDate
 import javax.inject.Inject
 
 private const val HISTORY_LIMIT = 200
+
+/** Item 13 (§13b) — "Date ▾ / Muscle ▾", the third filter-bar chip. Session-local (not persisted),
+ *  same treatment `AddExerciseViewModel`'s own group chip already gets. */
+enum class HistoryGroupingMode { DATE, MUSCLE }
 
 /**
  * History tab redesign — grouped, richer rows (§2.1/§2.2), a single-exercise filter (open
@@ -48,7 +56,10 @@ class WorkoutHistoryViewModel @Inject constructor(
         val thumbnail: CatalogExercise?,
         // Feature addition — History card's muscle-group bar chart; heaviest-first, kg volume per
         // group. Empty for an active/no-sets session, or one built entirely from bodyweight work.
-        val muscleVolume: List<Pair<MuscleGroup, Float>> = emptyList()
+        val muscleVolume: List<Pair<MuscleGroup, Float>> = emptyList(),
+        // Item 12 — up to 3, ordered by `orderIndex`. Empty for the vast majority of sessions
+        // (photos are optional); item 13 renders this as a thumbnail strip below the chart.
+        val photos: List<WorkoutSessionPhoto> = emptyList()
     )
 
     private val rawSessions = repo.observeRecentSessions(HISTORY_LIMIT)
@@ -60,12 +71,16 @@ class WorkoutHistoryViewModel @Inject constructor(
     val sessions = rawSessions
 
     private val _aggregatesBySession = MutableStateFlow<Map<String, SessionAggregate>>(emptyMap())
-    private val _firstExerciseBySession = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** Item 11 — the exercise each session shows a picture of. Was the session's FIRST exercise;
+     *  now whichever one [pickThumbnailExerciseId] settles on (stably, seeded off the session id). */
+    private val _thumbnailExerciseBySession = MutableStateFlow<Map<String, String>>(emptyMap())
     private val _thumbnailByExerciseId = MutableStateFlow<Map<String, CatalogExercise>>(emptyMap())
     private val _muscleVolumeBySession = MutableStateFlow<Map<String, List<Pair<MuscleGroup, Float>>>>(emptyMap())
+    // Item 12 — same batched-per-page shape as the other `_xxxBySession` maps above.
+    private val _photosBySession = MutableStateFlow<Map<String, List<WorkoutSessionPhoto>>>(emptyMap())
 
     init {
-        // §2.4 — one aggregate query + one first-exercise query per change to the visible page of
+        // §2.4 — one aggregate query + one exercises query per change to the visible page of
         // sessions, mirroring WorkoutDetailViewModel's exerciseInfo pattern (never a query per row).
         // §2.5 fix — also re-runs on `observeSetsRevision()`'s emissions, so editing a completed
         // session's sets (without re-finishing, so `workout_sessions` itself never changes) still
@@ -74,18 +89,34 @@ class WorkoutHistoryViewModel @Inject constructor(
             val ids = list.map { it.id }
             if (ids.isEmpty()) return@onEach
             runCatching { repo.sessionAggregates(ids) }.onSuccess { agg -> _aggregatesBySession.update { it + agg } }
-            runCatching { repo.firstExerciseIdsForSessions(ids) }.onSuccess { firstEx ->
-                _firstExerciseBySession.update { it + firstEx }
-                val newIds = firstEx.values.distinct().filterNot { it in _thumbnailByExerciseId.value }
+            // Item 11 — this used to ask for each session's FIRST exercise only, and whatever came
+            // back was the thumbnail; if that one exercise had no RepDB photo the card fell
+            // through to the generic icon even when the rest of the session had artwork. Now every
+            // block of the page comes back in one query (still never per-row) and
+            // `pickThumbnailExerciseId` chooses stably per session.
+            runCatching { repo.exerciseIdsForSessions(ids) }.onSuccess { bySession ->
+                val newIds = bySession.values.flatten().distinct()
+                    .filterNot { it in _thumbnailByExerciseId.value }
                 if (newIds.isNotEmpty()) {
                     val resolved = newIds.mapNotNull { id -> repo.resolveExercise(id)?.let { id to it } }.toMap()
                     _thumbnailByExerciseId.update { it + resolved }
                 }
+                // Resolved AFTER the map above is filled, so `hasImage` can see this page's rows.
+                val resolvedById = _thumbnailByExerciseId.value
+                val picked = bySession.mapNotNull { (sessionId, exerciseIds) ->
+                    pickThumbnailExerciseId(sessionId, exerciseIds) { id ->
+                        resolvedById[id]?.imageId != null
+                    }?.let { sessionId to it }
+                }.toMap()
+                _thumbnailExerciseBySession.update { it + picked }
             }
             // Same batched-per-page shape as the two queries above; re-runs on the same triggers
             // so an edited set's muscle-group bars stay in sync with its (also re-run) volume.
             runCatching { repo.muscleGroupVolumeForSessions(ids) }
                 .onSuccess { breakdown -> _muscleVolumeBySession.update { it + breakdown } }
+            // Item 12 — one batched query per page, same "never a query per row" rule.
+            runCatching { repo.photosForSessions(ids) }
+                .onSuccess { photos -> _photosBySession.update { it + photos.groupBy { p -> p.sessionId } } }
         }.launchIn(viewModelScope)
     }
 
@@ -129,29 +160,64 @@ class WorkoutHistoryViewModel @Inject constructor(
         }
     }
 
+    // ------------------------------------------------------------------ muscle-group filter + grouping mode (item 13, §13b)
+
+    /** null == no filter active. Intersects with the exercise filter above (both, when set, must
+     *  match) — this one needs no repo round trip: `dominantMuscleGroup` is derived from data
+     *  already loaded for the chart, so it's applied in [sections]' own transform. */
+    private val _selectedMuscleGroupFilter = MutableStateFlow<MuscleGroup?>(null)
+    val selectedMuscleGroupFilter = _selectedMuscleGroupFilter.asStateFlow()
+    fun selectMuscleGroupFilter(group: MuscleGroup?) { _selectedMuscleGroupFilter.value = group }
+
+    /** Session-local, not persisted — same reasoning `AddExerciseViewModel`'s group chip already
+     *  documents for an identical "which chip is active" choice. */
+    private val _groupingMode = MutableStateFlow(HistoryGroupingMode.DATE)
+    val groupingMode = _groupingMode.asStateFlow()
+    fun setGroupingMode(mode: HistoryGroupingMode) { _groupingMode.value = mode }
+
     // ------------------------------------------------------------------------- combined UI state
 
-    // Kotlin's typed `combine` tops out at 5 flows — folding the filter + week-start setting into
-    // one pair keeps `sections`' own combine at 5 without a vararg/untyped `Array<*>` overload.
-    private val filterAndWeekStart = combine(_filterSessionIds, weekStart) { filterIds, ws -> filterIds to ws }
+    // Kotlin's typed `combine` tops out at 5 flows per call, but nothing stops chaining separate
+    // 5-flow calls — this one folds the filter/grouping inputs (5 of them) into one bundle so
+    // `sections`' own combine below stays at its own 5-flow ceiling.
+    private data class FilterBundle(
+        val exerciseFilterIds: Set<String>?,
+        val weekStart: String,
+        val photosBySession: Map<String, List<WorkoutSessionPhoto>>,
+        val muscleGroupFilter: MuscleGroup?,
+        val groupingMode: HistoryGroupingMode
+    )
+    private val filterAndWeekStart = combine(
+        _filterSessionIds, weekStart, _photosBySession, _selectedMuscleGroupFilter, _groupingMode
+    ) { filterIds, ws, photos, muscleFilter, mode -> FilterBundle(filterIds, ws, photos, muscleFilter, mode) }
 
     // Kotlin's typed `combine` tops out at 5 flows too — folding the thumbnails + muscle-volume
     // maps into one pair keeps this `combine` at 5, same trick `filterAndWeekStart` uses above.
     private val thumbnailsAndMuscleVolume = combine(_thumbnailByExerciseId, _muscleVolumeBySession) { t, m -> t to m }
 
     val sections = combine(
-        rawSessions, _aggregatesBySession, _firstExerciseBySession, thumbnailsAndMuscleVolume, filterAndWeekStart
-    ) { list, aggregates, firstExercise, (thumbnails, muscleVolume), (filterIds, ws) ->
-        val visible = if (filterIds == null) list else list.filter { it.id in filterIds }
+        rawSessions, _aggregatesBySession, _thumbnailExerciseBySession, thumbnailsAndMuscleVolume, filterAndWeekStart
+    ) { list, aggregates, thumbnailExercise, (thumbnails, muscleVolume), bundle ->
+        val visible = if (bundle.exerciseFilterIds == null) list else list.filter { it.id in bundle.exerciseFilterIds }
         val rows = visible.map { s ->
             HistoryRow(
                 session = s,
                 aggregate = aggregates[s.id],
-                thumbnail = firstExercise[s.id]?.let { thumbnails[it] },
-                muscleVolume = muscleVolume[s.id].orEmpty()
+                thumbnail = thumbnailExercise[s.id]?.let { thumbnails[it] },
+                muscleVolume = muscleVolume[s.id].orEmpty(),
+                photos = bundle.photosBySession[s.id].orEmpty()
             )
         }
-        bucketByHistorySection(rows, { it.session.localDate }, LocalDate.now(), ws)
+        // Item 13 (§13b) — the muscle-group chip intersects with the exercise filter above: a row
+        // must pass both when both are set. `dominantMuscleGroup` is the same derivation the "group
+        // by muscle" mode below uses, so a session shown under a chip's filter is always the same
+        // one that mode would file it under.
+        val muscleFiltered = if (bundle.muscleGroupFilter == null) rows
+        else rows.filter { dominantMuscleGroup(it.muscleVolume) == bundle.muscleGroupFilter }
+        when (bundle.groupingMode) {
+            HistoryGroupingMode.DATE -> bucketByHistorySection(muscleFiltered, { it.session.localDate }, LocalDate.now(), bundle.weekStart)
+            HistoryGroupingMode.MUSCLE -> bucketByMuscleGroup(muscleFiltered) { dominantMuscleGroup(it.muscleVolume) }
+        }
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

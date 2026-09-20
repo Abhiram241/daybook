@@ -42,6 +42,26 @@ fun columnsFor(trackingMode: String): List<SetColumn> = when (trackingMode) {
 }
 
 /**
+ * Item 10 fix (BEAST_MODE_ROUND_2026-09-16_PLAN.md, owner's LOCKED decision — PROGRESS.md §3):
+ * "A set cannot be ticked until a real value is typed. Do NOT auto-fill last session's numbers on
+ * tick." This is the gate: true when at least one of [trackingMode]'s tracked value cells (via
+ * [columnsFor] — WEIGHT/REPS/DURATION/DISTANCE, whichever apply) is non-null on [set]. The caller
+ * (`WorkoutSessionScreen`'s COMPLETE column) evaluates this against a "candidate" set that mirrors
+ * live, not-yet-committed cell text, exactly like `isPersonalRecord`'s own candidate already does,
+ * so typing a number enables the tick before the field loses focus.
+ */
+fun hasTrackedValue(trackingMode: String, set: WorkoutSet): Boolean =
+    columnsFor(trackingMode).any { column ->
+        when (column) {
+            SetColumn.WEIGHT -> set.weightKg != null
+            SetColumn.REPS -> set.reps != null
+            SetColumn.DURATION -> set.durationSeconds != null
+            SetColumn.DISTANCE -> set.distanceMeters != null
+            else -> false
+        }
+    }
+
+/**
  * §3.4 — `WorkoutDao.previousSetsForExercise` returns every set of the most recent PRIOR
  * completed session (ordered by session recency, newest first). This keeps only the rows
  * belonging to that newest session and indexes them by `setNumber` — what makes PREVIOUS
@@ -97,6 +117,38 @@ fun currentStreakDays(completedDates: Set<String>, today: LocalDate): Int {
 }
 
 /**
+ * Item 11 (Beast Mode round 2026-09-16) — which of a session's exercises the History card shows a
+ * picture of. Was "always the first block", so a session that happened to open with a custom or
+ * imported exercise showed the generic icon even when the rest of it had real artwork.
+ *
+ * Deterministic by construction: the same session always resolves to the same picture, across
+ * recompositions, scrolls, process restarts and devices, because the only source of randomness is
+ * seeded off the session's own id. Java's `String.hashCode` is specified, so the seed is stable
+ * everywhere — do NOT swap it for `System.identityHashCode`, a fresh `Random()`, or anything
+ * evaluated at render time, or the card will visibly change picture on every recomposition.
+ *
+ * The first block still wins whenever it has artwork. That is deliberate: it means no History row
+ * that already shows a picture changes when this lands — only the currently-iconned ones gain one.
+ * Without it every card would shuffle on upgrade, which reads as a bug.
+ *
+ * [hasImage] means "has a real RepDB photo", not "will render something". `ExerciseThumbnail`'s
+ * own equipment/muscle fallback (item 3) is a separate, lower layer: a card full of "a picture of
+ * a dumbbell" would be worse than one showing an actual exercise, so this function only ever
+ * prefers real exercise artwork, and leaves the generic-art decision to the thumbnail.
+ */
+fun pickThumbnailExerciseId(
+    sessionId: String,
+    orderedExerciseIds: List<String>,
+    hasImage: (String) -> Boolean
+): String? {
+    val first = orderedExerciseIds.firstOrNull() ?: return null
+    if (hasImage(first)) return first
+    val withArt = orderedExerciseIds.filter(hasImage)
+    if (withArt.isEmpty()) return first        // nothing in the session has art — icon fallback, as before
+    return withArt[kotlin.random.Random(sessionId.hashCode()).nextInt(withArt.size)]
+}
+
+/**
  * Volume is Σ(weightKg × reps) over COMPLETED sets only (warm-ups included — Hevy counts them); a
  * bodyweight or duration set contributes 0 rather than being skipped, so the set count and volume
  * never disagree about which rows they looked at (§3.4, P3-bounded: fold over this session only).
@@ -114,12 +166,20 @@ fun sessionStats(sets: List<WorkoutSet>): SessionStats {
  */
 fun normaliseExerciseName(raw: String): String? = raw.trim().takeIf { it.isNotEmpty() }
 
+// Item 6 fix #5 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — `normaliseForSearch` used to compile these
+// two `Regex` objects on EVERY call; `exerciseSearchRank` calls it up to 4 times per row (query,
+// name, muscle label, equipment label), over ~542 rows per keystroke — ~4,300 compilations. Regex
+// compilation is the expensive part, not matching, so hoisting to file-scope `val`s (compiled once,
+// ever) removes essentially all of that cost.
+private val NON_ALPHANUMERIC_REGEX = Regex("[^a-z0-9]+")
+private val WHITESPACE_RUN_REGEX = Regex("\\s+")
+
 /**
  * §3.7.3/§3.9.4 — "the same normaliser powers the Add-Exercise search field and Hevy exercise
  * matching — one implementation, one test." Lowercases, strips punctuation, collapses whitespace.
  */
 fun normaliseForSearch(raw: String): String =
-    raw.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim().replace(Regex("\\s+"), " ")
+    raw.lowercase().replace(NON_ALPHANUMERIC_REGEX, " ").trim().replace(WHITESPACE_RUN_REGEX, " ")
 
 /**
  * §3.7.2 — shared elapsed-time formatter: `WorkoutSessionScreen`'s live ticker and the Beast Mode
@@ -132,6 +192,16 @@ fun formatElapsed(totalSeconds: Long): String {
     val s = totalSeconds % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
+
+/**
+ * Owner report (2026-09-20) — reopening a COMPLETED session for editing must show its actual
+ * recorded duration, not a live ticker counting wall-clock time since the original `startedAt`
+ * (which could be days old). A still-ACTIVE session (`endedAt == null`) keeps ticking off `now`.
+ * Pure so both the live-tick and fixed-duration cases in `WorkoutSessionViewModel.elapsedSeconds`
+ * share one formula and the fixed-duration branch is directly unit-testable.
+ */
+fun sessionElapsedSeconds(startedAt: Long, endedAt: Long?, now: Long): Long =
+    (((endedAt ?: now) - startedAt) / 1000).coerceAtLeast(0)
 
 /**
  * Feature addition (post-A6) — the Add-Exercise picker's muscle-group filter chip.
@@ -179,8 +249,21 @@ fun exerciseSearchRank(
     exerciseName: String,
     muscleLabel: String? = null,
     equipmentLabel: String? = null
+): Int? = exerciseSearchRankForNormalisedQuery(normaliseForSearch(query), exerciseName, muscleLabel, equipmentLabel)
+
+/**
+ * Item 6 fix #5 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the same logic [exerciseSearchRank] runs,
+ * but takes an already-normalised query. The picker ranks every row in the catalog (~542) against
+ * the SAME query on every emission; normalising it once per emission instead of once per row is
+ * free (the regex work is already hoisted to file scope — see [normaliseForSearch]) but still
+ * removes hundreds of redundant lowercase/replace/trim passes over an identical short string.
+ */
+internal fun exerciseSearchRankForNormalisedQuery(
+    normalisedQuery: String,
+    exerciseName: String,
+    muscleLabel: String? = null,
+    equipmentLabel: String? = null
 ): Int? {
-    val normalisedQuery = normaliseForSearch(query)
     if (normalisedQuery.isBlank()) return RANK_EXACT_PREFIX
     val normalisedName = normaliseForSearch(exerciseName)
 
@@ -230,20 +313,24 @@ private fun maxEditDistanceFor(len: Int): Int = when {
     else -> 0
 }
 
-/** Plain iterative Levenshtein (insert/delete/substitute), O(n·m), no external dependency. */
+/** Plain iterative Levenshtein (insert/delete/substitute), O(n·m), no external dependency.
+ *  Item 6 fix #5 — the row loop used to copy `curr` back into `prev` element-by-element on every
+ *  outer iteration; swapping the two array references does the same job with zero copies. */
 internal fun levenshtein(a: String, b: String): Int {
     if (a == b) return 0
     if (a.isEmpty()) return b.length
     if (b.isEmpty()) return a.length
-    val prev = IntArray(b.length + 1) { it }
-    val curr = IntArray(b.length + 1)
+    var prev = IntArray(b.length + 1) { it }
+    var curr = IntArray(b.length + 1)
     for (i in 1..a.length) {
         curr[0] = i
         for (j in 1..b.length) {
             val cost = if (a[i - 1] == b[j - 1]) 0 else 1
             curr[j] = minOf(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
         }
-        for (j in 0..b.length) prev[j] = curr[j]
+        val tmp = prev
+        prev = curr
+        curr = tmp
     }
     return prev[b.length]
 }
@@ -400,6 +487,38 @@ fun <T> bucketByHistorySection(
         ordered.getOrPut(labelFor(localDateOf(item))) { mutableListOf() }.add(item)
     }
     return ordered.map { it.key to it.value }
+}
+
+/**
+ * Item 13 (BEAST_MODE_ROUND_2026-09-16_PLAN.md, §13b) — a session's "dominant" muscle group: the
+ * heaviest-volume entry in its per-group breakdown, which `WorkoutRepository
+ * .muscleGroupVolumeForSessions` already returns sorted heaviest-first. Null for a bodyweight/
+ * cardio session whose breakdown is empty (volume is `weightKg × reps`, so there's nothing to
+ * rank) — callers must bucket a null result into an explicit "Other" group, never drop the
+ * session. Pure — [WorkoutLogicTest] covers both the populated and empty-breakdown cases.
+ */
+fun dominantMuscleGroup(breakdown: List<Pair<MuscleGroup, Float>>): MuscleGroup? = breakdown.firstOrNull()?.first
+
+/**
+ * Item 13 (§13b) — the History tab's "group by muscle" mode, the counterpart to
+ * [bucketByHistorySection]'s "group by date": sections ordered by session count descending
+ * ("Chest · 6 workouts" before "Legs · 5 workouts"), with every session that has no dominant group
+ * ([dominantMuscleGroup] returned null) collected into one "Other" section, always last regardless
+ * of its own count. Sessions keep the order they arrived in within each section — same "no re-sort,
+ * caller hands in newest-first" contract [bucketByHistorySection] uses.
+ */
+fun <T> bucketByMuscleGroup(items: List<T>, dominantGroupOf: (T) -> MuscleGroup?): List<Pair<String, List<T>>> {
+    val byGroup = LinkedHashMap<MuscleGroup?, MutableList<T>>()
+    items.forEach { item -> byGroup.getOrPut(dominantGroupOf(item)) { mutableListOf() }.add(item) }
+    val named = byGroup.entries.filter { it.key != null }.sortedByDescending { it.value.size }
+    val other = byGroup[null]
+    val sections = named.map { (group, rows) -> muscleGroupSectionLabel(group, rows.size) to rows }
+    return if (other.isNullOrEmpty()) sections else sections + (muscleGroupSectionLabel(null, other.size) to other)
+}
+
+private fun muscleGroupSectionLabel(group: MuscleGroup?, count: Int): String {
+    val name = group?.let { MuscleGroupLabels[it] } ?: "Other"
+    return "$name · $count ${if (count == 1) "workout" else "workouts"}"
 }
 
 // ------------------------------------------------------------------ starting a session from a routine

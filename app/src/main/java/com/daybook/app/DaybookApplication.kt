@@ -3,12 +3,17 @@ package com.daybook.app
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.util.CrashHandler
 import com.daybook.app.util.notification.NotificationUtils
 import com.daybook.app.util.work.WindowRefreshWorker
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class DaybookApplication : Application(), Configuration.Provider {
@@ -16,6 +21,12 @@ class DaybookApplication : Application(), Configuration.Provider {
     @Inject lateinit var notificationUtils: NotificationUtils
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var cloudSyncRepository: CloudSyncRepository
+    @Inject lateinit var workoutRepository: WorkoutRepository
+
+    // Item 6 fix #1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — no GlobalScope anywhere in this app
+    // (a standing rule, verified by AUDIT_2026-09-16.md's battery section); a dedicated
+    // SupervisorJob-backed scope mirrors the shape CloudSyncRepository/AuthRepository already use.
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     // Hilt-injected WorkerFactory so WindowRefreshWorker can take OccurrenceScheduler as a ctor arg.
     override val workManagerConfiguration: Configuration
@@ -36,5 +47,11 @@ class DaybookApplication : Application(), Configuration.Provider {
         // Start observing auth state so cloud sync attaches/detaches with sign-in. Non-blocking:
         // it only launches coroutines and reads the persisted session from local disk (R9).
         cloudSyncRepository.start()
+        // Item 6 fix #1 — warm the exercise catalog (the ~1 MB RepDB JSON parse + the one-time
+        // rename/addition/dedupe pass, ~1,090 Room queries before this round's fix, ~3 after) well
+        // before the picker could ever need it, off the UI thread. `observeExerciseCatalog()` and
+        // `AddExerciseViewModel` still call the same idempotent path as a safety net for the
+        // cold-start race — this just makes that race vanishingly unlikely to be lost.
+        appScope.launch { runCatching { workoutRepository.warmExerciseCatalog() } }
     }
 }

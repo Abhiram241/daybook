@@ -52,4 +52,16 @@ interface ExerciseDao {
 
     @Query("DELETE FROM exercises WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
+
+    /** Items 1/2 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — every non-archived custom/imported
+     *  exercise still missing a real muscle group or equipment. The predicate item 2's prompt and
+     *  item 1's post-import review queue both use — a builtin can never match (the Room `exercises`
+     *  table only ever holds user rows + rename overrides, and every builtin carries a real
+     *  muscle/equipment from RepDB). Stable across process death for free: nothing is persisted,
+     *  the query itself "remembers" what was skipped since a skipped row still matches next time. */
+    @Query("SELECT * FROM exercises WHERE is_archived = 0 AND (primary_muscle = 'OTHER' OR equipment = 'OTHER') ORDER BY created_at DESC")
+    suspend fun exercisesNeedingDetails(): List<Exercise>
+
+    @Query("SELECT COUNT(*) FROM exercises WHERE is_archived = 0 AND (primary_muscle = 'OTHER' OR equipment = 'OTHER')")
+    fun observeExercisesNeedingDetailsCount(): Flow<Int>
 }

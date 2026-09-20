@@ -53,15 +53,19 @@ private val ITEMS = listOf(
             "without opening a separate app."
     ),
     RationaleItem(
-        "What Daybook never does",
-        "Daybook never writes anything to Health Connect. It only reads what you explicitly " +
-            "share, and you can change or revoke that at any time from the Health Connect app."
+        "What Daybook writes",
+        "Daybook writes only one thing to Health Connect: the water amount you log on the " +
+            "Hydration habit, if you turn that habit on. Everything else on this page is " +
+            "read-only, and you can change or revoke any of it at any time from the Health " +
+            "Connect app."
     ),
     RationaleItem(
         "Where your data goes",
-        "The data you share stays on this device. If you're signed in to a Daybook account, it " +
-            "also syncs to your own encrypted cloud backup the same way the rest of your journal " +
-            "does — it is never sent anywhere else."
+        "The data you share stays on this device and, if you're signed in to a Daybook " +
+            "account, also syncs to your own encrypted cloud backup the same way the rest of " +
+            "your journal does. If you turn on the Daily Report AI feature, the health figures " +
+            "you've chosen to include are sent to the AI provider you've configured to generate " +
+            "that report — nothing else reads or sends this data."
     )
 )
 

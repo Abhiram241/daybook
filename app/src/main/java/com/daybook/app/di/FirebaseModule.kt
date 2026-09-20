@@ -9,6 +9,8 @@ import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.PersistentCacheSettings
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.ktx.storage
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -47,4 +49,9 @@ object FirebaseModule {
     @Singleton
     fun provideCredentialManager(@ApplicationContext ctx: Context): CredentialManager =
         CredentialManager.create(ctx)
+
+    // Workout session photos → Firebase Storage backup round (2026-09-20).
+    @Provides
+    @Singleton
+    fun provideFirebaseStorage(): FirebaseStorage = Firebase.storage
 }

@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.FoodMedRepository
 import com.daybook.app.data.HabitRepository
 import com.daybook.app.data.OccurrenceScheduler
+import com.daybook.app.data.hydration.HydrationRepository
+import com.daybook.app.data.hydration.HydrationUnits
 import com.daybook.app.data.model.Occurrence
 import com.daybook.app.data.model.RedFlag
 import com.daybook.app.data.model.TaskType
@@ -39,6 +41,10 @@ class RespondViewModel @Inject constructor(
     private val habitRepository: HabitRepository,
     private val foodMedRepository: FoodMedRepository,
     private val occurrenceScheduler: OccurrenceScheduler,
+    // Hydration-as-Intake (2026-09-20): a HYDRATION occurrence's "what did you have" text entry is
+    // replaced by the liters dialog — see [isHydration] / [logHydration].
+    private val hydrationRepository: HydrationRepository,
+    private val appSettingsRepository: com.daybook.app.data.AppSettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -62,6 +68,13 @@ class RespondViewModel @Inject constructor(
         val suspectedFood: String = "",
         // v0.5.2 build 8: FOOD-only "outside food" marker; pre-fills from the reminder default.
         val outsideFood: Boolean = false,
+        // Hydration-as-Intake (2026-09-20): true for a TaskType.HYDRATION occurrence — the screen
+        // renders HydrationAmountDialog instead of the generic text field/trigger-flag UI.
+        val isHydration: Boolean = false,
+        val hydrationDate: LocalDate = LocalDate.now(),
+        val hydrationAmountMl: Int = 0,
+        val hydrationGoalMl: Int = 2000,
+        val hydrationUnit: String = "L",
         val streak: Int = 0,
         // HABIT-only: a resolved habit occurrence renders read-only with an "Undo". Journal Mode
         // removed this intermediate for INTAKE — a resolved intake log now opens editable.
@@ -122,6 +135,11 @@ class RespondViewModel @Inject constructor(
                 val task = foodMedRepository.getTaskById(occ.taskId)
                 val resolved = occ.status != Occurrence.Status.PENDING
                 val isFood = task?.type == TaskType.FOOD
+                val isHydration = task?.type == TaskType.HYDRATION
+                val hydrationDate = occ.localDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                    ?: DateTimeUtils.timestampToLocalDate(occ.scheduledFor)
+                val settings = if (isHydration) appSettingsRepository.getSettings() else null
+                val hydrationDay = if (isHydration) hydrationRepository.getDay(hydrationDate) else null
                 _state.update {
                     it.copy(
                         title = task?.label ?: "Reminder",
@@ -140,6 +158,11 @@ class RespondViewModel @Inject constructor(
                             else task?.defaultSuspectedFood.orEmpty(),
                         outsideFood = if (resolved) (occ.outsideFood == true)
                             else (task?.defaultOutsideFood == true),
+                        isHydration = isHydration,
+                        hydrationDate = hydrationDate,
+                        hydrationAmountMl = hydrationDay?.amountMl ?: 0,
+                        hydrationGoalMl = settings?.hydrationGoalMl ?: 2000,
+                        hydrationUnit = settings?.hydrationUnit ?: "L",
                         // Journal Mode: no read-only intermediate for INTAKE — open editable,
                         // pre-filled; isEdit drives the "Save" label and hides "Skip".
                         isEdit = resolved
@@ -202,6 +225,37 @@ class RespondViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /** Hydration-as-Intake (2026-09-20) — HydrationAmountDialog's onSave for this occurrence: sets
+     *  the day's amount (Room + best-effort Health Connect mirror, unchanged) AND resolves this
+     *  occurrence via [OccurrenceScheduler.logFoodMed] so it shows Logged like any other Intake
+     *  item. Mirrors [log]'s own busy/result handling. */
+    fun logHydration(amountMl: Int) {
+        val s = _state.value
+        if (s.busy) return
+        _state.update { it.copy(busy = true, rejectedMessage = null) }
+        safeLaunch {
+            hydrationRepository.setDay(s.hydrationDate, amountMl)
+            val text = HydrationUnits.format(amountMl, s.hydrationUnit)
+            val result = runCatching {
+                occurrenceScheduler.logFoodMed(occId, text, isEdit = s.isEdit)
+            }.getOrElse { com.daybook.app.data.LogResult.Rejected("Couldn't save: ${it.message}") }
+            _state.update {
+                when (result) {
+                    com.daybook.app.data.LogResult.Success -> it.copy(busy = false, done = true)
+                    is com.daybook.app.data.LogResult.Rejected ->
+                        it.copy(busy = false, rejectedMessage = result.reason)
+                    com.daybook.app.data.LogResult.AlreadyResolved ->
+                        it.copy(busy = false, rejectedMessage = "Already logged.")
+                }
+            }
+        }
+    }
+
+    fun setHydrationUnit(unit: String) = safeLaunch {
+        appSettingsRepository.setHydrationUnit(unit)
+        _state.update { it.copy(hydrationUnit = unit) }
     }
 
     // ROUND 0 (C9): undo() used to go through `resolve {}` below, which discards its action's

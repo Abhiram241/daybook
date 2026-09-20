@@ -56,6 +56,13 @@ data class HealthDay(
     @ColumnInfo(name = "nutrition_fat_grams") val nutritionFatGrams: Float? = null,
     // metadata.dataOrigin.packageName, for "From MyFitnessPal" (§6.1.6).
     @ColumnInfo(name = "nutrition_source_app") val nutritionSourceApp: String? = null,
+    // UI fix (owner review of the Health tab screenshot, build 50; MIGRATION_32_33) — comma-
+    // separated `dataOrigin.packageName`s that contributed to this day's combined aggregate
+    // (steps/distance/calories/heart rate/hydration) plus SpO2's own raw-record origins. Session
+    // (`HealthSession.sourceApp`), nutrition (`nutritionSourceApp` above) and weight
+    // (`HealthWeightReading.sourceApp`) already carry their own per-record source — this is the
+    // one new field for the tiles that had no source attribution at all.
+    @ColumnInfo(name = "activity_source_apps") val activitySourceApps: String? = null,
     @ColumnInfo(name = "updated_at") val updatedAt: Long
 )
 

@@ -21,6 +21,23 @@ class HealthSyncStateStore(ctx: Context) {
         get() = prefs.getString(KEY_CHANGES_TOKEN, null)
         set(v) = prefs.edit().putString(KEY_CHANGES_TOKEN, v).apply()
 
+    /**
+     * HC-2 fix (AUDIT_2026-09-16.md) — the sorted, comma-joined set of permission strings
+     * [changesToken] was minted with. `reader.changes(token)` only ever reports changes within the
+     * scope the token was minted for, so if the user goes back into Health Connect and shares an
+     * additional data type afterwards, the existing token silently keeps asking about the OLD,
+     * narrower scope forever — the newly-shared type produces no data until the token happens to
+     * expire on its own (typically ~30 days). `HealthRepository.pull()` compares this against the
+     * live granted set on every pull and, if they differ, treats the token exactly like an expired
+     * one: a full 30-day re-read plus a freshly-minted, correctly-scoped token. Null for a token
+     * minted before this fix shipped — that is treated as "no info, don't force a resync just for
+     * this", since `sleepDedupResyncPending`'s one-shot flag already forces one full resync per
+     * update, which populates this field for the first time.
+     */
+    var grantedScope: String?
+        get() = prefs.getString(KEY_GRANTED_SCOPE, null)
+        set(v) = prefs.edit().putString(KEY_GRANTED_SCOPE, v).apply()
+
     /** Epoch millis of the last successful pull of any kind (on-resume, worker, or manual). */
     var lastPullAt: Long
         get() = prefs.getLong(KEY_LAST_PULL_AT, 0L)
@@ -66,19 +83,26 @@ class HealthSyncStateStore(ctx: Context) {
      * window `pull()` already re-reads on a first-ever pull or an expired token — just triggered by
      * an app update instead. Bump the key suffix (`_v1` -> `_v2`, …) if a future fix needs the same
      * one-time "resync everyone once" treatment again.
+     *
+     * HC-1 fix (AUDIT_2026-09-16.md, 2026-09-19 build) — this key already fired once for the
+     * original overlap-only dedup fix, so a user who updated then would read `false` here forever
+     * and never get the *continuation* fix's recompute. Bumped `_v1` -> `_v2` per the KDoc's own
+     * instruction: a build with the old key would see `_v2` as never-consumed and correctly force
+     * one more 30-day re-aggregate, picking up nights previously truncated by the continuation bug.
      */
     var sleepDedupResyncPending: Boolean
-        get() = !prefs.getBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V1, false)
-        set(pending) = prefs.edit().putBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V1, !pending).apply()
+        get() = !prefs.getBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V2, false)
+        set(pending) = prefs.edit().putBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V2, !pending).apply()
 
     private companion object {
         const val KEY_CHANGES_TOKEN = "health_changes_token"
+        const val KEY_GRANTED_SCOPE = "health_granted_scope"
         const val KEY_LAST_PULL_AT = "health_last_pull_at"
         const val KEY_LAST_FULL_RESYNC_AT = "health_last_full_resync_at"
         const val KEY_BACKFILL_THROUGH = "health_backfill_through"
         const val KEY_BG_PERMISSION_DENIED = "health_bg_permission_denied"
         const val KEY_LAST_STATUS = "health_last_status_message"
         const val KEY_LAST_STATUS_FAILED = "health_last_status_failed"
-        const val KEY_SLEEP_DEDUP_RESYNC_DONE_V1 = "health_sleep_dedup_resync_done_v1"
+        const val KEY_SLEEP_DEDUP_RESYNC_DONE_V2 = "health_sleep_dedup_resync_done_v2"
     }
 }

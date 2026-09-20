@@ -49,6 +49,10 @@ class AlarmReceiver : BroadcastReceiver() {
                 Log.i(TAG, "onReceive ACTION_FIRE_BATCH")
                 runAsync("fireBatch") { fireBatch() }
             }
+            NotificationUtils.ACTION_REST_DONE -> {
+                Log.i(TAG, "onReceive ACTION_REST_DONE")
+                runAsync("fireRestDone") { fireRestDone() }
+            }
             else -> return
         }
     }
@@ -101,9 +105,28 @@ class AlarmReceiver : BroadcastReceiver() {
                 }
             }
         } finally {
+            // SB-1 fix (AUDIT_2026-09-16.md) — the alarm that just fired, whether the regular
+            // check-in or a snoozed one, has consumed any pending snooze; clear it before
+            // re-arming so it cannot leak into tomorrow's re-arm decision.
+            scheduler.clearBatchSnooze()
             // Re-arm for tomorrow either way, so the chain never breaks.
             scheduler.armBatchCheckIn()
         }
+    }
+
+    /**
+     * Item 4 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the rest timer's alarm firing. Deliberately
+     * the simplest handler in this file: post the notification and return. One-shot: never
+     * re-arms itself, unlike `fireHabit`/`fireFoodMed`'s refire chain — a rest timer has exactly
+     * one expiry, not an indefinitely-repeating nag.
+     *
+     * Build 50 item 2 — now reads the user's chosen tone (`app_settings.rest_timer_sound_uri`,
+     * null = system default) so `showRestDoneNotification` can play it on the MEDIA stream — see
+     * that function's KDoc for why the channel itself is silent.
+     */
+    private suspend fun fireRestDone() {
+        val toneUri = db.appSettingsDao().getSettings()?.restTimerSoundUri
+        notificationUtils.showRestDoneNotification(toneUri)
     }
 
     private suspend fun fireHabit(occurrenceId: String, isRefire: Boolean) {
@@ -156,6 +179,16 @@ class AlarmReceiver : BroadcastReceiver() {
             // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the SHOWN event.
             db.habitEventDao().insert(HabitEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = occ.habitId))
         }
+        // B-2 fix (AUDIT_2026-09-16.md) — this refire chain used to be unconditional: no cap, no
+        // counter, re-arming forever until the user resolved the occurrence or the (unrelated)
+        // 24h stale sweep happened to run. `shouldRefireHabit` bounds it and, when the chain must
+        // stop, has already marked the occurrence SKIPPED — cancel the now-stale notification so
+        // it doesn't linger with no alarm behind it.
+        if (!scheduler.shouldRefireHabit(occ)) {
+            Log.i(TAG, "fireHabit: $occurrenceId hit the refire cap — auto-skipped, chain stopped")
+            notificationUtils.cancelNotification(occ.notificationId)
+            return
+        }
         val snoozeMs = habit.snoozeIntervalMinutes.coerceAtLeast(10) * 60_000L
         // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 7 (N-1): route the refire's trigger through the
         // same quiet-hours defer every other arm path already gets — this was the one arm that
@@ -194,6 +227,12 @@ class AlarmReceiver : BroadcastReceiver() {
         if (!isRefire && !db.foodMedEventDao().hasShownEvent(occurrenceId)) {
             // v0.5.3 Phase 2 (A4): denormalise the owning task id onto the SHOWN event.
             db.foodMedEventDao().insert(FoodMedEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = occ.taskId))
+        }
+        // B-2 fix (AUDIT_2026-09-16.md) — see fireHabit's identical guard.
+        if (!scheduler.shouldRefireFoodMed(occ)) {
+            Log.i(TAG, "fireFoodMed: $occurrenceId hit the refire cap — auto-skipped, chain stopped")
+            notificationUtils.cancelNotification(occ.notificationId)
+            return
         }
         val snoozeMs = task.snoozeIntervalMinutes.coerceAtLeast(10) * 60_000L
         // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 7 (N-1) — see fireHabit's identical quiet-hours defer.

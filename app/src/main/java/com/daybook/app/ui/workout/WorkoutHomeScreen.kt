@@ -38,6 +38,7 @@ import com.daybook.app.ui.components.BottomSheetMenu
 import com.daybook.app.ui.components.CircleIconButton
 import com.daybook.app.ui.components.ConfirmDeleteDialog
 import com.daybook.app.ui.components.DaybookAlertDialog
+import com.daybook.app.ui.components.clickableImpl
 import com.daybook.app.ui.components.EmptyState
 import com.daybook.app.ui.components.GhostButton
 import com.daybook.app.ui.components.IconTile
@@ -68,6 +69,8 @@ fun WorkoutHomeScreen(
     onStartSession: (sessionId: String) -> Unit,
     onNewRoutine: () -> Unit,
     onEditRoutine: (routineId: String) -> Unit,
+    // Item 2 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — "Fix them" on the missing-details popup.
+    onFixExerciseDetails: () -> Unit,
     viewModel: WorkoutHomeViewModel = hiltViewModel()
 ) {
     val routines by viewModel.routines.collectAsStateWithLifecycle()
@@ -80,10 +83,19 @@ fun WorkoutHomeScreen(
     val weeklyStats by viewModel.weeklyStats.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val workoutIcon: ImageVector = ImageVector.vectorResource(id = R.drawable.ic_workout)
+    val exercisesNeedingDetailsCount by viewModel.exercisesNeedingDetailsCount.collectAsStateWithLifecycle()
+    val exerciseDetailsPromptDismissed by viewModel.exerciseDetailsPromptDismissed.collectAsStateWithLifecycle()
 
     var overflowFor by remember { mutableStateOf<RoutineSummary?>(null) }
     var deleteTarget by remember { mutableStateOf<RoutineSummary?>(null) }
     var pendingStart by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // Item 2 — "Later" is screen-local only (not persisted): the popup reappears the next time
+    // Beast Mode's Routines landing is entered, which is exactly this composable being recreated
+    // (a fresh `rememberSaveable` slot) — leaving Beast Mode and coming back, or a process
+    // restart, both count as "entering" again.
+    var dismissedThisVisit by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val showMissingDetailsPrompt = exercisesNeedingDetailsCount > 0 &&
+        !exerciseDetailsPromptDismissed && !dismissedThisVisit
 
     LaunchedEffect(newSessionId) {
         newSessionId?.let { onStartSession(it); viewModel.clearNewSessionId() }
@@ -96,11 +108,16 @@ fun WorkoutHomeScreen(
                 title = "Beast Mode",
                 subtitle = if (routines.isEmpty()) "No routines yet" else "${routines.size} routines",
                 actions = {
-                    CircleIconButton(
+                    // UI fix (owner review, build 50) — this was the visual outlier History/Health's
+                    // gears were matched TO in build 49 (size=40.dp, untinted); the owner now wants
+                    // it flipped the other way so all three Beast Mode gears look the same. Tonal/Lg
+                    // matches WorkoutHistoryScreen.kt's and HealthTabScreen.kt's gears exactly.
+                    com.daybook.app.ui.components.CircleIconButton(
                         icon = Icons.Filled.Settings,
                         contentDescription = "Beast Mode settings",
                         onClick = onOpenWorkoutSettings,
-                        size = 40.dp
+                        style = com.daybook.app.ui.components.CircleStyle.Tonal,
+                        size = com.daybook.app.ui.theme.IconButtonSize.Lg.dp
                     )
                 }
             )
@@ -242,6 +259,43 @@ fun WorkoutHomeScreen(
             destructive = true,
             dismissLabel = "Cancel",
             onDismiss = { pendingStart = null }
+        )
+    }
+
+    // Item 2 — shown once per entry into Beast Mode, using the same DaybookAlertDialog as the
+    // discard-active-session confirm just above (no new visual language). Material3's AlertDialog
+    // has only two button slots, so "Never ask again" rides as a small text link inside the body
+    // rather than a third native button.
+    if (showMissingDetailsPrompt) {
+        DaybookAlertDialog(
+            onDismissRequest = { dismissedThisVisit = true },
+            title = "Some exercises are missing details",
+            text = {
+                Column {
+                    Text(
+                        "$exercisesNeedingDetailsCount ${if (exercisesNeedingDetailsCount == 1) "exercise doesn't" else "exercises don't"} " +
+                            "have a muscle group or equipment set. That's why " +
+                            "${if (exercisesNeedingDetailsCount == 1) "it shows" else "they show"} a plain icon instead of a " +
+                            "picture, and why ${if (exercisesNeedingDetailsCount == 1) "it doesn't" else "they don't"} show up " +
+                            "under a muscle-group filter.",
+                        style = DaybookText.CardSubtitle, color = DaybookColors.TextPrimary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Never ask again",
+                        style = DaybookText.CardSubtitle,
+                        color = DaybookColors.TextMuted,
+                        modifier = Modifier.clickableImpl(remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) {
+                            dismissedThisVisit = true
+                            viewModel.neverAskAboutExerciseDetailsAgain()
+                        }
+                    )
+                }
+            },
+            confirmLabel = "Fix them",
+            onConfirm = { dismissedThisVisit = true; onFixExerciseDetails() },
+            dismissLabel = "Later",
+            onDismiss = { dismissedThisVisit = true }
         )
     }
 }

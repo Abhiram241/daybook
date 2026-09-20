@@ -99,6 +99,12 @@ fun HomeScreen(
     val reduceMotion = LocalReduceMotion.current
     val context = LocalContext.current
 
+    // Hydration-as-Intake (2026-09-20) — the Today card's tap-to-log dialog. Non-null while open,
+    // holding the HomeItem it was opened for (its scheduledEpoch gives the day to log against).
+    var hydrationDialogItem by remember { mutableStateOf<HomeItem?>(null) }
+    val hydrationGoalMl by viewModel.hydrationGoalMl.collectAsStateWithLifecycle()
+    val hydrationUnit by viewModel.hydrationUnit.collectAsStateWithLifecycle()
+
     // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 7 (N-2) — re-read on resume, same pattern
     // SettingsScreen's notification health row already uses (a channel/permission toggled in
     // system Settings and back doesn't otherwise trigger recomposition here).
@@ -250,20 +256,10 @@ fun HomeScreen(
                         if (item.occurrenceId != null) onNavigateToHabitJournalChat(item.occurrenceId)
                         else onNavigateToHabitJournalBackfill(item.detailId, item.scheduledEpoch)
                     }
-                    if (item.hydration != null) {
-                        HydrationCard(
-                            item = item,
-                            tint = CardTints.resolve(null, index),
-                            onSave = { ml -> viewModel.setHydration(item.hydration.date, ml) },
-                            onUnitChange = viewModel::setHydrationUnit,
-                            modifier = Modifier.animateItem(
-                                fadeInSpec = if (reduceMotion) snap() else Motion.medium(),
-                                fadeOutSpec = if (reduceMotion) snap() else Motion.fast(),
-                                placementSpec = if (calendarAnimating || reduceMotion) snap() else Motion.placementSpring()
-                            )
-                        )
-                        return@itemsIndexed
-                    }
+                    // Hydration-as-Intake (2026-09-20): no more separate HydrationCard — a HYDRATION
+                    // occurrence is an ordinary ReminderCard; only its tap action is special-cased
+                    // (opens HydrationAmountDialog instead of the generic text reply / navigation).
+                    val isHydration = item.taskType == com.daybook.app.data.model.TaskType.HYDRATION
                     ReminderCard(
                         item = item,
                         tint = CardTints.resolve(ColorTag.fromNameOrAuto(item.colorTag).name.takeIf { it != "AUTO" }, index),
@@ -282,12 +278,17 @@ fun HomeScreen(
                         onSnooze = { viewModel.snoozeItem(item) },
                         onReply = { text, flag, suspected, outside -> viewModel.replyToItem(item, text, flag, suspected, outside) },
                         onUndo = { viewModel.revertItem(item) },
-                        onOpenEntryEdit = { item.occurrenceId?.let { onOpenEntryEdit(it) } },
+                        onOpenEntryEdit = {
+                            if (isHydration) hydrationDialogItem = item
+                            else item.occurrenceId?.let { onOpenEntryEdit(it) }
+                        },
                         onOpenJournal = openJournal,
                         onOpenHabitJournalChat = openHabitJournalChat,
                         onOpenHabitJournalEdit = { item.occurrenceId?.let { onOpenHabitJournalEdit(it) } },
+                        onOpenHydrationDialog = { hydrationDialogItem = item },
                         onOpen = {
                             when {
+                                isHydration -> hydrationDialogItem = item
                                 item.isJournal -> openJournal()
                                 // B8: a resolved (LOGGED) Journal-habit entry opens the edit-form,
                                 // never the chat, even from the whole-card tap.
@@ -334,6 +335,26 @@ fun HomeScreen(
         // BUG_AUDIT_REPORT.md §1.10: token now comes from the ViewModel and only bumps once real
         // feedback lands, instead of on tap — see HomeViewModel.UndoFeedback's comment.
         UndoSnack(token = undoFeedback?.token ?: 0, text = undoFeedback?.message ?: "Undone")
+
+        // Hydration-as-Intake (2026-09-20) — the Today card's tap-to-log dialog, shared with the
+        // Intake tab's respond flow (see HydrationAmountDialog).
+        hydrationDialogItem?.let { hItem ->
+            val hDate = remember(hItem.scheduledEpoch) {
+                com.daybook.app.util.DateTimeUtils.timestampToLocalDate(hItem.scheduledEpoch)
+            }
+            val hDay by viewModel.observeHydrationDay(hDate).collectAsStateWithLifecycle(initialValue = null)
+            HydrationAmountDialog(
+                unit = hydrationUnit,
+                goalMl = hydrationGoalMl,
+                currentMl = hDay?.amountMl ?: 0,
+                onUnitChange = viewModel::setHydrationUnit,
+                onSave = { ml ->
+                    viewModel.logHydration(hItem, hDate, ml, hydrationUnit)
+                    hydrationDialogItem = null
+                },
+                onDismiss = { hydrationDialogItem = null }
+            )
+        }
     }
 }
 
@@ -553,6 +574,9 @@ private fun ReminderCard(
     onOpenJournal: () -> Unit,
     onOpenHabitJournalChat: () -> Unit,
     onOpenHabitJournalEdit: () -> Unit,
+    // Hydration-as-Intake (2026-09-20): opens HydrationAmountDialog instead of the generic
+    // text-reply row below, for a TaskType.HYDRATION item only.
+    onOpenHydrationDialog: () -> Unit = {},
     onOpen: () -> Unit
 ) {
     val haptics = com.daybook.app.ui.theme.rememberDaybookHaptics()
@@ -709,6 +733,19 @@ private fun ReminderCard(
                     Spacer(Modifier.width(6.dp))
                     CircleIconButton(icon = MI.Filled.MoreVert, contentDescription = "More", onClick = { sheetOpen = true }, size = IconButtonSize.Sm.dp)
                 }
+                // Hydration-as-Intake (2026-09-20): a PENDING HYDRATION reminder's trailing action
+                // opens HydrationAmountDialog, never the generic inline text-reply row below.
+                item.taskType == com.daybook.app.data.model.TaskType.HYDRATION && item.canReply -> {
+                    CircleIconButton(
+                        icon = Icons.getIcon(Icons.WATER),
+                        contentDescription = "Log water",
+                        onClick = onOpenHydrationDialog,
+                        style = CircleStyle.Tonal,
+                        size = IconButtonSize.Md.dp
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    CircleIconButton(icon = MI.Filled.MoreVert, contentDescription = "More", onClick = { sheetOpen = true }, size = IconButtonSize.Sm.dp)
+                }
                 item.canReply -> {
                     CircleIconButton(
                         icon = DaybookIcons.Send,
@@ -740,7 +777,8 @@ private fun ReminderCard(
         // previously lacked (the `if` removed it instantly).
         val rm = LocalReduceMotion.current
         AnimatedVisibility(
-            visible = replyOpen && item.canReply && !item.isJournal && !item.isHabitJournal && !backfillBlocked,
+            visible = replyOpen && item.canReply && !item.isJournal && !item.isHabitJournal && !backfillBlocked &&
+                item.taskType != com.daybook.app.data.model.TaskType.HYDRATION,
             enter = if (rm) fadeIn() else fadeIn(Motion.fast()) + expandVertically(Motion.softSpring()),
             exit = if (rm) fadeOut() else fadeOut(Motion.fast()) + shrinkVertically(Motion.softSpring())
         ) {

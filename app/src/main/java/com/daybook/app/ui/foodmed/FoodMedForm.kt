@@ -67,6 +67,10 @@ class FoodMedFormState {
         TaskType.MED -> "medication"
         TaskType.CUSTOM -> "restaurant"
         TaskType.JOURNAL -> "menu_book"
+        // Hydration-as-Intake (2026-09-20) — unreachable from this form (HYDRATION is filtered out
+        // of the Type chips below; its icon is fixed by HydrationIntakeSync), kept only so the
+        // `when` stays exhaustive.
+        TaskType.HYDRATION -> com.daybook.app.ui.icons.Icons.WATER
     }
 }
 
@@ -151,7 +155,10 @@ fun FoodMedFormScaffold(
                         // Journal-as-habit round (B3): JOURNAL is retired as an Intake concept —
                         // kept in the enum only so an old backup's TaskType.valueOf("JOURNAL")
                         // still decodes losslessly, but never offered here again.
-                        TaskType.entries.filter { it != TaskType.JOURNAL }.forEach { t ->
+                        // Hydration-as-Intake (2026-09-20): HYDRATION is also never offered here —
+                        // its single task row is system-managed by HydrationIntakeSync, created/
+                        // updated only from Settings > Hydration, never through this general form.
+                        TaskType.entries.filter { it != TaskType.JOURNAL && it != TaskType.HYDRATION }.forEach { t ->
                             DaybookChip(
                                 label = t.name.lowercase().replaceFirstChar { it.uppercase() },
                                 selected = state.type == t,
@@ -163,7 +170,7 @@ fun FoodMedFormScaffold(
                         }
                     }
                     // v0.5.3 Phase 5 (§5.11) — make the silent icon-follows-type behaviour explicit.
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Spacing.sm))
                     Text(
                         "Icon follows the type until you pick one.",
                         style = DaybookText.Caption,

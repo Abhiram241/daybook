@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.ExportImportRepository
 import com.daybook.app.data.HealthRepository
+import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.health.HealthPermissions
 import com.daybook.app.data.model.AppSettings
 import com.daybook.app.data.sync.CloudSyncRepository
@@ -36,11 +37,19 @@ class WorkoutSettingsViewModel @Inject constructor(
     private val healthRepository: HealthRepository,
     private val exportImportRepository: ExportImportRepository,
     private val storageUtils: StorageUtils,
-    private val cloudSyncRepository: CloudSyncRepository
+    private val cloudSyncRepository: CloudSyncRepository,
+    private val workoutRepository: WorkoutRepository
 ) : ViewModel() {
 
     val settings = repo.observeSettings()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
+
+    /** Item 2 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — backs the "Fix exercise details" row and
+     *  the conditional "Remind me about missing details" switch below it. */
+    val exercisesNeedingDetailsCount = workoutRepository.observeExercisesNeedingDetailsCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    fun setExerciseDetailsPromptDismissed(v: Boolean) = safeLaunch { repo.setExerciseDetailsPromptDismissed(v) }
 
     /** `null` = "match the app's own font choice" (still bold — see [WorkoutFontPrefs]'s KDoc). */
     val fontChoice = fontPrefs.fontChoice
@@ -48,6 +57,8 @@ class WorkoutSettingsViewModel @Inject constructor(
     fun setWeightUnit(v: String) = safeLaunch { repo.setWeightUnit(v) }
     fun setWorkoutAccentColor(v: String) = safeLaunch { repo.setWorkoutAccentColor(v) }
     fun setRestTimerDefaultSeconds(v: Int) = safeLaunch { repo.setRestTimerDefaultSeconds(v) }
+    /** Build 50 item 2 — the rest timer's alert tone, picked via the system ringtone picker. */
+    fun setRestTimerSoundUri(v: String?) = safeLaunch { repo.setRestTimerSoundUri(v) }
     fun setShowOnToday(v: Boolean) = safeLaunch { repo.setWorkoutTodayCardEnabled(v) }
     /** Feature addition (post-A6) — the Add-Exercise picker's default active filter chip. */
     fun setDefaultExerciseGroup(v: String?) = safeLaunch { repo.setDefaultExerciseGroup(v) }
@@ -95,8 +106,69 @@ class WorkoutSettingsViewModel @Inject constructor(
     val healthGrantedCount = _healthGrantedCount.asStateFlow()
     val healthMissingLabels = _healthMissingLabels.asStateFlow()
 
+    // Owner feedback round 2 (2026-09-20) — "Data source priority" settings section: one picker per
+    // data point now (not one combined "Activity & vitals" picker), each populated on demand (only
+    // when its sheet is actually opened — see `loadSourceCandidates`) via an unfiltered Health
+    // Connect discovery read, not the old narrowed `activitySourceApps` CSV (that's what hid Mi
+    // Fitness — see `HealthRepository.discoverSourcePackages`'s KDoc for the root cause).
+    private val _sourceCandidates =
+        MutableStateFlow<Map<com.daybook.app.data.health.HealthConnectReader.SourceField, List<String>>>(emptyMap())
+    val sourceCandidates = _sourceCandidates.asStateFlow()
+
     init {
         refreshHealthPermissionState()
+    }
+
+    /** Called when a "Data source priority" picker sheet opens. Cheap (one on-demand Health
+     *  Connect read, see [HealthRepository.discoverSourcePackages]'s KDoc) — never runs on a
+     *  background sync. */
+    fun loadSourceCandidates(field: com.daybook.app.data.health.HealthConnectReader.SourceField) = safeLaunch {
+        val pkgs = healthRepository.discoverSourcePackages(field)
+        _sourceCandidates.value = _sourceCandidates.value + (field to pkgs)
+    }
+
+    /** Owner feedback round 2 (2026-09-20) — one Health Connect source preference per data point,
+     *  used by `HealthSourcePriority`/`HealthConnectReader` instead of naively summing every
+     *  contributing app's records. `null` = "Auto". Changing one triggers the existing "Refresh
+     *  now" pull path (not a second one) so the choice takes effect without waiting for the next
+     *  automatic sync. */
+    // Owner feedback round 3 (2026-09-20) — single-pick setters above replaced by ranked-list
+    // setters. Saving triggers a full-history re-resolution (not just a delta refresh) so the new
+    // priority applies to already-synced past days too, not just future syncs.
+    fun setHealthSourceStepsRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceStepsRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceDistanceRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceDistanceRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceCaloriesRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceCaloriesRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceHeartRateRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceHeartRateRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceSpo2Ranked(ranked: List<String>) = safeLaunch { repo.setHealthSourceSpo2Ranked(ranked); reresolveSourceNow() }
+    fun setHealthSourceHydrationRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceHydrationRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceWeightRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceWeightRanked(ranked); reresolveSourceNow() }
+    fun setHealthSourceNutritionRanked(ranked: List<String>) = safeLaunch { repo.setHealthSourceNutritionRanked(ranked); reresolveSourceNow() }
+
+    /** Same busy/result plumbing as [refreshHealthNow], but calls the full-history re-resolution
+     *  instead of a delta pull — see `HealthRepository.reresolveSourcePreferences`'s KDoc. */
+    private suspend fun reresolveSourceNow() {
+        _healthIsBusy.value = true
+        _healthActionResult.value = null
+        _healthActionIsFailure.value = false
+        try {
+            when (val r = healthRepository.reresolveSourcePreferences()) {
+                is HealthRepository.PullOutcome.Success -> {
+                    _healthActionResult.value = "Source priority applied to your whole history."
+                    _healthActionIsFailure.value = false
+                }
+                is HealthRepository.PullOutcome.Failure -> {
+                    _healthActionResult.value = r.message
+                    _healthActionIsFailure.value = true
+                }
+                HealthRepository.PullOutcome.PermissionsMissing -> {
+                    _healthActionResult.value = "Daybook no longer has access to your health data. Tap Connect to share it again."
+                    _healthActionIsFailure.value = true
+                }
+            }
+        } finally {
+            _healthIsBusy.value = false
+            refreshHealthPermissionState()
+        }
     }
 
     fun refreshHealthPermissionState() {

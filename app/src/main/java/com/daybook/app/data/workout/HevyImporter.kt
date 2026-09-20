@@ -27,11 +27,22 @@ data class HevyImportResult(
     /** The exact names behind [newExercises] — not in the catalog under any known name or alias,
      *  so a new custom `Exercise` row was auto-created for each. Surfaced to the user as a
      *  warning by [summarise] rather than silently folded into a bare count. */
-    val newExerciseNames: List<String> = emptyList()
+    val newExerciseNames: List<String> = emptyList(),
+    /** Item 1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the ids behind [newExerciseNames], in the
+     *  same order. Lets the caller scope the missing-details review queue's first pass to exactly
+     *  the exercises THIS import just created, rather than the whole queue. */
+    val newExerciseIds: List<String> = emptyList()
 )
 
 sealed interface HevyImportOutcome {
-    data class Success(val message: String, val isNeutral: Boolean = false) : HevyImportOutcome
+    data class Success(
+        val message: String,
+        val isNeutral: Boolean = false,
+        // Item 1 — same list as HevyImportResult.newExerciseIds, carried onto the outcome so
+        // `WorkoutRepository.importHevy`'s caller (`SettingsViewModel`) doesn't need the whole
+        // result object just to offer "Add details for N new exercises".
+        val newExerciseIds: List<String> = emptyList()
+    ) : HevyImportOutcome
     data class Failure(val message: String) : HevyImportOutcome
 }
 
@@ -107,24 +118,37 @@ class HevyImporter @Inject constructor(
 
         // §3.9.7 — hydrate every touched month first; abort with nothing written if any can't be
         // reached. Signed-out users have nothing to hydrate (NoAccount) and proceed purely local.
+        //
+        // DI-4 fix (AUDIT_2026-09-16.md) — the pins taken out by hydrateRange() used to be
+        // released (via endRangeExport()) right after hydration, long before the write
+        // transaction below. That let background maintenance evict exactly the months just
+        // fetched before the import had written anything into them — a race that could either
+        // wipe the months down to only the freshly-imported Hevy sessions, or delete the
+        // sessions this import is about to write. The pins must be held for the entire import,
+        // not just the fetch, so they are released in a `finally` around the whole function.
         val ymd = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val months = parsed.sessions.map {
             Instant.ofEpochMilli(it.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString().substring(0, 7)
         }.toSortedSet()
-        if (months.isNotEmpty()) {
-            val hydrate = cloudSyncRepository.hydrateRange(months.first(), months.last())
-            try {
+        var pinsHeld = false
+        try {
+            if (months.isNotEmpty()) {
+                val hydrate = cloudSyncRepository.hydrateRange(months.first(), months.last())
+                pinsHeld = hydrate !is HydrateResult.NoAccount
                 if (hydrate is HydrateResult.Offline) {
                     val monthLabel = runCatching {
                         java.time.YearMonth.parse(hydrate.month).format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH))
                     }.getOrDefault(hydrate.month)
                     return HevyImportOutcome.Failure("Couldn't fetch $monthLabel from your account. Check your connection and try again — nothing was imported.")
                 }
-            } finally {
-                if (hydrate !is HydrateResult.NoAccount) cloudSyncRepository.endRangeExport()
             }
+            return doImportInto(parsed, ymd)
+        } finally {
+            if (pinsHeld) cloudSyncRepository.endRangeExport()
         }
+    }
 
+    private suspend fun doImportInto(parsed: ParseResult, ymd: DateTimeFormatter): HevyImportOutcome {
         // Dedupe probe — exact (startedAt, endedAt), against every existing session regardless
         // of source (§3.9.5). Grouped BEFORE dedupe, per session, not per row. One range query
         // covering every session in the file, then the pure partition below (HevyDedupeTest).
@@ -234,9 +258,10 @@ class HevyImporter @Inject constructor(
         val result = HevyImportResult(
             sessions = sessionCount, sets = setCount, newExercises = newExercisesToInsert.size,
             skippedDuplicates = skippedDuplicates, skippedRows = parsed.skippedRows + unresolvedRows,
-            newExerciseNames = newExercisesToInsert.map { it.name }
+            newExerciseNames = newExercisesToInsert.map { it.name },
+            newExerciseIds = newExercisesToInsert.map { it.id }
         )
-        return HevyImportOutcome.Success(summarise(result))
+        return HevyImportOutcome.Success(summarise(result), newExerciseIds = result.newExerciseIds)
     }
 }
 

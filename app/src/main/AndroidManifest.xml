@@ -36,13 +36,21 @@
     <uses-permission android:name="android.permission.health.WRITE_HYDRATION"/>
     <uses-permission android:name="android.permission.health.READ_NUTRITION"/>
     <!-- Optional, requested separately (§5.1/§6.3); degrade gracefully if refused or rejected by
-         the alpha08 client (R4). -->
-    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"/>
+         the alpha08 client (R4). B-5 fix (AUDIT_2026-09-20.md) — READ_HEALTH_DATA_IN_BACKGROUND
+         removed: the only background read is the daily worker's pullDaily(), which doesn't need
+         it (READ_HEALTH_DATA_HISTORY is the one that matters, for backfill depth) — it was extra
+         scope in the consent sheet for no feature. -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY"/>
 
     <!-- Required so getSdkStatus() can see the provider on Android 13 and below (§6.2). -->
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Item 12 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — stock-camera workout photos via
+             ACTION_IMAGE_CAPTURE. No CAMERA permission: the intent delegates to the system
+             camera app, which needs none from this app. -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
     </queries>
 
     <application

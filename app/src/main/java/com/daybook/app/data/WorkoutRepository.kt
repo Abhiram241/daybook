@@ -1,5 +1,6 @@
 package com.daybook.app.data
 
+import android.content.Context
 import androidx.room.withTransaction
 import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.data.local.RoutineSummary
@@ -25,9 +26,15 @@ import com.daybook.app.data.workout.uniqueRoutineName
 import com.daybook.app.data.workout.BUILTIN_ID_PREFIX
 import com.daybook.app.data.workout.EXERCISE_ADDITIONS
 import com.daybook.app.data.workout.EXERCISE_RENAME_MAP
+import com.daybook.app.util.work.WorkoutPhotoUploadWorker
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -73,8 +80,18 @@ class WorkoutRepository @Inject constructor(
     private val database: AppDatabase,
     private val exerciseCatalog: ExerciseCatalog,
     private val appSettingsRepository: AppSettingsRepository,
-    private val hevyImporter: HevyImporter
+    private val hevyImporter: HevyImporter,
+    // Item 12 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — session photos.
+    private val workoutPhotoStore: WorkoutPhotoStore,
+    // Firebase Storage backup round (2026-09-20).
+    private val workoutPhotoCloudSync: WorkoutPhotoCloudSync,
+    @ApplicationContext private val appContext: Context
 ) {
+    /** Repository-scope coroutine for the fire-and-forget upload launch after a photo is added —
+     *  mirrors `HealthRepository.repoScope`'s `SupervisorJob() + Dispatchers.IO` pattern; a
+     *  `SupervisorJob` so an upload failure can't cancel anything else launched on it. */
+    private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     /** A8 (§3.9) — the only entry point into the Hevy CSV importer. */
     suspend fun importHevyCsv(csvText: String, csvBytes: Int): HevyImportOutcome =
         hevyImporter.import(csvText, csvBytes)
@@ -109,18 +126,41 @@ class WorkoutRepository @Inject constructor(
      *  archived override hides it from this list entirely, instead of ever showing both. */
     fun observeExerciseCatalog(): Flow<List<CatalogExercise>> =
         database.exerciseDao().observeAll()
+            // Item 6 fix #1 — this used to gate the FIRST emission behind
+            // `ensureExerciseCatalogRefreshed()` running to completion (~1,090 serialized Room
+            // queries). It is now also fired eagerly, off the UI thread, from
+            // `DaybookApplication.onCreate` (see `WorkoutRepository.warmExerciseCatalog`) — by the
+            // time a user actually opens the picker it has almost always already finished, and the
+            // `AtomicBoolean` guard makes this call a no-op then. Kept here as the safety net for
+            // the cold-start race (picker opened before the app-wide warm-up completes) and for
+            // process states where `Application.onCreate` never got the chance to run it.
             .onStart { ensureExerciseCatalogRefreshed() }
             .map { rows ->
-            val overridesByBuiltinId = rows.filter { exerciseCatalog.byId(it.id) != null }.associateBy { it.id }
-            val customRows = rows.filter { exerciseCatalog.byId(it.id) == null && !it.isArchived }
+            // Item 6 fix #4 — was two separate `rows.filter { exerciseCatalog.byId(it.id) ... }`
+            // passes (2 index lookups + 2 full-list iterations per emission); one `partition` pass
+            // does the same split in one. `byId` itself is now an O(1) map lookup (ExerciseCatalog).
+            val (overrideRows, customRows) = rows.partition { exerciseCatalog.byId(it.id) != null }
+            val overridesByBuiltinId = overrideRows.associateBy { it.id }
+            val activeCustomRows = customRows.filter { !it.isArchived }
             val builtinCatalog = exerciseCatalog.builtins().mapNotNull { b ->
                 when (val override = overridesByBuiltinId[b.id]) {
                     null -> b.toCatalogExercise()
                     else -> if (override.isArchived) null else override.toCatalogExercise()
                 }
             }
-            (builtinCatalog + customRows.map { it.toCatalogExercise() }).sortedBy { it.name.lowercase() }
+            // Item 6 fix #4 — `sortedBy { it.name.lowercase() }` allocated one lowercase string per
+            // element on every emission (~525+ allocations); `CASE_INSENSITIVE_ORDER` compares
+            // without allocating.
+            (builtinCatalog + activeCustomRows.map { it.toCatalogExercise() })
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         }
+
+    /** Item 6 fix #1/#2 — called once from `DaybookApplication.onCreate` on a background
+     *  dispatcher, well before any screen could need the catalog. Warms both the ~1 MB RepDB JSON
+     *  parse ([ExerciseCatalog.builtins]) and the one-time rename/addition/dedupe pass
+     *  ([ensureExerciseCatalogRefreshed]) off the picker's critical path entirely. Safe to call
+     *  from anywhere at any time — every step it triggers is itself idempotent. */
+    suspend fun warmExerciseCatalog() = ensureExerciseCatalogRefreshed()
 
     /** Defensive read: an id that resolves to neither a builtin nor a custom row (an old custom
      *  exercise deleted on another device before this one synced) returns null; the UI renders
@@ -133,6 +173,14 @@ class WorkoutRepository @Inject constructor(
     /** The raw Room row only — never resolves a builtin. Used by the exercise form to preserve a
      *  custom row's own `createdAt`/`isArchived` on edit (§2.8) instead of rebuilding them. */
     suspend fun getExerciseRow(id: String): Exercise? = database.exerciseDao().getById(id)
+
+    /** Items 1/2 — the missing-details review queue. See `ExerciseDao.exercisesNeedingDetails`'s
+     *  KDoc for the predicate. */
+    suspend fun exercisesNeedingDetailsIds(): List<String> =
+        database.exerciseDao().exercisesNeedingDetails().map { it.id }
+
+    fun observeExercisesNeedingDetailsCount(): Flow<Int> =
+        database.exerciseDao().observeExercisesNeedingDetailsCount()
 
     suspend fun createCustomExercise(
         name: String,
@@ -214,9 +262,15 @@ class WorkoutRepository @Inject constructor(
         // 2) Additions — resolved against CURRENT display names (post-rename), so this never
         // double-adds one that a rename above already produced or that a previous run already
         // added.
-        val builtinNames = exerciseCatalog.builtins()
-            .map { b -> database.exerciseDao().getById(b.id)?.name ?: b.name }
-        val existingNames = (builtinNames + database.exerciseDao().getAll().map { it.name }).toMutableSet()
+        //
+        // Item 6 fix #1 — this used to be `builtins().map { getById(b.id)?.name ?: b.name }`, one
+        // sequential Room round trip PER BUILTIN (~525). Fetch every row once and look names up in
+        // memory; `getAll()` was already being called a second time right below for `existingNames`
+        // anyway, so this also removes that duplicate query.
+        val allRowsStep2 = database.exerciseDao().getAll()
+        val rowNameByIdStep2 = allRowsStep2.associate { it.id to it.name }
+        val builtinNames = exerciseCatalog.builtins().map { b -> rowNameByIdStep2[b.id] ?: b.name }
+        val existingNames = (builtinNames + allRowsStep2.map { it.name }).toMutableSet()
         for (draft in EXERCISE_ADDITIONS) {
             if (draft.name in existingNames) continue
             database.exerciseDao().insert(
@@ -237,9 +291,14 @@ class WorkoutRepository @Inject constructor(
         // transaction as the row's own deletion — so a merge can never orphan real logged history.
         // A builtin override row (its id starts with `builtin:`) is never itself deleted here, only
         // ever chosen as the canonical target.
+        // Item 6 fix #1 — same shape as step 2's fix. `getAll()` here is fetched fresh (not reused
+        // from step 2) deliberately — step 2 above may have inserted new rows, and this dedupe
+        // pass must see them.
+        val allRowsStep3 = database.exerciseDao().getAll()
+        val rowNameByIdStep3 = allRowsStep3.associate { it.id to it.name }
         val builtinIdByName = exerciseCatalog.builtins()
-            .associate { b -> (database.exerciseDao().getById(b.id)?.name ?: b.name) to b.id }
-        val groupsByName = database.exerciseDao().getAll().groupBy { it.name.trim().lowercase() }
+            .associate { b -> (rowNameByIdStep3[b.id] ?: b.name) to b.id }
+        val groupsByName = allRowsStep3.groupBy { it.name.trim().lowercase() }
         for (rows in groupsByName.values) {
             if (rows.size < 2) continue
             val name = rows.first().name
@@ -293,6 +352,12 @@ class WorkoutRepository @Inject constructor(
      *  discard — so the caller can tell "finished" from "there was nothing left to finish". */
     suspend fun finishSession(id: String): Boolean {
         val session = database.workoutDao().getSession(id) ?: return false
+        // Owner report (2026-09-20) — "Edit" on a finished session reopens this same screen/
+        // viewmodel with no status distinction, so its Finish button is still live. Re-stamping
+        // `endedAt` here unconditionally would silently corrupt the session's real recorded
+        // duration to "time since edit was opened" every time someone edits an old session and
+        // taps Finish again. A session that's already COMPLETED has nothing left to finish.
+        if (session.status == "COMPLETED") return true
         database.workoutDao().updateSession(session.copy(status = "COMPLETED", endedAt = System.currentTimeMillis()))
         return true
     }
@@ -301,16 +366,63 @@ class WorkoutRepository @Inject constructor(
     /** Deletes a session and everything under it — sets, then blocks, then the session — inside
      *  one transaction (§3.2: no FK, so this ordering is the whole of "cascade"). */
     suspend fun deleteSession(id: String) {
+        // Item 12 fix — collect the session's photo file paths BEFORE the transaction, delete the
+        // `workout_session_photos` rows INSIDE it (so a crash mid-delete can't leave a row
+        // pointing at a file that's already gone, or vice versa), then delete the actual files
+        // AFTER it commits — disk I/O has no business holding a database write lock.
+        val photoPaths = database.workoutPhotoDao().getForSession(id).map { it.filePath }
         database.withTransaction {
             database.workoutDao().deleteSetsForSession(id)
             database.workoutDao().deleteExercisesForSession(id)
             database.workoutDao().deleteSession(id)
+            database.workoutPhotoDao().deleteForSessions(listOf(id))
         }
+        if (photoPaths.isNotEmpty()) workoutPhotoStore.deleteFiles(photoPaths)
     }
 
     /** "Discard Workout" on the live session screen — same operation as [deleteSession], named
      *  for the call site that means it. */
     suspend fun discardSession(id: String) = deleteSession(id)
+
+    // ------------------------------------------------------------------------ session photos (item 12)
+
+    fun observePhotosForSession(sessionId: String): Flow<List<com.daybook.app.data.model.WorkoutSessionPhoto>> =
+        database.workoutPhotoDao().observeForSession(sessionId)
+
+    /** Batched — `WorkoutHistoryViewModel` resolves a whole page's photos in one query, same
+     *  "never a query per row" rule the rest of History follows (item 13's own constraint). */
+    suspend fun photosForSessions(sessionIds: List<String>): List<com.daybook.app.data.model.WorkoutSessionPhoto> =
+        if (sessionIds.isEmpty()) emptyList() else database.workoutPhotoDao().getForSessions(sessionIds)
+
+    /** Up to 3 photos per session (enforced by the caller — the Finish sheet only offers a capture
+     *  slot while under 3). [file] is the already-downscaled file `WorkoutPhotoStore.persistCapturedFile`
+     *  wrote. */
+    suspend fun addSessionPhoto(sessionId: String, filePath: String) {
+        val nextOrder = database.workoutPhotoDao().countForSession(sessionId)
+        database.workoutPhotoDao().insert(
+            com.daybook.app.data.model.WorkoutSessionPhoto(
+                id = newId(), sessionId = sessionId, filePath = filePath,
+                orderIndex = nextOrder, createdAt = System.currentTimeMillis()
+            )
+        )
+        // Firebase Storage backup round (2026-09-20) — fire-and-forget: covers the common
+        // "signed-in and online" case immediately. WorkoutPhotoUploadWorker below is the fallback
+        // for offline/signed-out/process-death.
+        repoScope.launch { runCatching { workoutPhotoCloudSync.uploadPending() } }
+        WorkoutPhotoUploadWorker.enqueue(appContext)
+    }
+
+    /** "Remove" from the retake/remove sheet. */
+    suspend fun deleteSessionPhoto(photoId: String, filePath: String) {
+        database.workoutPhotoDao().deleteById(photoId)
+        workoutPhotoStore.deleteFiles(listOf(filePath))
+    }
+
+    /** The startup/daily orphan sweep's "what's still referenced" input — see
+     *  `WorkoutPhotoStore.sweepOrphans`'s KDoc. */
+    suspend fun sweepOrphanedSessionPhotos() {
+        workoutPhotoStore.sweepOrphans(database.workoutPhotoDao().allFilePaths().toSet())
+    }
 
     /** History overflow "Edit" (open question 4) — rename only; everything else about the
      *  session is untouched. Blank/whitespace-only clears the title back to the date fallback.
@@ -352,10 +464,15 @@ class WorkoutRepository @Inject constructor(
         if (sessionIds.isEmpty()) emptyMap()
         else database.workoutDao().sessionAggregates(sessionIds).associateBy { it.sessionId }
 
-    /** §2.1/§5 — each session's first exercise id, one query for the whole visible page. */
-    suspend fun firstExerciseIdsForSessions(sessionIds: List<String>): Map<String, String> =
+    /** §2.1/§5 — each session's exercise ids in block order, one query for the whole visible page.
+     *  Item 11 — was "the first exercise id" only; the History card now picks a thumbnail from all
+     *  of them (see `pickThumbnailExerciseId`), so a session whose first exercise has no artwork
+     *  no longer falls straight through to the generic icon. */
+    suspend fun exerciseIdsForSessions(sessionIds: List<String>): Map<String, List<String>> =
         if (sessionIds.isEmpty()) emptyMap()
-        else database.workoutDao().firstExercisePerSession(sessionIds).associate { it.sessionId to it.exerciseId }
+        else database.workoutDao().exercisesPerSession(sessionIds)
+            .groupBy { it.sessionId }
+            .mapValues { (_, refs) -> refs.map { it.exerciseId } }
 
     /**
      * Feature addition — History card's "muscle groups worked" bar chart. One batched sets query
@@ -479,17 +596,24 @@ class WorkoutRepository @Inject constructor(
         previousBySetNumber: Map<Int, WorkoutSet> = emptyMap()
     ): String {
         val id = newId()
-        // §2.6 fix — same shape as §2.1: read-then-insert inside one transaction so two rapid
-        // "+ Add Set" taps can't both read the same maxSetNumber and collide.
+        // Item 10 fix (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — this used to copy the previous
+        // session's reps/weight/duration/distance straight into the new row's REAL columns, before
+        // the user had touched anything. Those carried values were committed data: they logged
+        // last week's numbers into volume/PR/history the moment an untouched set was ticked, and
+        // any future session's own PREVIOUS read *this* session's fabricated value, compounding.
+        // `previousBySetNumber` is kept as a parameter (the caller, `WorkoutSessionViewModel`,
+        // still needs it for the PREV column and the greyed placeholder hint) — it's simply no
+        // longer written into the row. A truly blank row (all four null) is correct: the owner's
+        // locked decision (PROGRESS.md §3) is that a set cannot be ticked at all until a real value
+        // is typed, so there is no "empty but ticked" state that needs a placeholder-on-commit path.
         database.withTransaction {
             val setNumber = database.workoutDao().maxSetNumber(workoutExerciseId) + 1
-            val prefillFrom = previousBySetNumber[setNumber]
             database.workoutDao().insertSet(
                 WorkoutSet(
                     id = id, workoutExerciseId = workoutExerciseId, sessionId = sessionId,
                     exerciseId = exerciseId, setNumber = setNumber,
-                    reps = prefillFrom?.reps, weightKg = prefillFrom?.weightKg,
-                    durationSeconds = prefillFrom?.durationSeconds, distanceMeters = prefillFrom?.distanceMeters,
+                    reps = null, weightKg = null,
+                    durationSeconds = null, distanceMeters = null,
                     setType = "NORMAL", completedAt = null
                 )
             )
@@ -530,11 +654,28 @@ class WorkoutRepository @Inject constructor(
     suspend fun exerciseHistory(exerciseId: String): List<WorkoutSet> =
         database.workoutDao().setsHistoryForExercise(exerciseId)
 
+    /** Item 6 fix #3 — batched resolve: one `getByIds` round trip instead of one `getById` per id
+     *  (`resolveExercise` called in a loop, up to 42 sequential Room queries between the two
+     *  callers below). The builtin fallback per miss is now O(1) too (`ExerciseCatalog.byId`'s
+     *  index, item 6 fix #4). */
+    private suspend fun resolveExerciseIds(ids: List<String>): Map<String, CatalogExercise> {
+        val roomRows = database.exerciseDao().getByIds(ids).associateBy { it.id }
+        val out = LinkedHashMap<String, CatalogExercise>(ids.size)
+        for (id in ids) {
+            val resolved = roomRows[id]?.toCatalogExercise() ?: exerciseCatalog.byId(id)?.toCatalogExercise()
+            if (resolved != null) out[id] = resolved
+        }
+        return out
+    }
+
     /** Add-Exercise picker's "Recent" section (§2.9 — wires up the previously-dead
      *  `WorkoutDao.recentExerciseIds`) — the exercises most recently used in any session, resolved
      *  and kept in that recency order. */
-    suspend fun recentExercises(): List<CatalogExercise> =
-        database.workoutDao().recentExerciseIds().mapNotNull { resolveExercise(it) }
+    suspend fun recentExercises(): List<CatalogExercise> {
+        val ids = database.workoutDao().recentExerciseIds()
+        val resolved = resolveExerciseIds(ids)
+        return ids.mapNotNull { resolved[it] }
+    }
 
     /**
      * Feature addition — Add-Exercise's default "Frequently logged" view: the top [limit]
@@ -546,8 +687,9 @@ class WorkoutRepository @Inject constructor(
      */
     suspend fun frequentlyLoggedExercises(limit: Int = 10): List<CatalogExercise> {
         val counts = database.workoutDao().mostLoggedExercises(limit * 3)
+        val resolved = resolveExerciseIds(counts.map { it.exerciseId })
         return counts
-            .mapNotNull { c -> resolveExercise(c.exerciseId)?.let { it to c.setCount } }
+            .mapNotNull { c -> resolved[c.exerciseId]?.let { it to c.setCount } }
             .sortedWith(compareByDescending<Pair<CatalogExercise, Int>> { it.second }.thenBy { it.first.name.lowercase() })
             .take(limit)
             .map { it.first }

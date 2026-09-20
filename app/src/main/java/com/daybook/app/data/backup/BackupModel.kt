@@ -27,7 +27,32 @@ data class DaybookBackup(
     val meta: BackupMeta,
     val definitions: Definitions,
     /** Sorted ascending by `date`. */
-    val days: List<DayEntry>
+    val days: List<DayEntry>,
+    /**
+     * Item 12 (BEAST_MODE_ROUND_2026-09-16_PLAN.md, open question 2 — owner's decision: phone-
+     * only, NOT in cloud sync, but included in the manual "Export my data" file). `@EncodeDefault
+     * (NEVER)` so every existing file, and every cloud-sync/month-doc export (which must NEVER
+     * carry these — a single photo can approach a whole month document's 1 MB hard limit), stays
+     * byte-identical: this field is populated ONLY by `ExportImportRepository.exportAllData()`,
+     * the one function behind the user-initiated "Share backup" button — `CloudSyncRepository`
+     * calls `exportBackup()` directly and never sees this populated. See
+     * `WorkoutSessionPhoto`'s KDoc for the full "why not sync" reasoning.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val workoutPhotos: List<WorkoutPhotoBlob> = emptyList()
+)
+
+/** Item 12 — one photo, base64-encoded, for the manual export file only (see [DaybookBackup
+ *  .workoutPhotos]'s KDoc). Never round-trips through cloud sync. */
+@Serializable
+data class WorkoutPhotoBlob(
+    val id: String,
+    val sessionId: String,
+    val orderIndex: Int,
+    /** ISO-8601 UTC. */
+    val createdAt: String,
+    /** The JPEG bytes `WorkoutPhotoStore` already downscaled to ~150-300 KB, base64-encoded. */
+    val base64Jpeg: String
 )
 
 @Serializable
@@ -272,6 +297,10 @@ data class HealthDayLog(
     val nutritionCalories: Float? = null, val nutritionProteinGrams: Float? = null,
     val nutritionCarbsGrams: Float? = null, val nutritionFatGrams: Float? = null,
     val nutritionSourceApp: String? = null,
+    /** Build 50 — see `HealthDay.activitySourceApps`'s KDoc. `@EncodeDefault(NEVER)` so a day
+     *  predating this round (or synced from a build that doesn't have it yet) stays byte-identical. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val activitySourceApps: String? = null,
     val sessions: List<HealthSessionLog> = emptyList(),
     /** HEALTH_VITALS_RICHNESS_PLAN.md §5 — empty == omitted, same explicitNulls=false
      *  hash-neutrality rule as every other list field on this model. */

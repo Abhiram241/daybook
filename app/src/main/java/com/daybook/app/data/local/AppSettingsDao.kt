@@ -180,4 +180,59 @@ interface AppSettingsDao {
 
     @Query("UPDATE app_settings SET hydration_unit = :unit WHERE id = 1")
     suspend fun updateHydrationUnit(unit: String)
+
+    // Item 2 (DB v32).
+    @Query("UPDATE app_settings SET exercise_details_prompt_dismissed = :v WHERE id = 1")
+    suspend fun updateExerciseDetailsPromptDismissed(v: Boolean)
+
+    // Build 50 item 2 (DB v33) — rest timer alert tone.
+    @Query("UPDATE app_settings SET rest_timer_sound_uri = :v WHERE id = 1")
+    suspend fun updateRestTimerSoundUri(v: String?)
+
+    // Owner feedback round 2 (2026-09-20) (DB v35) — one setting per data point, replacing the
+    // single combined `health_source_activity` setter above (still declared for schema validity —
+    // see `AppSettings.healthSourceActivity`'s KDoc — but no longer written by any caller).
+    @Query("UPDATE app_settings SET health_source_steps = :v WHERE id = 1")
+    suspend fun updateHealthSourceSteps(v: String?)
+    @Query("UPDATE app_settings SET health_source_distance = :v WHERE id = 1")
+    suspend fun updateHealthSourceDistance(v: String?)
+    @Query("UPDATE app_settings SET health_source_calories = :v WHERE id = 1")
+    suspend fun updateHealthSourceCalories(v: String?)
+    @Query("UPDATE app_settings SET health_source_heart_rate = :v WHERE id = 1")
+    suspend fun updateHealthSourceHeartRate(v: String?)
+    @Query("UPDATE app_settings SET health_source_spo2 = :v WHERE id = 1")
+    suspend fun updateHealthSourceSpo2(v: String?)
+    @Query("UPDATE app_settings SET health_source_hydration = :v WHERE id = 1")
+    suspend fun updateHealthSourceHydration(v: String?)
+    @Query("UPDATE app_settings SET health_source_weight = :v WHERE id = 1")
+    suspend fun updateHealthSourceWeight(v: String?)
+    @Query("UPDATE app_settings SET health_source_nutrition = :v WHERE id = 1")
+    suspend fun updateHealthSourceNutrition(v: String?)
+    @Query("UPDATE app_settings SET activity_source_backfill_done = :v WHERE id = 1")
+    suspend fun updateActivitySourceBackfillDone(v: Boolean)
+
+    // Owner feedback round 3 (2026-09-20) (DB v36) — ranked ordered list per metric, replacing the
+    // single-pick columns above (still declared for schema validity, no longer written).
+    @Query("UPDATE app_settings SET health_source_steps_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceStepsRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_distance_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceDistanceRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_calories_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceCaloriesRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_heart_rate_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceHeartRateRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_spo2_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceSpo2Ranked(v: String?)
+    @Query("UPDATE app_settings SET health_source_hydration_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceHydrationRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_weight_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceWeightRanked(v: String?)
+    @Query("UPDATE app_settings SET health_source_nutrition_ranked = :v WHERE id = 1")
+    suspend fun updateHealthSourceNutritionRanked(v: String?)
+
+    // Owner feedback round 3 (2026-09-20) (DB v37) — Hydration-as-Intake.
+    @Query("UPDATE app_settings SET hydration_reminder_time = :v WHERE id = 1")
+    suspend fun updateHydrationReminderTime(v: String)
+    @Query("UPDATE app_settings SET hydration_task_id = :v WHERE id = 1")
+    suspend fun updateHydrationTaskId(v: String?)
 }

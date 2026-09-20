@@ -96,10 +96,28 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
     val day = state.day
     val agg = state.rangeAggregate
     val isDay = state.mode == HealthTabMode.DAY
+    // UI fix (owner review of the Health tab screenshot, build 50) — "tapping ANY health tile must
+    // surface the data source". Steps/Calories/Heart rate/Oxygen/Hydration all come from the same
+    // combined Health Connect aggregate read (`HealthConnectReader.dayAggregate`), so they share
+    // one source line; Session/Nutrition/Weight already had their own per-record source before
+    // this fix (`HealthSessionDetailSheet`'s "Source" row, this file's own NUTRITION/WEIGHT branch).
+    //
+    // [owner feedback, 2026-09-20] — a historical day whose row was written before
+    // `activity_source_apps` existed (MIGRATION_32_33, nullable, no backfill at ALTER time) has
+    // this null forever unless re-synced — `HealthRepository.backfillActivitySourceApps` now fills
+    // most of those in, but the raw csv can still be null for a day that genuinely has zero
+    // recorded activity data, or before that one-time backfill has run. [activityRawCsv] is looked
+    // up per-branch through [sourceRowValue] so the "Source unknown" fallback only ever appears
+    // alongside a kind that actually rendered SOME value — a day with nothing to show for a kind
+    // still shows nothing for it.
+    val activityRawCsv = if (isDay) day?.activitySourceApps else agg.activitySourceApps
     when (kind) {
         HealthCardKind.STEPS -> {
+            val steps = if (isDay) day?.steps else agg.stepsAvg
+            val distance = if (isDay) day?.distanceMeters else agg.distanceMetersAvg
             DetailRow("Steps", if (isDay) day?.steps?.let { formatHealthCount(it) } else agg.stepsAvg?.let { "${formatHealthCount(it.toLong())} avg/day" })
             DetailRow("Distance", if (isDay) day?.distanceMeters?.let { formatHealthDistanceKm(it) } else agg.distanceMetersAvg?.let { "${formatHealthDistanceKm(it.toFloat())} avg/day" })
+            DetailRow("Source", sourceRowValue(activityRawCsv, hasData = steps != null || distance != null))
         }
         HealthCardKind.CALORIES -> {
             val active = if (isDay) day?.activeCalories else agg.activeCaloriesAvg?.toFloat()
@@ -109,8 +127,13 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
             if (active != null && total != null && total >= active) {
                 DetailRow("Estimated resting", formatHealthCalories(total - active))
             }
+            DetailRow("Source", sourceRowValue(activityRawCsv, hasData = active != null || total != null))
         }
         HealthCardKind.HEART_RATE -> {
+            val avg = if (isDay) day?.avgHeartRate else agg.avgHeartRateAvg
+            val resting = if (isDay) day?.restingHeartRate else agg.restingHeartRateAvg
+            val min = if (isDay) day?.minHeartRate else agg.minHeartRateAvg
+            val max = if (isDay) day?.maxHeartRate else agg.maxHeartRateAvg
             if (isDay) {
                 DetailRow("Average", day?.avgHeartRate?.let { "$it bpm" })
                 DetailRow("Resting", day?.restingHeartRate?.let { "$it bpm" })
@@ -122,6 +145,7 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
                 DetailRow("Lowest", agg.minHeartRateAvg?.let { "${it.roundToInt()} bpm avg/day" })
                 DetailRow("Highest", agg.maxHeartRateAvg?.let { "${it.roundToInt()} bpm avg/day" })
             }
+            DetailRow("Source", sourceRowValue(activityRawCsv, hasData = avg != null || resting != null || min != null || max != null))
             HelpCaption("Heart rate is read as a daily average, resting rate and range — never a raw per-minute feed, to keep Health Connect reads light on battery.")
         }
         HealthCardKind.SLEEP -> {
@@ -160,12 +184,24 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
             DetailRow("Average", v?.let { "${"%.0f".format(it)}%" })
             DetailRow("Lowest", min?.let { "${"%.0f".format(it)}%" })
             DetailRow("Highest", max?.let { "${"%.0f".format(it)}%" })
+            DetailRow("Source", sourceRowValue(activityRawCsv, hasData = v != null || min != null || max != null))
             HelpCaption("Health Connect gives Daybook one averaged oxygen-saturation reading per day, not each individual sample your band took.")
         }
         HealthCardKind.WEIGHT -> {
             val v = if (isDay) day?.weightKg else agg.weightKgAvg?.toFloat()
             DetailRow(if (isDay) "Weight" else "Average weight", v?.let { "${"%.1f".format(it)} kg" })
             if (isDay) {
+                // Newest-first (`observeWeightReadingsForDay`'s own ordering) — the latest
+                // reading is what `weightKg` above actually shows, so its source is the
+                // relevant one to attribute. `weight_readings`/`sourceApp` predates this round's
+                // backfill gap (always populated whenever there was any reading at all), so this
+                // fallback only ever fires for the (rarer) case of a reading with no `sourceApp`.
+                val weightSourceApp = state.dayWeightReadings.firstOrNull()?.sourceApp
+                DetailRow(
+                    "Source",
+                    SourceAppLabels.labelFor(weightSourceApp)?.let { "From $it" }
+                        ?: state.dayWeightReadings.firstOrNull()?.let { "Source unknown (synced before source tracking was added)" }
+                )
                 HelpCaption("This is the last reading Health Connect had for the day, if you weighed in more than once.")
                 WeightReadingsList(state.dayWeightReadings)
             }
@@ -174,6 +210,7 @@ private fun DetailRows(kind: HealthCardKind, state: HealthTabUiState) {
             val v = if (isDay) day?.hydrationMl else agg.hydrationMlAvg?.toFloat()
             DetailRow("Hydration", v?.let { "${"%.0f".format(it)} ml" })
             DetailRow("In litres", v?.let { "${"%.2f".format(it / 1000f)} L" })
+            DetailRow("Source", sourceRowValue(activityRawCsv, hasData = v != null))
         }
         HealthCardKind.NUTRITION -> {
             val cal = if (isDay) day?.nutritionCalories else agg.nutritionCaloriesAvg?.toFloat()
@@ -226,6 +263,17 @@ private fun WeightReadingsList(readings: List<HealthWeightReading>) {
             }
         }
     }
+}
+
+/** [owner feedback, 2026-09-20] — resolves a "Source" row's value from a raw
+ *  `activitySourceApps` CSV, falling back to an explicit "unknown" caption (instead of silently
+ *  omitting the row) whenever [hasData] is true but the CSV has nothing to attribute — the
+ *  `activity_source_apps` backfill gap (see [DetailRows]'s own KDoc). When [hasData] is false,
+ *  returns null so the Source row disappears entirely, same as before: a day with nothing to show
+ *  for this kind still shows nothing. */
+private fun sourceRowValue(rawCsv: String?, hasData: Boolean): String? {
+    val labeled = SourceAppLabels.labelForCsv(rawCsv)?.let { "From $it" }
+    return labeled ?: if (hasData) "Source unknown (synced before source tracking was added)" else null
 }
 
 @Composable
@@ -293,6 +341,57 @@ fun HealthSessionDetailSheet(
             DetailRow("Distance", session.distanceMeters?.let { formatHealthDistanceKm(it) })
             DetailRow("Average heart rate", session.avgHeartRate?.let { "$it bpm" })
             DetailRow("Source", SourceAppLabels.labelFor(session.sourceApp) ?: "Another app")
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** R-2 fix (HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md) — the owner's "tapping it must show the
+ *  split" ask: the individual Health Connect segments a [com.daybook.app.data.health
+ *  .HealthSessionGroup] tile summed, each with its own time/duration/distance at a glance; tapping
+ *  one opens [HealthSessionDetailSheet] (via [onOpenSession]) for the fuller per-record detail —
+ *  duration, calories, average heart rate and source — this sheet doesn't have room for. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HealthSessionGroupDetailSheet(
+    group: com.daybook.app.data.health.HealthSessionGroup?,
+    onDismiss: () -> Unit,
+    onOpenSession: (HealthSession) -> Unit
+) {
+    if (group == null) return
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = DaybookColors.Surface,
+        shape = AppShapes.sheet
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {
+            Text(group.label, style = DaybookText.SectionTitle, color = DaybookColors.TextPrimary)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${group.sessions.size} segments · ${formatHealthDuration(group.totalDurationMinutes)}" +
+                    (group.totalDistanceMeters?.let { " · " + formatHealthDistanceKm(it) } ?: ""),
+                style = DaybookText.Caption, color = DaybookColors.TextMuted
+            )
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = DaybookColors.Hairline)
+            for (session in group.sessions) {
+                androidx.compose.foundation.layout.Row(
+                    Modifier.fillMaxWidth().clickable { onOpenSession(session) }.padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(millisToTime(session.startMillis), style = DaybookText.CardTitle, color = DaybookColors.TextPrimary)
+                        Text(
+                            formatHealthDuration(session.durationMinutes) +
+                                (session.distanceMeters?.let { " · " + formatHealthDistanceKm(it) } ?: ""),
+                            style = DaybookText.Caption, color = DaybookColors.TextMuted
+                        )
+                    }
+                }
+                HorizontalDivider(color = DaybookColors.Hairline)
+            }
             Spacer(Modifier.height(12.dp))
         }
     }

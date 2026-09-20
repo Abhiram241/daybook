@@ -40,6 +40,7 @@ import com.daybook.app.data.model.WorkoutExercise
 import com.daybook.app.data.model.WorkoutRoutine
 import com.daybook.app.data.model.WorkoutRoutineExercise
 import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.model.WorkoutSessionPhoto
 import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.data.model.HealthDay
 import com.daybook.app.data.model.HealthSession
@@ -67,7 +68,9 @@ import javax.inject.Singleton
 class ExportImportRepository @Inject constructor(
     private val database: AppDatabase,
     private val jsonUtils: JsonUtils,
-    private val notificationIds: NotificationIdSequence
+    private val notificationIds: NotificationIdSequence,
+    // Item 12 — restoring a manual export's `workoutPhotos` (see `importAllData`).
+    private val workoutPhotoStore: WorkoutPhotoStore
 ) {
     private companion object {
         val HHMM: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -111,8 +114,30 @@ class ExportImportRepository @Inject constructor(
      * The cloud-sync path must NOT go through here — it needs the [DaybookBackup] object, and
      * `jsonUtils.decode(exportAllData())` was serialising the entire history to a pretty-printed
      * String and parsing it straight back on every debounced push (§1 D1). Call [exportBackup].
+     *
+     * Item 12 — this is also the ONE place workout photos ride along (owner's decision, open
+     * question 2): `exportBackup()` itself never populates them (see [DaybookBackup
+     * .workoutPhotos]'s KDoc) — they're attached here, after the fact, with a plain `.copy()`.
      */
-    suspend fun exportAllData(): String = jsonUtils.encode(exportBackup())
+    suspend fun exportAllData(): String = jsonUtils.encode(exportBackup().copy(workoutPhotos = exportWorkoutPhotoBlobs()))
+
+    /** Item 12 — reads every session photo file into a base64 blob. Best-effort: a photo whose
+     *  file is missing (a prior cleanup bug, external deletion) is skipped rather than failing
+     *  the whole export — the user's actual data (habits/workouts/etc.) must never be held
+     *  hostage by a photo file that no longer exists. */
+    private suspend fun exportWorkoutPhotoBlobs(): List<com.daybook.app.data.backup.WorkoutPhotoBlob> =
+        database.workoutPhotoDao().getAll().mapNotNull { photo ->
+            runCatching {
+                val bytes = java.io.File(photo.filePath).readBytes()
+                com.daybook.app.data.backup.WorkoutPhotoBlob(
+                    id = photo.id,
+                    sessionId = photo.sessionId,
+                    orderIndex = photo.orderIndex,
+                    createdAt = jsonUtils.toIso(photo.createdAt),
+                    base64Jpeg = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                )
+            }.getOrNull()
+        }
 
     /**
      * v0.5.3 Phase 6 (D2): the same [DaybookBackup] builder as [exportBackup], but with `days`
@@ -241,6 +266,11 @@ class ExportImportRepository @Inject constructor(
                 database.workoutDao().deleteAllSets()
                 database.workoutDao().deleteAllExercises()
                 database.workoutDao().deleteAllSessions()
+                // Item 12 fix — every session is about to be deleted; its photo ROWS must go with
+                // it. The actual FILES are reclaimed by `WorkoutPhotoStore.sweepOrphans` (the
+                // daily worker) rather than threading a collected-paths list through this
+                // full-wipe path — see that function's KDoc.
+                database.workoutPhotoDao().deleteAll()
                 database.routineDao().deleteAllRoutineExercises()
                 database.routineDao().deleteAllRoutines()
                 database.exerciseDao().deleteAll()
@@ -526,6 +556,7 @@ class ExportImportRepository @Inject constructor(
                 nutritionCalories = d.nutritionCalories, nutritionProteinGrams = d.nutritionProteinGrams,
                 nutritionCarbsGrams = d.nutritionCarbsGrams, nutritionFatGrams = d.nutritionFatGrams,
                 nutritionSourceApp = d.nutritionSourceApp,
+                activitySourceApps = d.activitySourceApps,
                 sessions = sessionsByDate[d.localDate].orEmpty().sortedBy { it.startMillis }.map { s ->
                     HealthSessionLog(
                         id = s.id, exerciseType = s.exerciseType, title = s.title,
@@ -556,77 +587,10 @@ class ExportImportRepository @Inject constructor(
         }
     }
 
-    /** B5 — the inverse of [exportHealthByLocalDate]: `DayEntry.health` -> flat entity lists. */
-    private fun mapDaysToHealth(
-        days: List<DayEntry>
-    ): Triple<List<HealthDay>, List<HealthSession>, List<HealthWeightReading>> {
-        val now = System.currentTimeMillis()
-        val healthDays = ArrayList<HealthDay>()
-        val healthSessions = ArrayList<HealthSession>()
-        val weightReadings = ArrayList<HealthWeightReading>()
-        for (day in days) {
-            val h = day.health ?: continue
-            healthDays += HealthDay(
-                localDate = day.date, steps = h.steps, distanceMeters = h.distanceMeters,
-                activeCalories = h.activeCalories, totalCalories = h.totalCalories,
-                restingHeartRate = h.restingHeartRate, avgHeartRate = h.avgHeartRate,
-                minHeartRate = h.minHeartRate, maxHeartRate = h.maxHeartRate,
-                sleepMinutes = h.sleepMinutes, sleepDeepMinutes = h.sleepDeepMinutes,
-                sleepLightMinutes = h.sleepLightMinutes, sleepRemMinutes = h.sleepRemMinutes,
-                sleepAwakeMinutes = h.sleepAwakeMinutes,
-                sleepStartMillis = h.sleepStartMillis, sleepEndMillis = h.sleepEndMillis,
-                spo2Percent = h.spo2Percent,
-                spo2MinPercent = h.spo2MinPercent, spo2MaxPercent = h.spo2MaxPercent,
-                weightKg = h.weightKg, hydrationMl = h.hydrationMl,
-                nutritionCalories = h.nutritionCalories, nutritionProteinGrams = h.nutritionProteinGrams,
-                nutritionCarbsGrams = h.nutritionCarbsGrams, nutritionFatGrams = h.nutritionFatGrams,
-                nutritionSourceApp = h.nutritionSourceApp, updatedAt = now
-            )
-            for (s in h.sessions) {
-                healthSessions += HealthSession(
-                    id = s.id, localDate = day.date, exerciseType = s.exerciseType, title = s.title,
-                    startMillis = s.startMillis, endMillis = s.endMillis,
-                    durationMinutes = s.durationMinutes, activeCalories = s.activeCalories,
-                    distanceMeters = s.distanceMeters, avgHeartRate = s.avgHeartRate,
-                    sourceApp = s.sourceApp, updatedAt = now
-                )
-            }
-            // HealthWeightReadingLog carries no id (§5 — it's not a Health Connect record once it
-            // has round-tripped through a JSON backup); date+millis is stable across re-imports of
-            // the same file, so the synthesized id still upserts cleanly rather than duplicating.
-            for (w in h.weightReadings) {
-                weightReadings += HealthWeightReading(
-                    id = "${day.date}:${w.atMillis}", localDate = day.date,
-                    atMillis = w.atMillis, weightKg = w.weightKg, sourceApp = w.sourceApp
-                )
-            }
-        }
-        return Triple(healthDays, healthSessions, weightReadings)
-    }
-
-    /** DAILY_REPORT_PLAN.md §3.6 — the inverse of [exportAiSummaryByLocalDate]: `DayEntry.aiSummary`
-     *  -> flat entity list, ready to upsert. */
-    private fun mapDaysToHydration(days: List<DayEntry>): List<com.daybook.app.data.model.HydrationDay> {
-        val now = System.currentTimeMillis()
-        return days.mapNotNull { day ->
-            day.hydrationMl?.takeIf { it > 0 }?.let {
-                com.daybook.app.data.model.HydrationDay(localDate = day.date, amountMl = it, updatedAt = now)
-            }
-        }
-    }
-
-    private fun mapDaysToAiSummary(days: List<DayEntry>): List<DailyReportAiSummary> {
-        val out = ArrayList<DailyReportAiSummary>()
-        for (day in days) {
-            val a = day.aiSummary ?: continue
-            out += DailyReportAiSummary(
-                localDate = day.date, provider = a.provider, model = a.model,
-                summaryText = a.summaryText, generatedAt = a.generatedAt,
-                settingsFingerprint = a.settingsFingerprint
-            )
-        }
-        return out
-    }
+    // mapDaysToHealth / mapDaysToHydration / mapDaysToAiSummary moved to top-level pure functions
+    // (below `defsDelta`) — S-1 fix (AUDIT_2026-09-16.md) needs them testable without Room, exactly
+    // like `defsDelta` already is for S-2. Call syntax at every use site above is unchanged (Kotlin
+    // resolves an unqualified call to a top-level function in the same file the same way).
 
     /**
      * A4 — the inverse of [exportWorkoutsByLocalDate]: `DayEntry.workouts` -> flat entity lists,
@@ -811,6 +775,20 @@ class ExportImportRepository @Inject constructor(
             // DAILY_REPORT_PLAN.md §3.6 — full-replace also covers the cached AI summaries.
             val aiSummaries = mapDaysToAiSummary(backup.days)
             val hydrationDays = mapDaysToHydration(backup.days)
+            // Item 12 — decode + write every photo's bytes to a fresh file BEFORE the transaction
+            // (disk I/O has no business holding a database write lock, same rule every other
+            // photo-cleanup path in this file follows). Best-effort per photo: a blob that fails
+            // to decode/write is skipped rather than failing the whole import.
+            val workoutPhotos = backup.workoutPhotos.mapNotNull { blob ->
+                runCatching {
+                    val bytes = android.util.Base64.decode(blob.base64Jpeg, android.util.Base64.NO_WRAP)
+                    val path = workoutPhotoStore.saveImportedPhoto(bytes)
+                    WorkoutSessionPhoto(
+                        id = blob.id, sessionId = blob.sessionId, filePath = path,
+                        orderIndex = blob.orderIndex, createdAt = jsonUtils.fromIso(blob.createdAt) ?: System.currentTimeMillis()
+                    )
+                }.getOrNull()
+            }
 
             database.withTransaction {
                 // Order matters only for readability — there are no FK constraints.
@@ -827,6 +805,8 @@ class ExportImportRepository @Inject constructor(
                 database.workoutDao().deleteAllSets()
                 database.workoutDao().deleteAllExercises()
                 database.workoutDao().deleteAllSessions()
+                // Item 12 fix — see the identical comment in `importBeastModeBackup` above.
+                database.workoutPhotoDao().deleteAll()
                 database.routineDao().deleteAllRoutineExercises()
                 database.routineDao().deleteAllRoutines()
                 database.exerciseDao().deleteAll()
@@ -859,6 +839,7 @@ class ExportImportRepository @Inject constructor(
                 if (healthWeightReadings.isNotEmpty()) database.healthDao().upsertWeightReadings(healthWeightReadings)
                 if (aiSummaries.isNotEmpty()) database.dailyReportAiSummaryDao().upsertAll(aiSummaries)
                 if (hydrationDays.isNotEmpty()) database.hydrationDao().upsertAll(hydrationDays)
+                if (workoutPhotos.isNotEmpty()) database.workoutPhotoDao().insertAll(workoutPhotos)
             }
 
             ImportResult(
@@ -895,7 +876,13 @@ class ExportImportRepository @Inject constructor(
             return ImportResult(success = false, message = UNSUPPORTED)
         }
         return try {
-            val defsResult = applyRemoteDefinitions(backup.definitions)
+            // S-2 fix — a Daybook-kind file (or any file whose customExercises/routines are both
+            // empty, which is what a Daybook-kind file always looks like) never carries the
+            // Beast Mode definitions, so it must never prune them.
+            val defsResult = applyRemoteDefinitions(
+                backup.definitions,
+                exercisesAndRoutinesAuthoritative(backup.meta, backup.definitions)
+            )
             if (!defsResult.success) return defsResult
             val byMonth = com.daybook.app.data.sync.MonthPartitioner.partition(backup.days)
             for ((monthKey, days) in byMonth) {
@@ -1142,26 +1129,37 @@ class ExportImportRepository @Inject constructor(
                 if (incomingExercises.isNotEmpty()) database.workoutDao().insertExercises(incomingExercises)
                 if (incomingSets.isNotEmpty()) database.workoutDao().insertSets(incomingSets)
 
-                // B5 (§7.5.0) — health merges the same delete-then-insert-over-this-month's-range
-                // way workouts do: a day's aggregate is simply present or not, nothing to diff.
+                // S-1 fix (AUDIT_2026-09-16.md) — this used to be an unconditional delete-then-
+                // insert over the whole month's local_date range, which silently destroyed any
+                // health/AI/hydration row for a date the incoming payload simply didn't carry that
+                // data type for — e.g. a device with no band pushes a habit edit, and every other
+                // device's health history for that month is wiped on merge. Give health, AI
+                // summaries and hydration the same keep-local-if-not-named rule workout sessions
+                // already have (staleSessionIds above): clear a date only when the incoming payload
+                // itself names that date for that data type.
                 val (incomingHealthDays, incomingHealthSessions, incomingHealthWeightReadings) = mapDaysToHealth(days)
-                database.healthDao().deleteSessionsInLocalDateRange(monthStartYmd, monthEndYmd)
-                database.healthDao().deleteDaysInLocalDateRange(monthStartYmd, monthEndYmd)
-                database.healthDao().deleteWeightReadingsBetween(monthStartYmd, monthEndYmd)
+                val incomingHealthDayDates = incomingHealthDays.map { it.localDate }.distinct()
+                val incomingHealthSessionDates = incomingHealthSessions.map { it.localDate }.distinct()
+                val incomingWeightReadingDates = incomingHealthWeightReadings.map { it.localDate }.distinct()
+                if (incomingHealthSessionDates.isNotEmpty()) database.healthDao().deleteSessionsByLocalDates(incomingHealthSessionDates)
+                if (incomingHealthDayDates.isNotEmpty()) database.healthDao().deleteDaysByLocalDates(incomingHealthDayDates)
+                if (incomingWeightReadingDates.isNotEmpty()) database.healthDao().deleteWeightReadingsByLocalDates(incomingWeightReadingDates)
                 if (incomingHealthDays.isNotEmpty()) database.healthDao().upsertDays(incomingHealthDays)
                 if (incomingHealthSessions.isNotEmpty()) database.healthDao().upsertSessions(incomingHealthSessions)
                 if (incomingHealthWeightReadings.isNotEmpty()) database.healthDao().upsertWeightReadings(incomingHealthWeightReadings)
 
-                // DAILY_REPORT_PLAN.md §3.6 — the AI summary merges the same delete-then-insert-
-                // over-this-month's-range way health/workouts do: at most one row per day, nothing
-                // to diff.
+                // DAILY_REPORT_PLAN.md §3.6 — the AI summary merges the same keep-local-if-not-
+                // named way as above: at most one row per day, cleared only for dates the payload
+                // actually carries a summary for.
                 val incomingAiSummaries = mapDaysToAiSummary(days)
-                database.dailyReportAiSummaryDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
+                val incomingAiSummaryDates = incomingAiSummaries.map { it.localDate }.distinct()
+                if (incomingAiSummaryDates.isNotEmpty()) database.dailyReportAiSummaryDao().deleteByLocalDates(incomingAiSummaryDates)
                 if (incomingAiSummaries.isNotEmpty()) database.dailyReportAiSummaryDao().upsertAll(incomingAiSummaries)
 
-                // Hydration habit — same delete-then-insert over this month's range.
+                // Hydration habit — same keep-local-if-not-named rule.
                 val incomingHydration = mapDaysToHydration(days)
-                database.hydrationDao().deleteInLocalDateRange(monthStartYmd, monthEndYmd)
+                val incomingHydrationDates = incomingHydration.map { it.localDate }.distinct()
+                if (incomingHydrationDates.isNotEmpty()) database.hydrationDao().deleteByLocalDates(incomingHydrationDates)
                 if (incomingHydration.isNotEmpty()) database.hydrationDao().upsertAll(incomingHydration)
             }
             ImportResult(success = true, message = "$monthKey: ${days.size} days")
@@ -1184,7 +1182,10 @@ class ExportImportRepository @Inject constructor(
      *  - **never touch** `habit_events`, `food_med_events`, `habit_occurrences`,
      *    `food_med_occurrences`.
      */
-    suspend fun applyRemoteDefinitions(defs: Definitions): ImportResult {
+    suspend fun applyRemoteDefinitions(
+        defs: Definitions,
+        exercisesAndRoutinesAuthoritative: Boolean = true
+    ): ImportResult {
         if (defs.habits.isEmpty() && defs.intakeReminders.isEmpty()) {
             return ImportResult(success = false, message = UNSUPPORTED)
         }
@@ -1268,9 +1269,18 @@ class ExportImportRepository @Inject constructor(
 
                 // A4: upsert incoming custom exercises, delete local ones absent from the remote set.
                 if (remoteExercises.isNotEmpty()) database.exerciseDao().insertAll(remoteExercises)
-                val (_, staleExercises) = defsDelta(database.exerciseDao().allIds().toSet(), remoteExerciseIds)
-                staleExercises.chunked(SQLITE_MAX_VARS).forEach {
-                    if (it.isNotEmpty()) database.exerciseDao().deleteByIds(it)
+                // S-2 fix (AUDIT_2026-09-16.md) — a "Daybook" range file deliberately zeroes
+                // definitions.customExercises/.routines (exportDaybookRange), so the delta below
+                // would previously see an empty remote set and delete EVERY local custom exercise
+                // and routine for all time, orphaning the workout sets logged against them. Only
+                // the cloud parent-doc path (whose definitions genuinely are the full remote state)
+                // and a file that actually carries exercises/routines get to prune; a Daybook-kind
+                // or empty-definitions file only upserts.
+                if (exercisesAndRoutinesAuthoritative) {
+                    val (_, staleExercises) = defsDelta(database.exerciseDao().allIds().toSet(), remoteExerciseIds)
+                    staleExercises.chunked(SQLITE_MAX_VARS).forEach {
+                        if (it.isNotEmpty()) database.exerciseDao().deleteByIds(it)
+                    }
                 }
 
                 // A4: a routine's child rows are replaced wholesale with its parent — delete by
@@ -1280,10 +1290,12 @@ class ExportImportRepository @Inject constructor(
                 if (remoteRoutineExercises.isNotEmpty()) {
                     database.routineDao().upsertRoutineExercises(remoteRoutineExercises)
                 }
-                val (_, staleRoutines) = defsDelta(database.routineDao().allIds().toSet(), remoteRoutineIds)
-                if (staleRoutines.isNotEmpty()) {
-                    staleRoutines.forEach { database.routineDao().deleteRoutineExercises(it) }
-                    database.routineDao().deleteByIds(staleRoutines.toList())
+                if (exercisesAndRoutinesAuthoritative) {
+                    val (_, staleRoutines) = defsDelta(database.routineDao().allIds().toSet(), remoteRoutineIds)
+                    if (staleRoutines.isNotEmpty()) {
+                        staleRoutines.forEach { database.routineDao().deleteRoutineExercises(it) }
+                        database.routineDao().deleteByIds(staleRoutines.toList())
+                    }
                 }
             }
             ImportResult(
@@ -1332,6 +1344,12 @@ class ExportImportRepository @Inject constructor(
                     if (it.isNotEmpty()) {
                         database.workoutDao().deleteSetsForSessions(it)
                         database.workoutDao().deleteExercisesForSessions(it)
+                        // Item 12 fix — these sessions are genuinely being deleted here (unlike
+                        // importMonth's same-shaped loop above, which replaces-in-place). The
+                        // actual photo FILES are reclaimed by `WorkoutPhotoStore.sweepOrphans`
+                        // (the daily worker) rather than plumbing a collected-paths list back out
+                        // of this deeply-nested eviction transaction.
+                        database.workoutPhotoDao().deleteForSessions(it)
                     }
                 }
                 database.workoutDao().deleteSessionsInLocalDateRange(monthStartYmd, monthEndYmd)
@@ -1401,6 +1419,100 @@ internal fun defsDelta(
     localIds: Set<String>,
     remoteIds: Set<String>
 ): Pair<Set<String>, Set<String>> = remoteIds to (localIds - remoteIds)
+
+// ------------------------------------------------------------------ S-2 fix pure helper
+
+/**
+ * S-2 fix (AUDIT_2026-09-16.md) — whether [applyRemoteDefinitions] may prune local custom
+ * exercises/routines absent from [defs]. A "Daybook" range file (`meta.kind == KIND_DAYBOOK`)
+ * deliberately zeroes `customExercises`/`routines` (it isn't the Beast Mode file), so treating an
+ * empty remote set as authoritative used to delete every local custom exercise and routine for all
+ * time on any Daybook-file restore. Only a file that genuinely carries Beast Mode definitions (or
+ * the cloud parent-doc path, which never calls this — it always passes `true` explicitly) gets to
+ * prune. Pure — [ExportImportDefinitionsAuthorityTest] needs no Room.
+ */
+internal fun exercisesAndRoutinesAuthoritative(meta: BackupMeta, defs: Definitions): Boolean =
+    meta.kind != BackupMeta.KIND_DAYBOOK && (defs.customExercises.isNotEmpty() || defs.routines.isNotEmpty())
+
+// ------------------------------------------------------------------ S-1 fix pure helpers
+
+/** B5 — the inverse of `exportHealthByLocalDate`: `DayEntry.health` -> flat entity lists. Pure —
+ *  [ExportImportHealthMergeTest] needs no Room. Moved to top-level for the S-1 fix
+ *  (AUDIT_2026-09-16.md): [ExportImportRepository.importMonth] needs the exact set of dates this
+ *  returns entries for (a day with `health == null` must never be treated as "named" by the
+ *  incoming payload), and that set is simplest to get right when it's independently testable. */
+internal fun mapDaysToHealth(
+    days: List<DayEntry>
+): Triple<List<HealthDay>, List<HealthSession>, List<HealthWeightReading>> {
+    val now = System.currentTimeMillis()
+    val healthDays = ArrayList<HealthDay>()
+    val healthSessions = ArrayList<HealthSession>()
+    val weightReadings = ArrayList<HealthWeightReading>()
+    for (day in days) {
+        val h = day.health ?: continue
+        healthDays += HealthDay(
+            localDate = day.date, steps = h.steps, distanceMeters = h.distanceMeters,
+            activeCalories = h.activeCalories, totalCalories = h.totalCalories,
+            restingHeartRate = h.restingHeartRate, avgHeartRate = h.avgHeartRate,
+            minHeartRate = h.minHeartRate, maxHeartRate = h.maxHeartRate,
+            sleepMinutes = h.sleepMinutes, sleepDeepMinutes = h.sleepDeepMinutes,
+            sleepLightMinutes = h.sleepLightMinutes, sleepRemMinutes = h.sleepRemMinutes,
+            sleepAwakeMinutes = h.sleepAwakeMinutes,
+            sleepStartMillis = h.sleepStartMillis, sleepEndMillis = h.sleepEndMillis,
+            spo2Percent = h.spo2Percent,
+            spo2MinPercent = h.spo2MinPercent, spo2MaxPercent = h.spo2MaxPercent,
+            weightKg = h.weightKg, hydrationMl = h.hydrationMl,
+            nutritionCalories = h.nutritionCalories, nutritionProteinGrams = h.nutritionProteinGrams,
+            nutritionCarbsGrams = h.nutritionCarbsGrams, nutritionFatGrams = h.nutritionFatGrams,
+            nutritionSourceApp = h.nutritionSourceApp, activitySourceApps = h.activitySourceApps,
+            updatedAt = now
+        )
+        for (s in h.sessions) {
+            healthSessions += HealthSession(
+                id = s.id, localDate = day.date, exerciseType = s.exerciseType, title = s.title,
+                startMillis = s.startMillis, endMillis = s.endMillis,
+                durationMinutes = s.durationMinutes, activeCalories = s.activeCalories,
+                distanceMeters = s.distanceMeters, avgHeartRate = s.avgHeartRate,
+                sourceApp = s.sourceApp, updatedAt = now
+            )
+        }
+        // HealthWeightReadingLog carries no id (§5 — it's not a Health Connect record once it
+        // has round-tripped through a JSON backup); date+millis is stable across re-imports of
+        // the same file, so the synthesized id still upserts cleanly rather than duplicating.
+        for (w in h.weightReadings) {
+            weightReadings += HealthWeightReading(
+                id = "${day.date}:${w.atMillis}", localDate = day.date,
+                atMillis = w.atMillis, weightKg = w.weightKg, sourceApp = w.sourceApp
+            )
+        }
+    }
+    return Triple(healthDays, healthSessions, weightReadings)
+}
+
+/** The inverse of `exportHydrationByLocalDate`: `DayEntry.hydrationMl` -> flat entity list. */
+internal fun mapDaysToHydration(days: List<DayEntry>): List<com.daybook.app.data.model.HydrationDay> {
+    val now = System.currentTimeMillis()
+    return days.mapNotNull { day ->
+        day.hydrationMl?.takeIf { it > 0 }?.let {
+            com.daybook.app.data.model.HydrationDay(localDate = day.date, amountMl = it, updatedAt = now)
+        }
+    }
+}
+
+/** DAILY_REPORT_PLAN.md §3.6 — the inverse of `exportAiSummaryByLocalDate`: `DayEntry.aiSummary`
+ *  -> flat entity list, ready to upsert. */
+internal fun mapDaysToAiSummary(days: List<DayEntry>): List<DailyReportAiSummary> {
+    val out = ArrayList<DailyReportAiSummary>()
+    for (day in days) {
+        val a = day.aiSummary ?: continue
+        out += DailyReportAiSummary(
+            localDate = day.date, provider = a.provider, model = a.model,
+            summaryText = a.summaryText, generatedAt = a.generatedAt,
+            settingsFingerprint = a.settingsFingerprint
+        )
+    }
+    return out
+}
 
 // ------------------------------------------------------------------ Journal-as-habit round (B3)
 

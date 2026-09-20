@@ -65,6 +65,19 @@ interface HabitOccurrenceDao {
     @Query("UPDATE habit_occurrences SET snooze_count = snooze_count + 1, responded_at = :timestamp WHERE id = :occurrenceId")
     suspend fun incrementSnooze(occurrenceId: String, timestamp: Long)
 
+    /** B-2 fix (AUDIT_2026-09-16.md) — mirrors `FoodMedOccurrenceDao.bumpSnooze`: increments the
+     *  SAME counter [incrementSnooze] does, but without touching `responded_at`, since an
+     *  automatic re-nag (the user never touched the notification) is not a response. Used to
+     *  bound `AlarmReceiver`'s refire chain — see `OccurrenceScheduler.shouldRefireHabit`. */
+    @Query("UPDATE habit_occurrences SET snooze_count = snooze_count + 1 WHERE id = :occurrenceId")
+    suspend fun bumpSnooze(occurrenceId: String)
+
+    /** B-2 fix — status-only, single-row auto-skip: the refire chain giving up on one occurrence,
+     *  as opposed to [skipStaleForHabit]'s batch-by-habit-and-age sweep. No event, no
+     *  `responded_at`, matching that sweep's own shape exactly. */
+    @Query("UPDATE habit_occurrences SET status = 'SKIPPED' WHERE id = :occurrenceId AND status = 'PENDING'")
+    suspend fun autoSkipOccurrence(occurrenceId: String)
+
     /** v0.5.3 undo: back to a blank PENDING slot. Leaves events untouched (append-only history). */
     @Query("UPDATE habit_occurrences SET status = 'PENDING', responded_at = NULL, snooze_count = 0 WHERE id = :occurrenceId")
     suspend fun revertToPending(occurrenceId: String)

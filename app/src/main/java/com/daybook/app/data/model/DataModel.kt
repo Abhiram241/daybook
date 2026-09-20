@@ -374,7 +374,97 @@ data class AppSettings(
     /** Display unit, "ML" or "L". */
     @ColumnInfo(name = "hydration_unit", defaultValue = "L") val hydrationUnit: String = "L",
     /** "yyyy-MM-dd" the habit was (last) turned on; days before it never count as missed. */
-    @ColumnInfo(name = "hydration_enabled_since", defaultValue = "") val hydrationEnabledSince: String = ""
+    @ColumnInfo(name = "hydration_enabled_since", defaultValue = "") val hydrationEnabledSince: String = "",
+    // ---------------------------------------------------------------------------------------------
+    // BEAST_MODE_ROUND_2026-09-16_PLAN.md item 2 (MIGRATION_31_32). DEVICE-LOCAL — not in
+    // DATA_TABLES' hand-picked app_settings column set, not in BackupModel, not in ContentHash;
+    // identical treatment to every app_settings column since v16 (see that array's own comment in
+    // CloudSyncRepository.kt).
+    // ---------------------------------------------------------------------------------------------
+    /** "Never ask again" on the "some exercises are missing details" popup (Beast Mode Routines
+     *  landing). Re-enablable from Beast Mode Settings, which flips this back to false. */
+    @ColumnInfo(name = "exercise_details_prompt_dismissed", defaultValue = "0") val exerciseDetailsPromptDismissed: Boolean = false,
+
+    // ---------------------------------------------------------------------------------------------
+    // Build 50 (owner review, item 2 — MIGRATION_32_33). DEVICE-LOCAL, same treatment as every
+    // app_settings column since v16 (not in DATA_TABLES, not in BackupModel, not in ContentHash).
+    // ---------------------------------------------------------------------------------------------
+    /** The rest timer's alert tone, as a content `Uri.toString()` chosen from the system ringtone
+     *  picker (Beast Mode settings). Null/blank = the system default notification sound. Nullable,
+     *  NO schema default (mirrors `profile_photo_path`/`default_exercise_group`) — "never chosen"
+     *  must not collapse into any specific tone. */
+    @ColumnInfo(name = "rest_timer_sound_uri") val restTimerSoundUri: String? = null,
+
+    // ---------------------------------------------------------------------------------------------
+    // [owner feedback, 2026-09-20] (DB v34, MIGRATION_33_34). Four additive columns, DEVICE-LOCAL:
+    // NOT synced, NOT in BackupModel, NOT in ContentHash, same treatment as every app_settings
+    // column since v16 — a source preference / one-time backfill flag is a per-install choice,
+    // not user content to sync.
+    // ---------------------------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------
+    // Owner feedback round 2 (2026-09-20, DB v35, MIGRATION_34_35) — the single combined
+    // `health_source_activity` column above (Steps/Distance/Calories/Heart rate/SpO2/Hydration all
+    // sharing one preference) is split into one nullable column per data point, so "which app wins"
+    // can be chosen independently per metric (e.g. Mi Fitness for Steps, Google Fit for Heart
+    // rate). `HealthConnectReader.dayAggregate` now groups the metrics it requests by their
+    // *resolved* source preference and issues one Health Connect `aggregate()` call per distinct
+    // group — most installs leave everything on Auto (or all on one app), so this is still usually
+    // one call; only a owner who deliberately picks a different app per metric pays for more.
+    // DEVICE-LOCAL, same treatment as every app_settings column since v16.
+    // ---------------------------------------------------------------------------------------------
+    /** DEPRECATED (DB v35 split it into one column per data point below) — kept declared, unread by
+     *  any code, so Room's schema validation still matches the physical column MIGRATION_33_34
+     *  already added (SQLite `ALTER TABLE ... DROP COLUMN` would need a full table rebuild for a
+     *  device-local, already-orphaned value that isn't worth that churn). MIGRATION_34_35 copies
+     *  whatever was in here into every new per-metric column below, so an existing pick survives
+     *  the split instead of silently reverting to Auto. */
+    @ColumnInfo(name = "health_source_activity") val healthSourceActivity: String? = null,
+    /** Preferred Health Connect source package for Steps. Null = auto (deterministic first-seen
+     *  source, not a sum — see `HealthSourcePriority` KDoc). Nullable, NO schema default. */
+    @ColumnInfo(name = "health_source_steps") val healthSourceSteps: String? = null,
+    /** Preferred source for Distance. Same null=auto contract as [healthSourceSteps]. */
+    @ColumnInfo(name = "health_source_distance") val healthSourceDistance: String? = null,
+    /** Preferred source for Active + Total Calories. Same contract. */
+    @ColumnInfo(name = "health_source_calories") val healthSourceCalories: String? = null,
+    /** Preferred source for Heart rate (avg/min/max) and Resting heart rate. Same contract. */
+    @ColumnInfo(name = "health_source_heart_rate") val healthSourceHeartRate: String? = null,
+    /** Preferred source for SpO2. Same contract. */
+    @ColumnInfo(name = "health_source_spo2") val healthSourceSpo2: String? = null,
+    /** Preferred source for Hydration. Same contract. */
+    @ColumnInfo(name = "health_source_hydration") val healthSourceHydration: String? = null,
+    /** Preferred source for Weight readings. Same null=auto contract as [healthSourceSteps]. */
+    @ColumnInfo(name = "health_source_weight") val healthSourceWeight: String? = null,
+    /** Preferred source for Nutrition (calories/protein/carbs/fat). Same contract. */
+    @ColumnInfo(name = "health_source_nutrition") val healthSourceNutrition: String? = null,
+    /** One-time gate for [com.daybook.app.data.HealthRepository.backfillActivitySourceApps] — so a
+     *  historical day's `activity_source_apps` (added by MIGRATION_32_33, null-by-default for
+     *  every pre-existing row) gets backfilled exactly once, never repeated on every app start. */
+    @ColumnInfo(name = "activity_source_backfill_done", defaultValue = "0") val activitySourceBackfillDone: Boolean = false,
+
+    // ---------------------------------------------------------------------------------------------
+    // Owner feedback round 3 (2026-09-20, DB v36, MIGRATION_35_36) — the single-pick-per-metric
+    // health_source_* columns above become ranked, ordered lists (comma-joined package names, rank
+    // 0 = most preferred). Old singular columns stay in place, unread from here on. DEVICE-LOCAL.
+    // ---------------------------------------------------------------------------------------------
+    /** Rank-ordered, comma-joined package list for Steps. Null/blank = pure Auto. */
+    @ColumnInfo(name = "health_source_steps_ranked") val healthSourceStepsRanked: String? = null,
+    @ColumnInfo(name = "health_source_distance_ranked") val healthSourceDistanceRanked: String? = null,
+    @ColumnInfo(name = "health_source_calories_ranked") val healthSourceCaloriesRanked: String? = null,
+    @ColumnInfo(name = "health_source_heart_rate_ranked") val healthSourceHeartRateRanked: String? = null,
+    @ColumnInfo(name = "health_source_spo2_ranked") val healthSourceSpo2Ranked: String? = null,
+    @ColumnInfo(name = "health_source_hydration_ranked") val healthSourceHydrationRanked: String? = null,
+    @ColumnInfo(name = "health_source_weight_ranked") val healthSourceWeightRanked: String? = null,
+    @ColumnInfo(name = "health_source_nutrition_ranked") val healthSourceNutritionRanked: String? = null,
+
+    // ---------------------------------------------------------------------------------------------
+    // Owner feedback round 3 (2026-09-20, DB v37, MIGRATION_36_37) — Hydration-as-Intake.
+    // ---------------------------------------------------------------------------------------------
+    /** The reminder time ("HH:mm") for the system-managed Hydration Intake reminder. Default 21:00
+     *  (device-local wall clock, same convention as habit_checkin_time). */
+    @ColumnInfo(name = "hydration_reminder_time", defaultValue = "21:00") val hydrationReminderTime: String = "21:00",
+    /** The `food_med_tasks.id` of the system-managed Hydration Intake reminder, once created. Null
+     *  before that/if hydration has never been enabled since this round. */
+    @ColumnInfo(name = "hydration_task_id") val hydrationTaskId: String? = null
 )
 
 /**
@@ -393,7 +483,9 @@ data class AppSettings(
 // `TaskType.valueOf("JOURNAL")` still decodes losslessly; never reachable from the UI after this
 // round (filtered out of every `TaskType.entries` render; a freshly-imported legacy JOURNAL task
 // is remapped to CUSTOM by ExportImportRepository — see importAllData).
-@Serializable enum class TaskType { FOOD, MED, CUSTOM, JOURNAL }
+// HYDRATION appended (round 2026-09-20) — Hydration moves from a Beast-Mode/Home-only synthetic
+// construct to a first-class Intake task type. See SOURCE_PRIORITY_AND_HYDRATION_PLAN §2.
+@Serializable enum class TaskType { FOOD, MED, CUSTOM, JOURNAL, HYDRATION }
 
 /**
  * v0.5.4 — Crohn's food-diary trigger marker on a FOOD intake. Stored by name (Room) so NEVER

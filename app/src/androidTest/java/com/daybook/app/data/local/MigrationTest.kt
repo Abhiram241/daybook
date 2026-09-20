@@ -1529,6 +1529,385 @@ class MigrationTest {
         )
     }
 
+    // ------------------------------------------------------------ v30 -> v31 (Hydration habit)
+    // DI-2 fix (AUDIT_2026-09-16.md) — this migration shipped with no dedicated test at all; only
+    // `fullOpenAtLatestVersion()` touched it, and that test builds a database from scratch at the
+    // target version, where no migration ever runs — it asserted nothing. `MIGRATION_30_31` was
+    // hand-verified correct against `31.json` at audit time; these tests make that verification
+    // durable.
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate30To31_addsHydrationTableAndSettingsColumns() {
+        helper.createDatabase(TEST_DB, 30).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 31, true, MIGRATION_30_31)
+        db.query("SELECT * FROM hydration_days").use { c ->
+            assertTrue(c.columnNames.contains("local_date"))
+            assertTrue(c.columnNames.contains("amount_ml"))
+            assertTrue(c.columnNames.contains("updated_at"))
+        }
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing hydration_enabled", c.columnNames.contains("hydration_enabled"))
+            assertTrue("missing hydration_goal_ml", c.columnNames.contains("hydration_goal_ml"))
+            assertTrue("missing hydration_unit", c.columnNames.contains("hydration_unit"))
+            assertTrue("missing hydration_enabled_since", c.columnNames.contains("hydration_enabled_since"))
+        }
+        db.query(
+            "SELECT hydration_enabled, hydration_goal_ml, hydration_unit, hydration_enabled_since " +
+                "FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+            assertEquals(2000, c.getInt(1))
+            assertEquals("L", c.getString(2))
+            assertEquals("", c.getString(3))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate30To31_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 30).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 31, true, MIGRATION_30_31)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+        db.execSQL(
+            "INSERT INTO hydration_days (local_date, amount_ml, updated_at) VALUES ('2026-09-01', 1500, 1700000000000)"
+        )
+        db.query("SELECT amount_ml FROM hydration_days WHERE local_date = '2026-09-01'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(1500, c.getInt(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To31() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB, 31, true,
+            MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
+            MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29,
+            MIGRATION_29_30, MIGRATION_30_31
+        )
+    }
+
+    // ------------------------------------------------------------ v31 -> v32 (BEAST_MODE_ROUND_2026-09-16_PLAN.md §S1: items 2 + 12)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate31To32_addsSessionPhotosTableAndPromptDismissedColumn() {
+        helper.createDatabase(TEST_DB, 31).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 32, true, MIGRATION_31_32)
+        db.query("SELECT * FROM workout_session_photos").use { c ->
+            assertTrue(c.columnNames.contains("id"))
+            assertTrue(c.columnNames.contains("session_id"))
+            assertTrue(c.columnNames.contains("file_path"))
+            assertTrue(c.columnNames.contains("order_index"))
+            assertTrue(c.columnNames.contains("created_at"))
+        }
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue(
+                "missing exercise_details_prompt_dismissed",
+                c.columnNames.contains("exercise_details_prompt_dismissed")
+            )
+        }
+        db.query("SELECT exercise_details_prompt_dismissed FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate31To32_preservesExistingRowsAndAcceptsPhotoInserts() {
+        helper.createDatabase(TEST_DB, 31).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 32, true, MIGRATION_31_32)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+        db.execSQL(
+            "INSERT INTO workout_session_photos (id, session_id, file_path, order_index, created_at) " +
+                "VALUES ('p1', 's1', '/data/workout_photos/workout_1.jpg', 0, 1700000000000)"
+        )
+        db.query("SELECT session_id, file_path FROM workout_session_photos WHERE id = 'p1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("s1", c.getString(0))
+            assertEquals("/data/workout_photos/workout_1.jpg", c.getString(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To32() {
+        helper.createDatabase(TEST_DB, 3).close()
+        // ALL_MIGRATIONS' first element is MIGRATION_2_3 — every migrateAll_3ToXX test in this file
+        // starts the chain at v3 (schema v2 predates exportSchema=true, see this file's own header
+        // comment), so it's dropped here exactly like it's simply never listed in the others.
+        helper.runMigrationsAndValidate(TEST_DB, 32, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
+    // -------------------------------------------------- v33 -> v34 ([owner feedback, 2026-09-20])
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate33To34_addsHealthSourceAndBackfillColumns() {
+        helper.createDatabase(TEST_DB, 33).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 34, true, MIGRATION_33_34)
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing health_source_activity", c.columnNames.contains("health_source_activity"))
+            assertTrue("missing health_source_weight", c.columnNames.contains("health_source_weight"))
+            assertTrue("missing health_source_nutrition", c.columnNames.contains("health_source_nutrition"))
+            assertTrue(
+                "missing activity_source_backfill_done",
+                c.columnNames.contains("activity_source_backfill_done")
+            )
+        }
+        db.query(
+            "SELECT health_source_activity, health_source_weight, health_source_nutrition, " +
+                "activity_source_backfill_done FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.isNull(0))
+            assertTrue(c.isNull(1))
+            assertTrue(c.isNull(2))
+            assertEquals(0, c.getInt(3))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate33To34_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 33).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 34, true, MIGRATION_33_34)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To34() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(TEST_DB, 34, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
+    // -------------------------------------------------- v34 -> v35 (owner feedback round 2, 2026-09-20)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate34To35_addsPerMetricHealthSourceColumns() {
+        helper.createDatabase(TEST_DB, 34).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 35, true, MIGRATION_34_35)
+        db.query("SELECT * FROM app_settings").use { c ->
+            listOf(
+                "health_source_steps", "health_source_distance", "health_source_calories",
+                "health_source_heart_rate", "health_source_spo2", "health_source_hydration"
+            ).forEach { col -> assertTrue("missing $col", c.columnNames.contains(col)) }
+        }
+        db.query(
+            "SELECT health_source_steps, health_source_distance, health_source_calories, " +
+                "health_source_heart_rate, health_source_spo2, health_source_hydration FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            for (i in 0..5) assertTrue(c.isNull(i))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate34To35_seedsFromOldCombinedActivitySource() {
+        helper.createDatabase(TEST_DB, 34).apply {
+            execSQL("UPDATE app_settings SET health_source_activity = 'com.mi.health' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 35, true, MIGRATION_34_35)
+        db.query(
+            "SELECT health_source_steps, health_source_distance, health_source_calories, " +
+                "health_source_heart_rate, health_source_spo2, health_source_hydration FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            for (i in 0..5) assertEquals("com.mi.health", c.getString(i))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate34To35_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 34).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 35, true, MIGRATION_34_35)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To35() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(TEST_DB, 35, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
+    // -------------------------------------------------- v35 -> v36 (owner feedback round 3, 2026-09-20)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate35To36_addsRankedHealthSourceColumns() {
+        helper.createDatabase(TEST_DB, 35).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 36, true, MIGRATION_35_36)
+        db.query("SELECT * FROM app_settings").use { c ->
+            listOf(
+                "health_source_steps_ranked", "health_source_distance_ranked",
+                "health_source_calories_ranked", "health_source_heart_rate_ranked",
+                "health_source_spo2_ranked", "health_source_hydration_ranked",
+                "health_source_weight_ranked", "health_source_nutrition_ranked"
+            ).forEach { col -> assertTrue("missing $col", c.columnNames.contains(col)) }
+        }
+        db.query(
+            "SELECT health_source_steps_ranked, health_source_weight_ranked, " +
+                "health_source_nutrition_ranked FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            for (i in 0..2) assertTrue(c.isNull(i))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate35To36_seedsFromOldSingularColumns() {
+        helper.createDatabase(TEST_DB, 35).apply {
+            execSQL("UPDATE app_settings SET health_source_steps = 'com.google.android.apps.fitness', health_source_weight = 'com.mi.health' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 36, true, MIGRATION_35_36)
+        db.query(
+            "SELECT health_source_steps_ranked, health_source_weight_ranked FROM app_settings WHERE id = 1"
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("com.google.android.apps.fitness", c.getString(0))
+            assertEquals("com.mi.health", c.getString(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate35To36_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 35).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 36, true, MIGRATION_35_36)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To36() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(TEST_DB, 36, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
+    // -------------------------------------------------- v36 -> v37 (Hydration-as-Intake, 2026-09-20)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate36To37_addsHydrationReminderColumns() {
+        helper.createDatabase(TEST_DB, 36).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 37, true, MIGRATION_36_37)
+        db.query("SELECT * FROM app_settings").use { c ->
+            assertTrue("missing hydration_reminder_time", c.columnNames.contains("hydration_reminder_time"))
+            assertTrue("missing hydration_task_id", c.columnNames.contains("hydration_task_id"))
+        }
+        db.query("SELECT hydration_reminder_time, hydration_task_id FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("21:00", c.getString(0))
+            assertTrue(c.isNull(1))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate36To37_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 36).apply {
+            execSQL("UPDATE app_settings SET user_name = 'Alex' WHERE id = 1")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 37, true, MIGRATION_36_37)
+        db.query("SELECT user_name FROM app_settings WHERE id = 1").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("Alex", c.getString(0))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To37() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(TEST_DB, 37, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
+    // -------------------------------------------------- v37 -> v38 (Firebase Storage photo backup, 2026-09-20)
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate37To38_addsCloudPhotoColumns() {
+        helper.createDatabase(TEST_DB, 37).close()
+        val db = helper.runMigrationsAndValidate(TEST_DB, 38, true, MIGRATION_37_38)
+        db.query("SELECT * FROM workout_session_photos").use { c ->
+            assertTrue("missing cloud_path", c.columnNames.contains("cloud_path"))
+            assertTrue("missing cloud_uploaded_at", c.columnNames.contains("cloud_uploaded_at"))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrate37To38_preservesExistingRows() {
+        helper.createDatabase(TEST_DB, 37).apply {
+            execSQL(
+                "INSERT INTO workout_session_photos (id, session_id, file_path, order_index, created_at) " +
+                    "VALUES ('p1', 's1', '/tmp/p1.jpg', 0, 1000)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(TEST_DB, 38, true, MIGRATION_37_38)
+        db.query("SELECT file_path, cloud_path, cloud_uploaded_at FROM workout_session_photos WHERE id = 'p1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("/tmp/p1.jpg", c.getString(0))
+            assertTrue(c.isNull(1))
+            assertTrue(c.isNull(2))
+        }
+    }
+
+    @Test
+    @Throws(IOException::class)
+    fun migrateAll_3To38() {
+        helper.createDatabase(TEST_DB, 3).close()
+        helper.runMigrationsAndValidate(TEST_DB, 38, true, *ALL_MIGRATIONS.drop(1).toTypedArray())
+    }
+
     @Test
     @Throws(IOException::class)
     fun migrateAll_3To8() {
@@ -1549,17 +1928,20 @@ class MigrationTest {
         )
     }
 
+    /**
+     * DI-2 fix (AUDIT_2026-09-16.md) — this test used to hand-list its own migrations and had
+     * silently drifted stale at v28/29 (missing MIGRATION_29_30/30_31/31_32 entirely) with nothing
+     * to catch it: building a database from scratch at the LATEST version never actually exercises
+     * `addMigrations(...)` at all, so a stale list here asserted nothing about the newer
+     * migrations. Now reads `ALL_MIGRATIONS` (Migrations.kt) — the same array
+     * `DatabaseModule.provideDatabase` uses — so the two can never drift apart again; add a new
+     * migration to that one array and both call sites stay correct.
+     */
     @Test
     fun fullOpenAtLatestVersion() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         Room.databaseBuilder(context, AppDatabase::class.java, TEST_DB)
-            .addMigrations(
-                MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
-                MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
-                MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24,
-                MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28, MIGRATION_28_29
-            )
+            .addMigrations(*ALL_MIGRATIONS)
             .fallbackToDestructiveMigrationFrom(1)
             .build()
             .apply { openHelper.writableDatabase; close() }

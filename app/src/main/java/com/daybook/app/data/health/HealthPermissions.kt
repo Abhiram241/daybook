@@ -41,14 +41,17 @@ object HealthPermissions {
     )
 
     /**
-     * §5.1 R4 — `connect-client:1.1.0-alpha08` lacks the `PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND`
-     * / `PERMISSION_READ_HEALTH_DATA_HISTORY` constants (added alpha09/alpha10). The permission
-     * strings themselves are OS-level and stable, so they're declared as literals here — the exact
-     * same strings the manifest declares — and passed to the same request contract. If the older
-     * client's contract rejects an unknown string, the caller (`HealthRepository`) catches it and
-     * falls back to foreground-only + a 30-day window (§6.3/§6.2's "Permission sheet threw" row).
+     * §5.1 R4 — `connect-client:1.1.0-alpha08` lacks the `PERMISSION_READ_HEALTH_DATA_HISTORY`
+     * constant (added alpha10). The permission string itself is OS-level and stable, so it's
+     * declared as a literal here — the exact same string the manifest declares — and passed to the
+     * same request contract. If the older client's contract rejects an unknown string, the caller
+     * (`HealthRepository`) catches it and falls back to a 30-day window (§6.3/§6.2's "Permission
+     * sheet threw" row).
+     *
+     * B-5 fix (AUDIT_2026-09-20.md) — `PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND` removed: nothing
+     * in the app needs it (the only background read, the daily worker's `pullDaily()`, doesn't
+     * require it), and it was extra scope in the consent sheet for no corresponding feature.
      */
-    const val PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND = "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
     const val PERMISSION_READ_HEALTH_DATA_HISTORY = "android.permission.health.READ_HEALTH_DATA_HISTORY"
 
     /** Pure — no Health Connect call. The set of [required] not present in [granted]. */
@@ -68,9 +71,9 @@ object HealthPermissions {
      *  (§6.1.8), no optional extras (those are requested separately, §5.1/§6.3). */
     fun initialRequestSet(): Set<String> = MVP_READ_PERMISSIONS
 
-    /** The optional extras, requested separately per §6.3 — background reads + history depth. */
-    fun optionalExtras(): Set<String> =
-        setOf(PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND, PERMISSION_READ_HEALTH_DATA_HISTORY)
+    /** The optional extras, requested separately per §6.3 — history depth. B-5 fix — used to also
+     *  bundle `READ_HEALTH_DATA_IN_BACKGROUND`, which nothing in the app needs. */
+    fun optionalExtras(): Set<String> = setOf(PERMISSION_READ_HEALTH_DATA_HISTORY)
 
     /** Human-readable label for a permission string, for the "Which data is shared" sheet (§7.4). */
     val LABELS: Map<String, String> = mapOf(

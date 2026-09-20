@@ -55,8 +55,29 @@ import com.daybook.app.util.enums.Converters
     // (MIGRATION_28_29). Device-only — never in DATA_TABLES/BackupModel/ContentHash (S2).
     AiExclusion::class,
     // Hydration habit: one new table + four app_settings columns, 100% additive (MIGRATION_30_31).
-    com.daybook.app.data.model.HydrationDay::class
-], version = 31, exportSchema = true)
+    com.daybook.app.data.model.HydrationDay::class,
+    // BEAST_MODE_ROUND_2026-09-16_PLAN.md §S1: one new table + one app_settings column, 100%
+    // additive (MIGRATION_31_32). WorkoutSessionPhoto is device-local only — see its own KDoc.
+    com.daybook.app.data.model.WorkoutSessionPhoto::class
+    // Build 50 (owner review of the Health tab screenshot): two additive nullable columns, 100%
+    // additive (MIGRATION_32_33) — `health_days.activity_source_apps` (item 1 — "which app/device
+    // wrote this") and `app_settings.rest_timer_sound_uri` (item 2 — customizable rest-timer tone).
+    // See each column's own @ColumnInfo KDoc.
+    // [owner feedback, 2026-09-20]: four additive `app_settings` columns, 100% additive
+    // (MIGRATION_33_34) — `health_source_activity`/`health_source_weight`/`health_source_nutrition`
+    // (per-metric-family Health Connect source preference, used instead of naively summing every
+    // contributing app's records) and `activity_source_backfill_done` (one-time gate for the
+    // `activity_source_apps` historical backfill). See each column's own @ColumnInfo KDoc.
+    // Owner feedback round 2 (2026-09-20): six additive `app_settings` columns, 100% additive
+    // (MIGRATION_34_35) — `health_source_activity` split into one column per data point
+    // (`health_source_steps`/`_distance`/`_calories`/`_heart_rate`/`_spo2`/`_hydration`), seeded
+    // from the old combined value. See each column's own @ColumnInfo KDoc.
+    // Owner feedback round 3 (2026-09-20): eight additive `app_settings` *_ranked columns
+    // (MIGRATION_35_36) — single-pick-per-metric source preference upgraded to a ranked ordered
+    // list. Two additive `app_settings` columns (MIGRATION_36_37) — Hydration-as-Intake reminder
+    // time/task id. Two additive `workout_session_photos` columns (MIGRATION_37_38) — Firebase
+    // Storage backup (cloud_path/cloud_uploaded_at). See SOURCE_PRIORITY_AND_HYDRATION_PLAN.md.
+], version = 38, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun habitDao(): HabitDao
@@ -75,4 +96,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun dailyReportAiSummaryDao(): DailyReportAiSummaryDao
     abstract fun aiExclusionDao(): AiExclusionDao
     abstract fun hydrationDao(): HydrationDao
+    abstract fun workoutPhotoDao(): WorkoutPhotoDao
 }

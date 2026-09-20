@@ -58,13 +58,28 @@ class NotificationUtils @Inject constructor(
         // Settings exactly like the pre-v2 ids this list already exists to sweep.
         const val CHANNEL_HABITS = "habits_v2"
         const val CHANNEL_FOOD_MED = "food_med_v2"
+        /** Item 4 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the rest-timer alert. New, not a version
+         *  bump of an existing channel: this is a genuinely new kind of notification.
+         *
+         *  Build 50 item 2 fix — bumped v1 -> v2: the owner reported the rest-timer sound
+         *  following ringtone volume, not media volume. A `NotificationChannel`'s sound always
+         *  plays through `AudioAttributes.USAGE_NOTIFICATION` (routed to the ring/notification
+         *  stream on most devices, which is exactly the reported bug) and that attribute set can't
+         *  be changed after a channel exists — a fresh id is the only way to give this channel new
+         *  behavior. `v2` is created silent (`setSound(null, null)`, see `createNotificationChannels`)
+         *  and the actual audible tone is now played explicitly on the MEDIA stream by
+         *  [showRestDoneNotification] instead. */
+        const val CHANNEL_WORKOUT_REST = "workout_rest_v2"
 
         /** Pre-v2 IDs, deleted on startup so stale/blocked copies can't linger in Settings. */
-        private val LEGACY_CHANNEL_IDS = listOf("habits", "food_med")
+        private val LEGACY_CHANNEL_IDS = listOf("habits", "food_med", "workout_rest_v1")
 
         const val ACTION_FIRE = "com.daybook.app.ACTION_FIRE"
         /** v0.5.2: the app-wide BATCH habit check-in alarm. */
         const val ACTION_FIRE_BATCH = "com.daybook.app.ACTION_FIRE_BATCH"
+        /** Item 4 — one-shot: never re-arms itself, unlike [ACTION_FIRE]'s `isRefire` chain (see
+         *  `AlarmReceiver.fireRestDone`'s KDoc for why that distinction matters here). */
+        const val ACTION_REST_DONE = "com.daybook.app.ACTION_REST_DONE"
 
         /**
          * v0.5.2: combined BATCH habit check-in notification id. Fixed, below
@@ -72,6 +87,10 @@ class NotificationUtils @Inject constructor(
          * or its id*4+n request codes (999*4+3 = 3999 < 1000*4 = 4000).
          */
         const val BATCH_NOTIFICATION_ID = 999
+        /** Item 4 — fixed id, below the [NotificationIdSequence.START] floor (1_000), same
+         *  reasoning as [BATCH_NOTIFICATION_ID]. `998*4..998*4+3` (3992-3995) doesn't collide with
+         *  BATCH's own `999*4..999*4+3` (3996-3999) or any occurrence id's range (>= 4000). */
+        const val REST_NOTIFICATION_ID = 998
 
         const val EXTRA_OCCURRENCE_ID = "occurrence_id"
         const val EXTRA_IS_HABIT = "is_habit"
@@ -116,7 +135,24 @@ class NotificationUtils @Inject constructor(
             val foodMedChannel = NotificationChannel(
                 CHANNEL_FOOD_MED, "Intake prompts", NotificationManager.IMPORTANCE_HIGH
             ).apply { description = "Prompts to log what you had" }
-            notificationManager.createNotificationChannels(listOf(habitChannel, foodMedChannel))
+            // Item 4 — IMPORTANCE_HIGH + CATEGORY_REMINDER (set at post time) is what gets this
+            // vibration for free without declaring VIBRATE, and gives the user a real per-channel
+            // sound/vibration override in system Settings. Deliberately NOT `setOnlyAlertOnce` at
+            // the channel level (that's a per-notification flag, set — or rather, NOT set — at
+            // post time in `showRestDoneNotification`).
+            //
+            // Build 50 item 2 fix — `setSound(null, null)`: this channel is now silent by design.
+            // The audible tone is played separately, on the MEDIA stream, by
+            // `showRestDoneNotification` — see `CHANNEL_WORKOUT_REST`'s own KDoc for why a
+            // notification channel can't do that itself. Vibration is untouched (IMPORTANCE_HIGH
+            // still vibrates on its own).
+            val restChannel = NotificationChannel(
+                CHANNEL_WORKOUT_REST, "Rest timer", NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts when your workout rest timer ends"
+                setSound(null, null)
+            }
+            notificationManager.createNotificationChannels(listOf(habitChannel, foodMedChannel, restChannel))
         }
     }
 
@@ -133,8 +169,14 @@ class NotificationUtils @Inject constructor(
             return "Notifications are turned off for Daybook"
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            listOf(CHANNEL_HABITS to "Habit reminders", CHANNEL_FOOD_MED to "Intake prompts")
-                .forEach { (id, label) ->
+            // Item 4 fix — this list used to hardcode only the habit/food-med channels, so a rest
+            // alert was silently gated on whether HABIT reminders were enabled in Settings (the
+            // exact bug the plan's own "must be added here" note warns about).
+            listOf(
+                CHANNEL_HABITS to "Habit reminders",
+                CHANNEL_FOOD_MED to "Intake prompts",
+                CHANNEL_WORKOUT_REST to "Rest timer"
+            ).forEach { (id, label) ->
                     val ch = notificationManager.getNotificationChannel(id)
                         ?: return "The \"$label\" channel is missing"
                     if (ch.importance == NotificationManager.IMPORTANCE_NONE) {
@@ -222,6 +264,104 @@ class NotificationUtils @Inject constructor(
         alarmManager.cancel(firePendingIntent(occurrenceId, notificationId, isHabit, isRefire = true))
     }
 
+    // ---------------------------------------------------------------------- Rest timer (item 4)
+
+    /** Item 4 — its own `PendingIntent`, own request-code slot, own `Intent.action`. Deliberately
+     *  NOT [firePendingIntent]/[ACTION_FIRE]: that path's refire semantics (`isRefire`,
+     *  `scheduleReminderAlarm`) are exactly the unbounded re-nag pattern (battery finding B-2) a
+     *  rest alert must never inherit — giving this its own everything means there is no code path
+     *  by which a rest alert could enter that chain. */
+    private fun restFirePendingIntent(): PendingIntent {
+        val intent = Intent(context, AlarmReceiver::class.java).apply { action = ACTION_REST_DONE }
+        return PendingIntent.getBroadcast(
+            context, REST_NOTIFICATION_ID * 4 + RC_FIRE, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    /** [endsAtMillis] replaces any already-armed rest alarm (`FLAG_UPDATE_CURRENT` on the same
+     *  fixed request code) — starting a new rest before the old one fires never stacks two alarms. */
+    fun scheduleRestAlarm(endsAtMillis: Long) {
+        val pi = restFirePendingIntent()
+        val exact = canScheduleExactAlarms()
+        try {
+            if (exact) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endsAtMillis, pi)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endsAtMillis, pi)
+            }
+            Log.i(TAG, "armed ${if (exact) "exact" else "inexact"} rest alarm at=$endsAtMillis " +
+                "(in ${(endsAtMillis - System.currentTimeMillis()) / 1000}s)")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "exact alarm refused for rest timer, falling back to inexact", e)
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, endsAtMillis, pi)
+        }
+    }
+
+    /** Must be called at every point a rest timer stops being the one currently counting down —
+     *  see `WorkoutSessionViewModel`'s cancellation matrix (item 4's KDoc there) for the full list
+     *  of call sites. A leaked alarm here is a real, user-visible wakeup, not just a stale flag. */
+    fun cancelRestAlarm() { alarmManager.cancel(restFirePendingIntent()) }
+
+    /** Posted by `AlarmReceiver.fireRestDone` when the OS-held alarm actually fires — this must
+     *  work with the phone locked / the app fully backgrounded, which is exactly why item 4 uses
+     *  an `AlarmManager` alarm + notification rather than trying to keep a ViewModel coroutine
+     *  alive (impossible — see the item's root-cause analysis). Deliberately NOT
+     *  `setOnlyAlertOnce(true)`: unlike a re-firing reminder (where that flag stops a 200th refire
+     *  from re-alerting), every rest expiry is a distinct, one-shot event that must alert. */
+    /**
+     * Build 50 item 2 fix — [toneUri] (`app_settings.rest_timer_sound_uri`, null = system default
+     * notification sound) is now played explicitly on the MEDIA stream via [playRestTimerTone],
+     * NOT through the notification channel (silent since v2, see [CHANNEL_WORKOUT_REST]'s KDoc) —
+     * the owner's report was specifically that the alert followed ringtone volume, not media
+     * volume, which is a property of `AudioAttributes.USAGE_NOTIFICATION` (what every
+     * `NotificationChannel` sound plays through) that can't be changed per-channel.
+     */
+    fun showRestDoneNotification(toneUri: String? = null) {
+        val n = NotificationCompat.Builder(context, CHANNEL_WORKOUT_REST)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Rest over")
+            .setContentText("Time for your next set.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            // Recommendation taken (plan open question 5): CATEGORY_REMINDER, not CATEGORY_ALARM —
+            // a rest timer isn't an emergency and should respect Do Not Disturb like every other
+            // Daybook notification, matching every other `showXNotification` in this file.
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .build()
+        notify(REST_NOTIFICATION_ID, n)
+        playRestTimerTone(toneUri)
+    }
+
+    /**
+     * Build 50 item 2 fix — a short-lived `MediaPlayer` with `AudioAttributes.USAGE_MEDIA` /
+     * `CONTENT_TYPE_SONIFICATION`, so the rest-timer alert plays on the same volume slider as
+     * music/video rather than the ring/notification stream (`showRestDoneNotification`'s KDoc).
+     * [toneUri] null (never chosen in Beast Mode settings) falls back to the system default
+     * notification sound, same fallback `RingtoneManager` itself uses. Fire-and-forget: this is a
+     * broadcast-receiver call site (`AlarmReceiver.fireRestDone`) with no long-lived owner to hold
+     * the player, so it releases itself `onCompletion`/`onError` rather than being tracked.
+     */
+    private fun playRestTimerTone(toneUri: String?) {
+        runCatching {
+            val uri = toneUri?.let { android.net.Uri.parse(it) }
+                ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                ?: return
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            val player = android.media.MediaPlayer()
+            player.setAudioAttributes(attrs)
+            player.setDataSource(context, uri)
+            player.setOnCompletionListener { it.release() }
+            player.setOnErrorListener { mp, _, _ -> mp.release(); true }
+            player.prepare()
+            player.start()
+        }.onFailure { t -> Log.w(TAG, "rest timer tone playback failed", t) }
+    }
+
     // -------------------------------------------------------------- BATCH habit check-in (v0.5.2)
 
     private fun batchFirePendingIntent(): PendingIntent {
@@ -298,7 +438,9 @@ class NotificationUtils @Inject constructor(
      */
     private fun smallIconFor(type: TaskType?): Int = when (type) {
         TaskType.MED -> R.drawable.ic_notif_med
-        TaskType.FOOD, TaskType.CUSTOM, TaskType.JOURNAL -> R.drawable.ic_notif_food
+        // Hydration-as-Intake (2026-09-20) — no dedicated drawable; groups with the other
+        // non-MED intake types, same as FOOD/CUSTOM/JOURNAL.
+        TaskType.FOOD, TaskType.CUSTOM, TaskType.JOURNAL, TaskType.HYDRATION -> R.drawable.ic_notif_food
         null -> R.drawable.ic_notification
     }
 
@@ -371,10 +513,18 @@ class NotificationUtils @Inject constructor(
         promptMessage: String? = null
     ): Boolean {
         val isJournal = type == TaskType.JOURNAL
+        // Hydration-as-Intake (2026-09-20) — a free-text reply doesn't make sense for a liters
+        // amount; the inline "Reply" action is skipped below and the body copy points at the app
+        // instead of "Tap Reply".
+        val isHydration = type == TaskType.HYDRATION
         val prompt = resolvePrompt(promptMessage)
         // v0.5.2 §3 / SD-f: a JOURNAL prompt has no inline RemoteInput — the multi-line description
         // can only be collected on the journal page. The body tap opens it.
-        val body = if (isJournal) "Tap to write today's entry" else "$prompt Tap Reply to log it."
+        val body = when {
+            isJournal -> "Tap to write today's entry"
+            isHydration -> "Tap to log your water."
+            else -> "$prompt Tap Reply to log it."
+        }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_FOOD_MED)
             .setSmallIcon(smallIconFor(type))
@@ -393,7 +543,7 @@ class NotificationUtils @Inject constructor(
             .addAction(R.drawable.ic_snooze, "Snooze",
                 actionIntent(occurrence.id, occurrence.notificationId, NotificationActionReceiver.ACTION_SNOOZE, isHabit = false))
 
-        if (!isJournal) {
+        if (!isJournal && !isHydration) {
             val replyInput = RemoteInput.Builder(NotificationActionReceiver.REPLY_KEY)
                 .setLabel(prompt)
                 .build()

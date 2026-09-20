@@ -20,37 +20,37 @@ internal data class SleepSessionSpan(
 )
 
 /**
- * Clusters raw sleep sessions for one night into distinct sleep EPISODES: two sessions are the
- * SAME episode when either
- *  - their time ranges overlap (a re-sync that shortened or lengthened the boundary while the two
- *    spans still intersect — the original rule), or
- *  - they come from the SAME source app and the gap between one ending and the next starting is at
- *    most [maxGapMinutes] (default 30) — the "back-to-back re-sync" pattern above.
+ * Clusters raw sleep sessions for one night, collapsing only genuine DUPLICATES down to a single
+ * survivor. Two sessions are the same duplicated episode exactly when their time ranges literally
+ * overlap (a re-sync that reposted the same episode, shortened, lengthened, or with a corrected
+ * boundary that still intersects the earlier record) — clustering is transitive, so a chain of
+ * pairwise-overlapping sessions collapses to one cluster even if the first and last don't directly
+ * overlap each other. Within such a cluster, only the single most-recently-modified session
+ * survives, using **that session's own, unmodified** start/end — never a synthesized union.
  *
- * Deliberately conservative in both directions:
- *  - two sessions from DIFFERENT source apps are NEVER merged, even with a zero gap — a genuine nap
- *    logged by one tracker right before the main sleep starts on another is far more plausible than
- *    two different apps racing to log the exact same episode;
- *  - there's no cap on how many distinct episodes a night can have — a real nap hours before bedtime
- *    sits well outside [maxGapMinutes] of the main sleep and is correctly left as its own episode.
+ * HC-1 fix (AUDIT_2026-09-16.md) — a session that does NOT overlap any other is always kept, full
+ * stop, regardless of source app or how small the gap to its neighbour is. This is deliberate:
+ * a back-to-back CONTINUATION — e.g. 11:01pm–2:02am, then a second sync adds 2:02am–6:36am for the
+ * same night, same source app, zero gap — used to be folded into the overlapping session's cluster
+ * by an "adjacent same source" rule and wrongly reduced to whichever single half `maxBy` picked
+ * (losing the other half's sleep time entirely). Both halves are real, disjoint sleep time; the
+ * caller ([HealthConnectReader.sleepForDay]) already sums stage minutes and spans min(start)/
+ * max(end) across every session this function keeps, so simply keeping both is the whole fix —
+ * nothing needs to merge or sum here. A real nap hours before the main sleep, from the same or a
+ * different source app, was already (correctly) kept as its own episode before this fix and still
+ * is: it never overlapped anything to begin with.
  *
- * Within one merged cluster, only the single most-recently-modified session survives (the same
- * freshness rule the original overlap-only dedup used) — never a sum of all of them. A one- or
- * zero-element input is returned unchanged.
+ * A one- or zero-element input is returned unchanged.
  */
-internal fun clusterSleepSessions(sessions: List<SleepSessionSpan>, maxGapMinutes: Long = 30): List<SleepSessionSpan> {
+internal fun clusterSleepSessions(sessions: List<SleepSessionSpan>): List<SleepSessionSpan> {
     if (sessions.size <= 1) return sessions
     val sorted = sessions.sortedBy { it.startMillis }
     val clusters = mutableListOf<MutableList<SleepSessionSpan>>()
-    val maxGapMillis = maxGapMinutes * 60_000L
     for (s in sorted) {
         val cluster = clusters.lastOrNull()
         val clusterEnd = cluster?.maxOf { it.endMillis }
-        val clusterSource = cluster?.last()?.sourcePackage
         val overlaps = clusterEnd != null && s.startMillis < clusterEnd
-        val adjacentSameSource = clusterEnd != null && clusterSource == s.sourcePackage &&
-            (s.startMillis - clusterEnd) in 0..maxGapMillis
-        if (cluster != null && (overlaps || adjacentSameSource)) {
+        if (cluster != null && overlaps) {
             cluster += s
         } else {
             clusters += mutableListOf(s)

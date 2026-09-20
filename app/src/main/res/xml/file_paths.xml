@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="exports" path="exports/" />
+    <!-- Item 12 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the stock camera's capture target. Scoped
+         to the one subdirectory WorkoutPhotoStore writes to, not the whole files root. -->
+    <files-path name="workout_photos" path="workout_photos/" />
 </paths>

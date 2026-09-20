@@ -35,6 +35,11 @@ interface HydrationDao {
     @Query("DELETE FROM hydration_days WHERE local_date BETWEEN :startYmd AND :endYmd")
     suspend fun deleteInLocalDateRange(startYmd: String, endYmd: String)
 
+    /** S-1 fix — month-merge keep-local-if-not-named: only dates the incoming payload actually
+     *  carries an amount for are cleared, mirroring `WorkoutDao`'s `staleSessionIds`. */
+    @Query("DELETE FROM hydration_days WHERE local_date IN (:dates)")
+    suspend fun deleteByLocalDates(dates: List<String>)
+
     @Query("DELETE FROM hydration_days")
     suspend fun deleteAll()
 }

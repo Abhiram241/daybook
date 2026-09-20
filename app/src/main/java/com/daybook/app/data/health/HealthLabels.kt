@@ -92,4 +92,11 @@ object SourceAppLabels {
      *  unrecognised package. */
     fun labelFor(packageName: String?): String? =
         packageName?.let { MAP[it] ?: "another app" }
+
+    /** UI fix (build 50) — [HealthDay.activitySourceApps]' comma-separated form: every distinct
+     *  label from the CSV, joined "X, Y". Same null-means-no-attribution contract as [labelFor];
+     *  a blank string (no packages recorded) is also treated as "nothing to attribute". */
+    fun labelForCsv(csv: String?): String? =
+        csv?.takeIf { it.isNotBlank() }?.split(",")
+            ?.map { labelFor(it) ?: "another app" }?.distinct()?.joinToString(", ")
 }

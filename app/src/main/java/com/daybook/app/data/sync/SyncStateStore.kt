@@ -141,6 +141,19 @@ class SyncStateStore @Inject constructor(@ApplicationContext ctx: Context) {
         get() = prefs.getLong(KEY_BATCH_SNOOZE_UNTIL, 0L)
         set(v) = prefs.edit().putLong(KEY_BATCH_SNOOZE_UNTIL, v).apply()
 
+    /**
+     * B-3 fix (AUDIT_2026-09-16.md) — epoch millis `runMaintenance()` last actually ran (stamped by
+     * `runMaintenance()` itself, so either trigger below advances it). `runMaintenance()` does a
+     * full-database export + full month re-hash for eviction, and `MainActivity.onStop()` ->
+     * `onAppStop()` used to call it **unconditionally on every app-background** — 30 opens/closes a
+     * day meant 30 full-DB exports for maintenance alone. `onAppStop()` now skips its call within
+     * `MAINTENANCE_THROTTLE_MILLIS` of the last run; the daily `WindowRefreshWorker`'s call stays
+     * unconditional (it only fires on its own ~24h/6h-flex schedule regardless).
+     */
+    var lastMaintenanceAt: Long
+        get() = prefs.getLong(KEY_LAST_MAINTENANCE_AT, 0L)
+        set(v) = prefs.edit().putLong(KEY_LAST_MAINTENANCE_AT, v).apply()
+
     /** Wipe everything sync-related on sign-out so the next account starts clean. */
     fun clearForSignOut() {
         prefs.edit()
@@ -186,5 +199,7 @@ class SyncStateStore @Inject constructor(@ApplicationContext ctx: Context) {
         const val KEY_LAST_SYNCED_UID = "sync_last_synced_uid"
         /** LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 12 (N-3). */
         const val KEY_BATCH_SNOOZE_UNTIL = "batch_snooze_until"
+        /** B-3 fix (AUDIT_2026-09-16.md). */
+        const val KEY_LAST_MAINTENANCE_AT = "sync_last_maintenance_at"
     }
 }

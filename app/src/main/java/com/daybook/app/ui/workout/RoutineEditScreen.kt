@@ -47,6 +47,7 @@ import com.daybook.app.data.workout.MuscleGroup
 import com.daybook.app.ui.theme.CardTints
 import com.daybook.app.ui.theme.DaybookColors
 import com.daybook.app.ui.theme.DaybookText
+import com.daybook.app.ui.theme.IconButtonSize
 import com.daybook.app.ui.theme.Spacing
 import com.daybook.app.ui.workout.beast.muscleTint
 
@@ -190,11 +191,11 @@ private fun RoutineExerciseRow(
             Column {
                 CircleIconButton(
                     icon = Icons.Filled.KeyboardArrowUp, contentDescription = "Move up",
-                    onClick = onMoveUp, enabled = canMoveUp, size = 28.dp
+                    onClick = onMoveUp, enabled = canMoveUp, size = IconButtonSize.Sm.dp
                 )
                 CircleIconButton(
                     icon = Icons.Filled.KeyboardArrowDown, contentDescription = "Move down",
-                    onClick = onMoveDown, enabled = canMoveDown, size = 28.dp
+                    onClick = onMoveDown, enabled = canMoveDown, size = IconButtonSize.Sm.dp
                 )
             }
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)

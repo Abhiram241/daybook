@@ -2,8 +2,9 @@ package com.daybook.app.ui.workout
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,13 +16,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -36,15 +41,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.daybook.app.R
 import com.daybook.app.data.CatalogExercise
 import com.daybook.app.data.local.SessionAggregate
 import com.daybook.app.data.model.WorkoutSession
+import com.daybook.app.data.model.WorkoutSessionPhoto
 import com.daybook.app.data.workout.MuscleGroup
 import com.daybook.app.data.workout.MuscleGroupLabels
 import com.daybook.app.data.workout.WeightUnit
@@ -59,7 +72,10 @@ import com.daybook.app.ui.components.ScreenHeader
 import com.daybook.app.ui.components.SectionHeader
 import com.daybook.app.ui.components.SheetAction
 import com.daybook.app.ui.components.SoftCard
+import com.daybook.app.ui.components.SortOption
+import com.daybook.app.ui.components.SortSheet
 import com.daybook.app.ui.components.UndoSnack
+import com.daybook.app.ui.components.clickableImpl
 import com.daybook.app.ui.icons.DaybookIcons
 import com.daybook.app.ui.theme.AppShapes
 import com.daybook.app.ui.theme.CardTints
@@ -68,6 +84,8 @@ import com.daybook.app.ui.theme.DaybookText
 import com.daybook.app.ui.theme.LocalAccent
 import com.daybook.app.ui.theme.LocalReduceMotion
 import com.daybook.app.ui.theme.Motion
+import com.daybook.app.ui.theme.Spacing
+import java.io.File
 import com.daybook.app.ui.workout.beast.BeastPalette
 import com.daybook.app.ui.workout.beast.BeastText
 import com.daybook.app.ui.workout.beast.muscleTint
@@ -88,6 +106,7 @@ fun WorkoutHistoryScreen(
     contentPadding: PaddingValues,
     onOpenSession: (sessionId: String) -> Unit,
     onOpenDetail: (sessionId: String) -> Unit,
+    onOpenWorkoutSettings: () -> Unit,
     viewModel: WorkoutHistoryViewModel = hiltViewModel()
 ) {
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
@@ -95,6 +114,8 @@ fun WorkoutHistoryScreen(
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val availableExercises by viewModel.availableExercises.collectAsStateWithLifecycle()
     val selectedExercise by viewModel.selectedExercise.collectAsStateWithLifecycle()
+    val selectedMuscleGroupFilter by viewModel.selectedMuscleGroupFilter.collectAsStateWithLifecycle()
+    val groupingMode by viewModel.groupingMode.collectAsStateWithLifecycle()
     val deletedToken by viewModel.deletedToken.collectAsStateWithLifecycle()
     val actionToken by viewModel.actionToken.collectAsStateWithLifecycle()
     val actionText by viewModel.actionText.collectAsStateWithLifecycle()
@@ -103,6 +124,7 @@ fun WorkoutHistoryScreen(
     var overflowFor by remember { mutableStateOf<WorkoutSession?>(null) }
     var renaming by remember { mutableStateOf<WorkoutSession?>(null) }
     var showFilterSheet by remember { mutableStateOf(false) }
+    var showMuscleGroupSheet by remember { mutableStateOf(false) }
     val workoutIcon: ImageVector = ImageVector.vectorResource(id = R.drawable.ic_workout)
 
     LaunchedEffect(newSessionId) {
@@ -111,7 +133,22 @@ fun WorkoutHistoryScreen(
 
     Box(Modifier.fillMaxSize().background(BeastPalette.groundBrush())) {
         Column(Modifier.fillMaxSize()) {
-            ScreenHeader(title = "History", subtitle = "${sessions.size} workouts")
+            ScreenHeader(
+                title = "History",
+                subtitle = "${sessions.size} workouts",
+                actions = {
+                    // UI fix (AUDIT_2026-09-20.md §3) — History had no settings entry point at all.
+                    // Same Tonal/Lg style as the Health tab's gear (added alongside its existing
+                    // filter button) so the two Beast Mode header buttons match.
+                    CircleIconButton(
+                        icon = Icons.Filled.Settings,
+                        contentDescription = "Beast Mode settings",
+                        onClick = onOpenWorkoutSettings,
+                        style = com.daybook.app.ui.components.CircleStyle.Tonal,
+                        size = com.daybook.app.ui.theme.IconButtonSize.Lg.dp
+                    )
+                }
+            )
             if (sessions.isEmpty()) {
                 EmptyState(
                     icon = workoutIcon,
@@ -124,41 +161,53 @@ fun WorkoutHistoryScreen(
                     modifier = Modifier.padding(contentPadding)
                 )
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
-                    item {
-                        ExerciseFilterRow(
-                            selected = selectedExercise,
-                            onOpenPicker = { showFilterSheet = true },
-                            onClear = { viewModel.selectExerciseFilter(null) }
-                        )
-                    }
-                    if (selectedExercise != null && sections.isEmpty()) {
-                        item {
-                            EmptyState(
-                                icon = DaybookIcons.Category,
-                                title = "No matching workouts",
-                                body = "No session with \"${selectedExercise?.name}\" yet."
-                            )
+                // Item 13 (§13b) — pinned under ScreenHeader, OUTSIDE the LazyColumn: this used to
+                // be a single scroll-away chip (`ExerciseFilterRow`, an `item{}` inside the list)
+                // — a persistent bar is what makes "filter, then scroll" actually usable instead
+                // of the filter control disappearing the moment you scroll past it.
+                HistoryFilterBar(
+                    selectedMuscleGroup = selectedMuscleGroupFilter,
+                    onOpenMuscleGroupSheet = { showMuscleGroupSheet = true },
+                    onClearMuscleGroup = { viewModel.selectMuscleGroupFilter(null) },
+                    selectedExercise = selectedExercise,
+                    onOpenExerciseSheet = { showFilterSheet = true },
+                    onClearExercise = { viewModel.selectExerciseFilter(null) },
+                    groupingMode = groupingMode,
+                    onSetGroupingMode = { viewModel.setGroupingMode(it) }
+                )
+                if (sections.isEmpty()) {
+                    EmptyState(
+                        icon = DaybookIcons.Category,
+                        title = "No matching workouts",
+                        body = when {
+                            selectedExercise != null && selectedMuscleGroupFilter != null ->
+                                "No session with \"${selectedExercise?.name}\" in that muscle group yet."
+                            selectedExercise != null -> "No session with \"${selectedExercise?.name}\" yet."
+                            selectedMuscleGroupFilter != null -> "No session in that muscle group yet."
+                            else -> "Nothing to show."
                         }
-                    }
-                    sections.forEach { (label, rows) ->
-                        item { SectionHeader(label) }
-                        items(rows, key = { it.session.id }) { row ->
-                            SessionRow(
-                                row = row,
-                                weightUnit = weightUnit,
-                                // Item 2/6 (LOCKED) — Bolt for a no-routine/instant session's row,
-                                // the usual dumbbell for a routine-started one.
-                                icon = if (row.session.routineId == null) DaybookIcons.Bolt else workoutIcon,
-                                onClick = {
-                                    if (row.session.status == "ACTIVE") onOpenSession(row.session.id)
-                                    else onOpenDetail(row.session.id)
-                                },
-                                onOverflow = { overflowFor = row.session }
-                            )
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = contentPadding) {
+                        sections.forEach { (label, rows) ->
+                            item { SectionHeader(label) }
+                            items(rows, key = { it.session.id }) { row ->
+                                SessionRow(
+                                    row = row,
+                                    weightUnit = weightUnit,
+                                    // Item 2/6 (LOCKED) — Bolt for a no-routine/instant session's
+                                    // row, the usual dumbbell for a routine-started one.
+                                    icon = if (row.session.routineId == null) DaybookIcons.Bolt else workoutIcon,
+                                    onClick = {
+                                        if (row.session.status == "ACTIVE") onOpenSession(row.session.id)
+                                        else onOpenDetail(row.session.id)
+                                    },
+                                    onOverflow = { overflowFor = row.session }
+                                )
+                            }
                         }
+                        item { Spacer(Modifier.height(4.dp)) }
                     }
-                    item { Spacer(Modifier.height(4.dp)) }
                 }
             }
         }
@@ -203,24 +252,86 @@ fun WorkoutHistoryScreen(
             onDismiss = { showFilterSheet = false }
         )
     }
+
+    // Item 13 (§13b) — "the same muscleImageRes leading thumbnails the picker's sheet already
+    // renders" (AddExerciseScreen's own "Muscle group" SortSheet). Unlike that sheet, CARDIO is
+    // NOT excluded here — there's no separate Cardio chip in this 2-chip bar, so it must be
+    // reachable through this one picker like every other group.
+    SortSheet(
+        visible = showMuscleGroupSheet,
+        onDismiss = { showMuscleGroupSheet = false },
+        title = "Muscle group",
+        sortOptions = MuscleGroup.entries.map { g ->
+            val imageRes = muscleImageRes(g)
+            SortOption(
+                key = g.name,
+                label = MuscleGroupLabels[g].orEmpty(),
+                leadingImageRes = imageRes,
+                leadingIconVector = if (imageRes == null) DaybookIcons.Category else null
+            )
+        },
+        selectedSortKey = selectedMuscleGroupFilter?.name ?: "",
+        onSelectSort = { viewModel.selectMuscleGroupFilter(MuscleGroup.valueOf(it)) },
+        dismissOnSelect = true,
+        neutralHeader = true
+    )
 }
 
+/**
+ * Item 13 (§13a/§13b) — replaces the old scroll-away `ExerciseFilterRow` with a persistent bar:
+ * "Muscle Group ▾" / "Exercise ▾" (the two filters intersect when both are set — see
+ * `WorkoutHistoryViewModel.sections`), plus a third "Date ▾ / Muscle ▾" grouping-mode chip (open
+ * question 8's own recommendation). Reuses `DaybookChip` — the same component the picker's own
+ * filter bar (`AddExerciseScreen.PickerDockedBar`) is built from, per the plan's explicit "reuse
+ * the exact two-chip pattern" instruction — rather than that bar's Cardio-specific split, which
+ * doesn't apply here. Tapping an already-active chip clears it, identical semantics to before.
+ */
 @Composable
-private fun ExerciseFilterRow(selected: CatalogExercise?, onOpenPicker: () -> Unit, onClear: () -> Unit) {
+private fun HistoryFilterBar(
+    selectedMuscleGroup: MuscleGroup?,
+    onOpenMuscleGroupSheet: () -> Unit,
+    onClearMuscleGroup: () -> Unit,
+    selectedExercise: CatalogExercise?,
+    onOpenExerciseSheet: () -> Unit,
+    onClearExercise: () -> Unit,
+    groupingMode: HistoryGroupingMode,
+    onSetGroupingMode: (HistoryGroupingMode) -> Unit
+) {
+    // Owner feedback (2026-09-20) — all three chips must sit on one row, not two. `DaybookChip`
+    // already sizes to its own content (its inner `Text` is `maxLines = 1` +
+    // `TextOverflow.Ellipsis` inside a `weight(1f, fill = false)`), so dropping the old
+    // `Modifier.weight(1f)` constraint and putting all three in one horizontally-scrollable Row —
+    // instead of splitting the grouping chip onto a second Row — keeps every label fully legible
+    // (ellipsis only kicks in for a pathologically long exercise name) while guaranteeing the row
+    // never wraps, on any screen width.
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.screenH, vertical = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.chipGap)
     ) {
         DaybookChip(
-            label = selected?.name ?: "Filter by exercise",
-            selected = selected != null,
-            onClick = onOpenPicker,
-            leadingIcon = DaybookIcons.FilterList
+            label = selectedMuscleGroup?.let { "${MuscleGroupLabels[it].orEmpty()} ▾" } ?: "Muscle Group ▾",
+            selected = selectedMuscleGroup != null,
+            onClick = { if (selectedMuscleGroup != null) onClearMuscleGroup() else onOpenMuscleGroupSheet() },
+            modifier = Modifier.weight(1f)
         )
-        if (selected != null) {
-            Spacer(Modifier.width(8.dp))
-            CircleIconButton(icon = Icons.Filled.Close, contentDescription = "Clear filter", onClick = onClear, size = 32.dp)
-        }
+        DaybookChip(
+            label = selectedExercise?.let { "${it.name} ▾" } ?: "Exercise ▾",
+            selected = selectedExercise != null,
+            onClick = { if (selectedExercise != null) onClearExercise() else onOpenExerciseSheet() },
+            modifier = Modifier.weight(1f)
+        )
+        DaybookChip(
+            label = if (groupingMode == HistoryGroupingMode.DATE) "Date ▾" else "Muscle ▾",
+            selected = false,
+            onClick = {
+                onSetGroupingMode(
+                    if (groupingMode == HistoryGroupingMode.DATE) HistoryGroupingMode.MUSCLE else HistoryGroupingMode.DATE
+                )
+            },
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -277,10 +388,14 @@ private fun ExerciseFilterSheet(
             } else {
                 LazyColumn(modifier = Modifier.height(360.dp)) {
                     items(filtered, key = { it.id }) { ex ->
+                        // Item 13 (§13a) fix — this used to be a raw `Modifier.clickable`, the one
+                        // spot in this screen that skipped the app's no-ripple press wrapper every
+                        // other tappable row already uses.
+                        val interaction = remember { MutableInteractionSource() }
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clickable { onPick(ex) }
+                                .clickableImpl(interaction) { onPick(ex) }
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -319,9 +434,14 @@ private fun SessionRow(
                 hasStartPeak = row.thumbnail?.hasStartPeak ?: false,
                 fallbackIcon = icon,
                 tint = tint,
-                size = 52.dp
+                size = 52.dp,
+                // Item 3 — a session whose chosen exercise has no RepDB photo (item 11 already
+                // preferred one that does, when the session had any) still gets equipment or
+                // muscle art rather than the generic icon.
+                primaryMuscle = row.thumbnail?.primaryMuscle ?: MuscleGroup.OTHER,
+                equipment = row.thumbnail?.equipment ?: com.daybook.app.data.workout.Equipment.OTHER
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(Spacing.md))
             Column(Modifier.weight(1f)) {
                 Text(
                     if (isActive) "Workout in progress" else (session.title ?: session.localDate),
@@ -354,14 +474,102 @@ private fun SessionRow(
                             MuscleVolumeChart(
                                 breakdown = row.muscleVolume,
                                 weightUnit = weightUnit,
-                                tint = tint
+                                tint = tint,
+                                maxBars = if (row.photos.isNotEmpty()) 3 else 4
                             )
+                        }
+                        // Item 12 — below the muscle-group chart, i.e. below everything else in
+                        // the text column, per the spec ("below the workout image" — the image is
+                        // the 52dp thumbnail top-left; everything in this column is already below
+                        // it). A session with no photos is byte-identical to before this item.
+                        if (row.photos.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            SessionPhotoStrip(photos = row.photos)
                         }
                     }
                 }
             }
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(Spacing.xs))
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
+        }
+    }
+}
+
+/** Item 12 — up to 3 tiles, tap one for a full-screen pager viewer. Which photo (if any) is being
+ *  viewed full-screen is local state here, never needed by the caller. Fix 3 (owner report,
+ *  2026-09-20) — de-privatized and renamed from `HistoryPhotoStrip` so `WorkoutDetailScreen` can
+ *  reuse it verbatim instead of duplicating it. */
+@Composable
+fun SessionPhotoStrip(photos: List<WorkoutSessionPhoto>) {
+    var viewerStartIndex by remember { mutableStateOf<Int?>(null) }
+    val context = LocalContext.current
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.chipGap)) {
+        photos.forEachIndexed { index, photo ->
+            val interaction = remember { MutableInteractionSource() }
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(AppShapes.tile)
+                    .background(DaybookColors.SurfaceElevated)
+                    .clickableImpl(interaction) { viewerStartIndex = index }
+            ) {
+                AsyncImage(
+                    model = remember(photo.filePath) {
+                        ImageRequest.Builder(context)
+                            .data(File(photo.filePath))
+                            .diskCachePolicy(CachePolicy.DISABLED)
+                            .memoryCacheKey(photo.filePath)
+                            .crossfade(true)
+                            .build()
+                    },
+                    contentDescription = "Workout photo",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+    val startIndex = viewerStartIndex
+    if (startIndex != null) {
+        PhotoViewerDialog(photos = photos, startIndex = startIndex, onDismiss = { viewerStartIndex = null })
+    }
+}
+
+/** Item 12 — a plain full-screen dialog, horizontal pager across the session's photos, tap to
+ *  dismiss. No zoom library, matching the plan's explicit scope. */
+@Composable
+fun PhotoViewerDialog(
+    photos: List<WorkoutSessionPhoto>,
+    startIndex: Int,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        val pagerState = rememberPagerState(initialPage = startIndex, pageCount = { photos.size })
+        Box(Modifier.fillMaxSize().background(BeastPalette.ground())) {
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                val interaction = remember { MutableInteractionSource() }
+                Box(
+                    Modifier.fillMaxSize().clickableImpl(interaction, onDismiss),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = remember(photos[page].filePath) {
+                            ImageRequest.Builder(context)
+                                .data(File(photos[page].filePath))
+                                .diskCachePolicy(CachePolicy.DISABLED)
+                                .memoryCacheKey(photos[page].filePath)
+                                .build()
+                        },
+                        contentDescription = "Workout photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
 }
@@ -374,13 +582,17 @@ private fun SessionRow(
  * touching many muscles still fits a list card instead of turning it into a full chart screen.
  */
 @Composable
-private fun MuscleVolumeChart(
+fun MuscleVolumeChart(
     breakdown: List<Pair<MuscleGroup, Float>>,
     weightUnit: WeightUnit,
     tint: com.daybook.app.ui.theme.CardTint,
+    // Item 13 (§13c) — the plan's own deliberate card-height guard: 4 bars normally, capped to 3
+    // when the card also has a photo strip below it, so the two additions together don't grow the
+    // card unboundedly. A session with no photos is byte-identical to before this item.
+    maxBars: Int = 4,
     modifier: Modifier = Modifier
 ) {
-    val top = remember(breakdown) { breakdown.take(4) }
+    val top = remember(breakdown, maxBars) { breakdown.take(maxBars) }
     val maxVolume = top.first().second
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         top.forEach { (group, volume) ->

@@ -15,6 +15,7 @@ import com.daybook.app.data.backup.DaybookBackup
 import com.daybook.app.data.backup.Definitions
 import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.util.work.SyncFlushWorker
+import com.daybook.app.util.work.WorkoutPhotoUploadWorker
 import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.firestore.DocumentReference
@@ -196,6 +197,20 @@ class CloudSyncRepository @Inject constructor(
         Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
+     * R-1 fix (HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md) — the Health tab's own on-screen
+     * months (`HealthTabViewModel`'s `neededMonths`: Day mode's selected date + every month Range
+     * mode's span covers), kept separate from [pinnedMonths] for the exact reason [exportRangePins]
+     * already is (see its own KDoc): `HomeViewModel` and `HealthTabViewModel` used to share the one
+     * `pinnedMonths` set with no ownership tracking, so a Home-screen month navigation could
+     * `unpinMonth` a month Health's Range view was still actively showing — [evictStaleMonths]
+     * would then be free to delete it out from under that open screen, reintroducing build 49's
+     * own D-1 eviction bug one layer up. [pinHealthTabMonth]/[unpinHealthTabMonth] are this set's
+     * only writers.
+     */
+    private val healthTabPinnedMonths: MutableSet<String> =
+        Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
      * v0.5.3 Phase 1 (S9): months whose gzipped payload is over the 1 MiB hard doc limit. They are
      * skipped by [doPush] (a `batch.commit()` including one fails permanently) and retried only
      * once a later re-export drops them back under the limit.
@@ -254,6 +269,10 @@ class CloudSyncRepository @Inject constructor(
         runCatching { bootstrap(signedIn.uid) }
             .onFailure { Log.w(TAG, "bootstrap failed", it); _status.value = SyncStatus.Offline }
         attachSnapshotListeners(signedIn.uid)
+        // Firebase Storage backup round (2026-09-20) — a user who captured workout photos while
+        // signed out (or on another device) should have their backlog uploaded now there's a uid
+        // to attach it to.
+        WorkoutPhotoUploadWorker.enqueue(context)
     }
 
     /**
@@ -296,6 +315,7 @@ class CloudSyncRepository @Inject constructor(
         hydrationAttempted.clear()
         pinnedMonths.clear()
         exportRangePins.clear()   // v0.5.3 Phase 6 (D2)
+        healthTabPinnedMonths.clear()   // R-1 fix
         oversizedMonths.clear()
         // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 5 (S-4): the 8-table transaction above never
         // touched `app_settings` (deliberate — every device-scoped preference on it, like
@@ -337,7 +357,18 @@ class CloudSyncRepository @Inject constructor(
                 // attempt that finds nothing to send.
                 syncState.pendingPush = true
                 dirtyCounter.incrementAndGet()   // v0.5.3 Phase 1 (S10)
-                changes.tryEmit(Unit)
+                // B-1 fix (AUDIT_2026-09-16.md) — "at minimum move app_settings/ai_exclusions
+                // invalidation onto a separate coarser signal". These two tables carry mostly
+                // device-local preference columns (accent, font, nav tabs, quiet hours, …); a
+                // cosmetic tap used to feed the exact same fast debounced path as a real data
+                // edit, costing a full-database export + full month re-hash a few seconds later
+                // just to find nothing to push (`doPush`'s own hash gate runs AFTER that export).
+                // `pendingPush` is still set above either way, so the coarser signal is simply
+                // "don't force the export while still actively in the settings screen" — the
+                // immediate flush in `onAppStop` and the periodic worker still cover it promptly.
+                if (tables.any { it !in COARSE_SIGNAL_ONLY_TABLES }) {
+                    changes.tryEmit(Unit)
+                }
             }
         }
         trackerObserver = obs
@@ -762,9 +793,11 @@ class CloudSyncRepository @Inject constructor(
         val recent = MonthPartitioner.recentMonths()
         val known = syncState.monthHashes
         // v0.5.3 Phase 1 (S3): never evict a month the user is actively viewing (pinnedMonths), or
-        // one an in-flight date-range export is depending on (exportRangePins — Phase 6 / D2).
+        // one an in-flight date-range export is depending on (exportRangePins — Phase 6 / D2), or
+        // one the Health tab is actively showing (healthTabPinnedMonths — R-1 fix,
+        // HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md).
         val evictable = curHashes.keys.filter {
-            it !in recent && it !in pinnedMonths && it !in exportRangePins &&
+            it !in recent && it !in pinnedMonths && it !in exportRangePins && it !in healthTabPinnedMonths &&
                 known[it] == curHashes[it]
         }
         if (evictable.isEmpty()) return
@@ -806,6 +839,9 @@ class CloudSyncRepository @Inject constructor(
      */
     suspend fun runMaintenance() {
         if (conflictPaused) return
+        // B-3 fix (AUDIT_2026-09-16.md) — stamped unconditionally, whichever caller actually ran
+        // this, so `onAppStop`'s throttle check (below) reflects either trigger.
+        syncState.lastMaintenanceAt = System.currentTimeMillis()
         val cutoff = retentionCutoffMillis(System.currentTimeMillis())
         runCatching {
             database.withTransaction {
@@ -823,6 +859,11 @@ class CloudSyncRepository @Inject constructor(
     fun pinMonth(month: String) { pinnedMonths.add(month) }
     fun unpinMonth(month: String) { pinnedMonths.remove(month) }
     fun clearPins() { pinnedMonths.clear() }
+
+    /** R-1 fix — `HealthTabViewModel`'s own isolated pin set; see [healthTabPinnedMonths]'s KDoc
+     *  for why it's not just [pinMonth]/[unpinMonth] again. */
+    fun pinHealthTabMonth(month: String) { healthTabPinnedMonths.add(month) }
+    fun unpinHealthTabMonth(month: String) { healthTabPinnedMonths.remove(month) }
 
     // ------------------------------------------------------------------ v0.5.3 Phase 6 (D2 / S5)
 
@@ -871,13 +912,15 @@ class CloudSyncRepository @Inject constructor(
     /** v0.5.3 Phase 6 (D2): release the pins [hydrateRange] took. Call in the export's `finally`. */
     fun endRangeExport() {
         exportRangePins.clear()
-        // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 11 (S-8): a large date-range export can hydrate
-        // (and pin) far more than 30 months. Without this, `hydratedMonths` would sit swollen until
-        // the next daily `WindowRefreshWorker`/`onAppStop` maintenance tick happens to run
-        // `evictStaleMonths` — proactively kick that off now instead of waiting, reusing the exact
-        // same (already-safe: only evicts a hash-matching, non-pinned, non-recent month) logic
-        // `runMaintenance` already runs periodically.
-        scope.launch { runCatching { runMaintenance() } }
+        // DI-4 fix (AUDIT_2026-09-16.md) — this used to proactively `scope.launch { runMaintenance() }`
+        // right here (LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 11 / S-8's rationale: a large export can
+        // pin far more than 30 months, so evict promptly rather than waiting for the next tick).
+        // That coupling is exactly what turned a Hevy import's pin release into a destructive race:
+        // `runMaintenance` can evict a month the caller just pinned-and-unpinned before the caller
+        // has actually written anything into it. Eviction of a swollen `hydratedMonths` set is not
+        // urgent — the daily `WindowRefreshWorker` and `onAppStop` maintenance already cover it on
+        // their normal cadence. "I finished a range export" must not, by itself, trigger a
+        // destructive sweep.
     }
 
     /**
@@ -1341,7 +1384,17 @@ class CloudSyncRepository @Inject constructor(
         }
         // v0.5.3 Phase 1 (S3): eviction is off the push path — run it here, where the user is
         // leaving the screen, not mid-navigation.
-        scope.launch { runCatching { runMaintenance() } }
+        //
+        // B-3 fix (AUDIT_2026-09-16.md) — this used to be unconditional. `onStop` fires on every
+        // screen-off, app switch and Activity recreation, and `runMaintenance()` does a full-
+        // database export + full month re-hash — opening and leaving Daybook 30 times a day meant
+        // 30 full-DB exports for maintenance alone, on top of the identical cost on the push path
+        // (B-1). Skip the background-triggered run if one has happened recently; the daily
+        // `WindowRefreshWorker`'s call to `runMaintenance()` stays unconditional (own schedule).
+        val sinceLastMaintenance = System.currentTimeMillis() - syncState.lastMaintenanceAt
+        if (sinceLastMaintenance >= MAINTENANCE_THROTTLE_MILLIS) {
+            scope.launch { runCatching { runMaintenance() } }
+        }
     }
 
     /**
@@ -1475,7 +1528,17 @@ class CloudSyncRepository @Inject constructor(
     // internal (not private) so DataTablesSyncTest can reach DATA_TABLES from the test source set.
     internal companion object {
         const val TAG = "CloudSyncRepository"
-        const val DEBOUNCE_MS = 3_000L
+        // B-1 fix (AUDIT_2026-09-16.md) — was 3_000L. `doPush` (below) runs a full-database export
+        // + full per-month re-hash on every debounced fire; logging one set in a live workout could
+        // re-export and re-hash the whole database up to 30 times. Raising the debounce to 45s cuts
+        // that by roughly an order of magnitude for a burst of edits (a workout session, a batch of
+        // habit ticks) while `onAppStop`'s unconditional flush (see below) still guarantees nothing
+        // sits unpushed for more than the time the user has the app open.
+        const val DEBOUNCE_MS = 45_000L
+        /** B-3 fix (AUDIT_2026-09-16.md) — see `SyncStateStore.lastMaintenanceAt`'s KDoc. */
+        const val MAINTENANCE_THROTTLE_MILLIS = 6 * 60 * 60 * 1000L
+        /** B-1 fix — see `attachTracker`'s `onInvalidated` comment. */
+        val COARSE_SIGNAL_ONLY_TABLES = setOf("app_settings", "ai_exclusions")
         /**
          * LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 11 (S-9): [ensureMonthHydrated]'s bounded
          * retry-with-backoff on a server-unreachable result — 2 extra attempts, ~2.3s total, since

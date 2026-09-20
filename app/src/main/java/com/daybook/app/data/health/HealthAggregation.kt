@@ -27,6 +27,9 @@ data class HealthAggregate(
     val nutritionCarbsGramsAvg: Double?,
     val nutritionFatGramsAvg: Double?,
     val nutritionSourceApp: String?,
+    /** UI fix (build 50) — same "first day that has one" pick as [nutritionSourceApp], mirrored
+     *  for Range mode's Steps/Calories/Heart rate/Oxygen/Hydration tiles. */
+    val activitySourceApps: String?,
     /** Sums, not means — §7.4: "a range's total... sleep hours" is the meaningful figure. */
     val sleepMinutesTotal: Int,
     val sleepDeepMinutesTotal: Int,
@@ -41,7 +44,14 @@ data class HealthAggregate(
 
 private fun avgOf(values: List<Double>): Double? = if (values.isEmpty()) null else values.average()
 
-/** Pure — no I/O, no Health Connect call. §7.4/R31. */
+/** Pure — no I/O, no Health Connect call. §7.4/R31.
+ *
+ *  R-3 (HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md) — every per-metric average below is
+ *  deliberately `sum(days that have a value for that metric) / (count of days that have a value
+ *  for that metric)`, NOT `sum / totalDays` — `doubles()`'s `mapNotNull` drops no-data days before
+ *  averaging. Recorded here as the intended behavior (an honest average that isn't dragged down by
+ *  days with no sensor coverage) after the audit flagged it as a real, previously-undocumented
+ *  semantic choice — not a bug. */
 fun aggregateHealthDays(
     days: List<HealthDay>,
     // User request — sleep totals come from the rows that COUNT in the range under the Beast Mode
@@ -75,6 +85,7 @@ fun aggregateHealthDays(
         nutritionCarbsGramsAvg = avgOf(doubles { it.nutritionCarbsGrams }),
         nutritionFatGramsAvg = avgOf(doubles { it.nutritionFatGrams }),
         nutritionSourceApp = days.firstNotNullOfOrNull { it.nutritionSourceApp },
+        activitySourceApps = days.firstNotNullOfOrNull { it.activitySourceApps },
         sleepMinutesTotal = sleepDays.sumOf { it.sleepMinutes ?: 0 },
         sleepDeepMinutesTotal = sleepDays.sumOf { it.sleepDeepMinutes ?: 0 },
         sleepLightMinutesTotal = sleepDays.sumOf { it.sleepLightMinutes ?: 0 },

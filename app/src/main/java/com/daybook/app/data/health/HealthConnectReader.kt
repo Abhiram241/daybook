@@ -78,50 +78,102 @@ class HealthConnectReader(private val context: Context) {
         val nutritionProteinGrams: Double?,
         val nutritionCarbsGrams: Double?,
         val nutritionFatGrams: Double?,
-        val nutritionSourceApp: String?
+        val nutritionSourceApp: String?,
+        // UI fix (owner review of the Health tab screenshot, build 50) — "which app/device wrote
+        // this" for every tile that isn't already source-attributed (session/nutrition/weight all
+        // already carry `sourceApp`/`dataOrigin` per record). `AggregationResult.dataOrigins` is
+        // the set of apps that contributed to the combined aggregate (steps/distance/calories/
+        // heart rate/hydration), unioned with SpO2's own raw-record origins below — no extra
+        // Health Connect call, both were already being read.
+        val activitySourceApps: List<String>
     )
 
     /** One raw `WeightRecord` reading, HEALTH_VITALS_RICHNESS_PLAN.md §1/§3. */
     data class WeightReading(val id: String, val atMillis: Long, val weightKg: Double, val sourceApp: String?)
 
-    /** Reads one calendar day's aggregate across every MVP metric with a single [AggregateRequest]
-     *  per metric family. Health Connect's `aggregate()` call accepts a mixed metric set, so this
-     *  is ONE call, not twelve. Metrics the OS has nothing for are simply absent from the result
-     *  (`AggregationResult.contains`), which is exactly §7.4's per-metric hide rule's data source. */
-    suspend fun dayAggregate(date: LocalDate, zoneId: ZoneId, granted: Set<String>): DayAggregate {
+    /** Reads one calendar day's aggregate across every MVP metric. Owner feedback round 2
+     *  (2026-09-20) — each data point (Steps/Distance/Calories/Heart rate/Hydration) can now have
+     *  its own resolved source preference, so the old single combined [AggregateRequest] is no
+     *  longer always possible. Metrics are grouped by their *resolved* source package and one
+     *  `aggregate()` call is issued per distinct group — when every metric shares the same
+     *  preference (Auto, or the user picked one app for everything, the common case) this is still
+     *  exactly ONE call, matching the original design's battery-cost reasoning; only a user who
+     *  deliberately splits sources across metrics pays for more than one. Metrics the OS has
+     *  nothing for are simply absent from the result (`AggregationResult.contains`), which is
+     *  exactly §7.4's per-metric hide rule's data source. */
+    suspend fun dayAggregate(
+        date: LocalDate,
+        zoneId: ZoneId,
+        granted: Set<String>,
+        // Owner feedback round 3 (2026-09-20) — ranked, ordered candidate list per data point (rank
+        // 0 = most preferred). Empty list = old "no restriction / Auto with nothing observed"
+        // behavior. Candidates are tried in order, per metric, stopping at the first one that
+        // actually has data for this specific day — see class KDoc.
+        stepsRanked: List<String> = emptyList(),
+        distanceRanked: List<String> = emptyList(),
+        caloriesRanked: List<String> = emptyList(),
+        heartRateRanked: List<String> = emptyList(),
+        spo2Ranked: List<String> = emptyList(),
+        hydrationRanked: List<String> = emptyList(),
+        weightRanked: List<String> = emptyList(),
+        nutritionRanked: List<String> = emptyList()
+    ): DayAggregate {
         val start = date.atStartOfDay(zoneId).toInstant()
         val end = date.plusDays(1).atStartOfDay(zoneId).toInstant()
         val filter = TimeRangeFilter.between(start, end)
         // H2 fix — `aggregate()` requires read permission for EVERY record type in the metric set
         // or it throws `SecurityException` for the whole call, not a partial result. Build the
-        // metric set from only what's actually granted so an ordinary partial grant (e.g. Steps
-        // and Sleep but not Heart rate) degrades to "that family of metrics is absent" instead of
-        // failing every metric, including the ones the user did share.
-        val metricPermissions: List<Pair<AggregateMetric<*>, String>> = listOf(
-            StepsRecord.COUNT_TOTAL to HealthPermission.getReadPermission(StepsRecord::class),
-            DistanceRecord.DISTANCE_TOTAL to HealthPermission.getReadPermission(DistanceRecord::class),
-            ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL to HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
-            TotalCaloriesBurnedRecord.ENERGY_TOTAL to HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
-            HeartRateRecord.BPM_AVG to HealthPermission.getReadPermission(HeartRateRecord::class),
-            HeartRateRecord.BPM_MIN to HealthPermission.getReadPermission(HeartRateRecord::class),
-            HeartRateRecord.BPM_MAX to HealthPermission.getReadPermission(HeartRateRecord::class),
-            RestingHeartRateRecord.BPM_AVG to HealthPermission.getReadPermission(RestingHeartRateRecord::class),
-            HydrationRecord.VOLUME_TOTAL to HealthPermission.getReadPermission(HydrationRecord::class)
+        // metric set from only what's actually granted so an ordinary partial grant degrades to
+        // "that family of metrics is absent" instead of failing every metric. Owner feedback round
+        // 3 — each spec now carries its RANKED candidate list; metrics sharing the exact same list
+        // are still batched into the same calls (one call per rank tried, not per metric per rank).
+        data class MetricSpec(val metric: AggregateMetric<*>, val permission: String, val ranked: List<String>)
+        val allMetricSpecs = listOf(
+            MetricSpec(StepsRecord.COUNT_TOTAL, HealthPermission.getReadPermission(StepsRecord::class), stepsRanked),
+            MetricSpec(DistanceRecord.DISTANCE_TOTAL, HealthPermission.getReadPermission(DistanceRecord::class), distanceRanked),
+            MetricSpec(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL, HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class), caloriesRanked),
+            MetricSpec(TotalCaloriesBurnedRecord.ENERGY_TOTAL, HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class), caloriesRanked),
+            MetricSpec(HeartRateRecord.BPM_AVG, HealthPermission.getReadPermission(HeartRateRecord::class), heartRateRanked),
+            MetricSpec(HeartRateRecord.BPM_MIN, HealthPermission.getReadPermission(HeartRateRecord::class), heartRateRanked),
+            MetricSpec(HeartRateRecord.BPM_MAX, HealthPermission.getReadPermission(HeartRateRecord::class), heartRateRanked),
+            MetricSpec(RestingHeartRateRecord.BPM_AVG, HealthPermission.getReadPermission(RestingHeartRateRecord::class), heartRateRanked),
+            MetricSpec(HydrationRecord.VOLUME_TOTAL, HealthPermission.getReadPermission(HydrationRecord::class), hydrationRanked)
         )
-        val metrics = metricPermissions.filter { it.second in granted }.map { it.first }.toSet()
-        // Also wrapped in its own `runCatchingCancellable` (H2) — an unexpected `SecurityException` (a
-        // permission revoked mid-session, an OS quirk) degrades this one aggregate to "absent"
-        // rather than aborting the whole day the way the previously-unguarded call did (H3).
-        val result = if (metrics.isEmpty()) null else runCatchingCancellable {
-            client().aggregate(AggregateRequest(metrics = metrics, timeRangeFilter = filter))
-        }.getOrNull()
+        val grantedSpecs = allMetricSpecs.filter { it.permission in granted }
+        // Group metrics that share the exact same ranked list (by value) — same "everyone on Auto
+        // shares one call" property the old `groupBy { it.source }` had, extended to ranked lists.
+        val bySameRanking = grantedSpecs.groupBy { it.ranked }
+        val resolvedResultFor = HashMap<AggregateMetric<*>, AggregationResult?>()
+        for ((ranked, specsInGroup) in bySameRanking) {
+            val candidates: List<String?> = ranked.ifEmpty { listOf(null) }
+            var remaining = specsInGroup.map { it.metric }.toMutableSet()
+            for (candidate in candidates) {
+                if (remaining.isEmpty()) break
+                val result = runCatchingCancellable {
+                    client().aggregate(
+                        AggregateRequest(
+                            metrics = remaining.toSet(),
+                            timeRangeFilter = filter,
+                            dataOriginFilter = HealthSourcePriority.toDataOriginFilter(candidate)
+                        )
+                    )
+                }.getOrNull()
+                if (result != null) {
+                    val resolvedNow = remaining.filter { result.contains(it) }
+                    resolvedNow.forEach { m -> resolvedResultFor[m] = result }
+                    remaining -= resolvedNow.toSet()
+                }
+                // Metrics still in `remaining` after the LAST candidate stay unresolved (absent).
+            }
+        }
+        fun <T : Any> valueFor(metric: AggregateMetric<T>): T? =
+            resolvedResultFor[metric]?.let { if (it.contains(metric)) it.get(metric) else null }
+
         // SpO2 has no AggregateMetric (it's a single-instant reading, not interval-shaped) — read
         // records directly and average in Kotlin. Bounded to one day, so this is not the "raw
         // per-sample series" C7 forbids (§6.1.9) — it's a same-day average, the smallest possible
         // window, exactly like every other daily figure on this screen.
-        val spo2 = runCatchingCancellable {
-            client().readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, filter)).records
-        }.getOrDefault(emptyList())
+        val spo2 = firstNonEmpty(OxygenSaturationRecord::class, filter, spo2Ranked)
         val spo2Avg = if (spo2.isEmpty()) null else spo2.map { it.percentage.value }.average()
         // HEALTH_VITALS_RICHNESS_PLAN.md §3 — two more reductions over the same raw list already
         // read above for the average; no new Health Connect call.
@@ -131,9 +183,7 @@ class HealthConnectReader(private val context: Context) {
         // Weight, HEALTH_VITALS_RICHNESS_PLAN.md §3 — raw read (same idiom as OxygenSaturationRecord
         // and NutritionRecord just below) instead of WeightRecord.WEIGHT_AVG, so every reading is
         // available for [WeightReading] and the day's headline figure is the ACTUAL last reading.
-        val weightRecords = runCatchingCancellable {
-            client().readRecords(ReadRecordsRequest(WeightRecord::class, filter)).records
-        }.getOrDefault(emptyList())
+        val weightRecords = firstNonEmpty(WeightRecord::class, filter, weightRanked)
         val weightReadings = weightRecords.map {
             WeightReading(
                 id = it.metadata.id,
@@ -147,36 +197,137 @@ class HealthConnectReader(private val context: Context) {
         // Nutrition read directly (not via the mixed-metric AggregateRequest above) so the day's
         // "From <app>" source label (§6.1.6) is attributed to the record that actually carries it,
         // rather than to whichever data origin happened to also write steps/heart-rate that day.
-        val nutritionRecords = runCatchingCancellable {
-            client().readRecords(ReadRecordsRequest(NutritionRecord::class, filter)).records
-        }.getOrDefault(emptyList())
+        val nutritionRecords = firstNonEmpty(NutritionRecord::class, filter, nutritionRanked)
         val nutritionCalories = nutritionRecords.sumOf { it.energy?.inKilocalories ?: 0.0 }.takeIf { nutritionRecords.any { r -> r.energy != null } }
         val nutritionProtein = nutritionRecords.sumOf { it.protein?.inGrams ?: 0.0 }.takeIf { nutritionRecords.any { r -> r.protein != null } }
         val nutritionCarbs = nutritionRecords.sumOf { it.totalCarbohydrate?.inGrams ?: 0.0 }.takeIf { nutritionRecords.any { r -> r.totalCarbohydrate != null } }
         val nutritionFat = nutritionRecords.sumOf { it.totalFat?.inGrams ?: 0.0 }.takeIf { nutritionRecords.any { r -> r.totalFat != null } }
         val nutritionSourceApp = nutritionRecords.firstOrNull()?.metadata?.dataOrigin?.packageName
 
+        // UI fix (owner review of the Health tab screenshot, build 50) — union of every app that
+        // contributed to any of this day's resolved aggregate results plus SpO2's own raw-record
+        // origins. Session/nutrition/weight already carry their own per-record source
+        // (`sourceApp`/`dataOrigin`, unchanged above) — this is the one new source signal for the
+        // tiles that didn't have one at all.
+        val activitySourceApps = (
+            resolvedResultFor.values.filterNotNull().flatMap { it.dataOrigins.map { o -> o.packageName } } +
+                spo2.map { it.metadata.dataOrigin.packageName }
+            ).distinct()
+
         return DayAggregate(
-            steps = result?.valueOrNull(StepsRecord.COUNT_TOTAL),
-            distanceMeters = result?.valueOrNull(DistanceRecord.DISTANCE_TOTAL)?.inMeters,
-            activeCalories = result?.valueOrNull(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
-            totalCalories = result?.valueOrNull(TotalCaloriesBurnedRecord.ENERGY_TOTAL)?.inKilocalories,
-            avgHeartRate = result?.valueOrNull(HeartRateRecord.BPM_AVG),
-            minHeartRate = result?.valueOrNull(HeartRateRecord.BPM_MIN),
-            maxHeartRate = result?.valueOrNull(HeartRateRecord.BPM_MAX),
-            restingHeartRate = result?.valueOrNull(RestingHeartRateRecord.BPM_AVG),
+            steps = valueFor(StepsRecord.COUNT_TOTAL),
+            distanceMeters = valueFor(DistanceRecord.DISTANCE_TOTAL)?.inMeters,
+            activeCalories = valueFor(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)?.inKilocalories,
+            totalCalories = valueFor(TotalCaloriesBurnedRecord.ENERGY_TOTAL)?.inKilocalories,
+            avgHeartRate = valueFor(HeartRateRecord.BPM_AVG),
+            minHeartRate = valueFor(HeartRateRecord.BPM_MIN),
+            maxHeartRate = valueFor(HeartRateRecord.BPM_MAX),
+            restingHeartRate = valueFor(RestingHeartRateRecord.BPM_AVG),
             spo2Percent = spo2Avg,
             spo2MinPercent = spo2Min,
             spo2MaxPercent = spo2Max,
             weightKg = lastWeightKg,
             weightReadings = weightReadings,
-            hydrationMl = result?.valueOrNull(HydrationRecord.VOLUME_TOTAL)?.inMilliliters,
+            hydrationMl = valueFor(HydrationRecord.VOLUME_TOTAL)?.inMilliliters,
             nutritionCalories = nutritionCalories,
             nutritionProteinGrams = nutritionProtein,
             nutritionCarbsGrams = nutritionCarbs,
             nutritionFatGrams = nutritionFat,
-            nutritionSourceApp = nutritionSourceApp
+            nutritionSourceApp = nutritionSourceApp,
+            activitySourceApps = activitySourceApps
         )
+    }
+
+    /** Owner feedback round 3 (2026-09-20) — tries each ranked candidate's `dataOriginFilter` in
+     *  order, stopping at the first that returns a non-empty record list (falls through to the
+     *  next candidate on empty — same "no data that day" semantics as the aggregate path above).
+     *  Empty [ranked] = old unfiltered-read behavior. */
+    private suspend fun <T : androidx.health.connect.client.records.Record> firstNonEmpty(
+        recordType: kotlin.reflect.KClass<T>,
+        filter: TimeRangeFilter,
+        ranked: List<String>
+    ): List<T> {
+        val candidates: List<String?> = ranked.ifEmpty { listOf(null) }
+        for (candidate in candidates) {
+            val records = runCatchingCancellable {
+                client().readRecords(
+                    ReadRecordsRequest(recordType, filter, dataOriginFilter = HealthSourcePriority.toDataOriginFilter(candidate))
+                ).records
+            }.getOrDefault(emptyList())
+            if (records.isNotEmpty()) return records
+        }
+        return emptyList()
+    }
+
+    /** [owner feedback round 2, 2026-09-20] — one data point selectable in the "Data source
+     *  priority" settings pickers. Deliberately narrower than [AggregateMetric] groupings above:
+     *  discovery wants to know exactly which apps write THIS metric, not a combined family. */
+    enum class SourceField { STEPS, DISTANCE, CALORIES, HEART_RATE, SPO2, HYDRATION, WEIGHT, NUTRITION }
+
+    /** Root cause (owner report: "I don't see Mi Fitness. It is syncing... but not showing") — the
+     *  settings picker's option list used to be derived from `activitySourceApps`/
+     *  `mostRecentActivitySourceApps`, itself populated by [dayAggregate]'s own `dataOriginFilter`.
+     *  Once a source preference resolves to one package (even "Auto" resolves deterministically,
+     *  see `HealthSourcePriority`), every later read is scoped to just that package, so the stored
+     *  candidate list can never again see any other source Health Connect actually still has data
+     *  from — the app blinds itself to alternates. This issues a ONE-OFF UNFILTERED read (no
+     *  `dataOriginFilter`) over the last [days] days for exactly [field]'s own record type(s), used
+     *  ONLY to populate a picker sheet's option list — never to compute a displayed value. Cheap by
+     *  design: only called when a picker sheet is actually opened, not on every sync. */
+    suspend fun discoverSourcePackages(field: SourceField, granted: Set<String>, days: Long = 30): Set<String> {
+        val end = Instant.now()
+        val start = end.minus(java.time.Duration.ofDays(days))
+        val filter = TimeRangeFilter.between(start, end)
+        suspend fun aggregateOrigins(metrics: Set<AggregateMetric<*>>): Set<String> {
+            if (metrics.isEmpty()) return emptySet()
+            return runCatchingCancellable {
+                client().aggregate(AggregateRequest(metrics = metrics, timeRangeFilter = filter))
+            }.getOrNull()?.dataOrigins?.map { it.packageName }?.toSet() ?: emptySet()
+        }
+        suspend fun <T : androidx.health.connect.client.records.Record> recordOrigins(
+            recordType: kotlin.reflect.KClass<T>
+        ): Set<String> {
+            val records = runCatchingCancellable {
+                client().readRecords(ReadRecordsRequest(recordType, filter)).records
+            }.getOrDefault(emptyList())
+            return records.map { it.metadata.dataOrigin.packageName }.toSet()
+        }
+
+        val stepsPerm = HealthPermission.getReadPermission(StepsRecord::class)
+        val distancePerm = HealthPermission.getReadPermission(DistanceRecord::class)
+        val activeCalPerm = HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
+        val totalCalPerm = HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class)
+        val heartRatePerm = HealthPermission.getReadPermission(HeartRateRecord::class)
+        val restingHrPerm = HealthPermission.getReadPermission(RestingHeartRateRecord::class)
+        val hydrationPerm = HealthPermission.getReadPermission(HydrationRecord::class)
+
+        return when (field) {
+            SourceField.STEPS ->
+                if (stepsPerm !in granted) emptySet() else aggregateOrigins(setOf(StepsRecord.COUNT_TOTAL))
+            SourceField.DISTANCE ->
+                if (distancePerm !in granted) emptySet() else aggregateOrigins(setOf(DistanceRecord.DISTANCE_TOTAL))
+            SourceField.CALORIES -> {
+                val metrics = buildSet {
+                    if (activeCalPerm in granted) add(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL)
+                    if (totalCalPerm in granted) add(TotalCaloriesBurnedRecord.ENERGY_TOTAL)
+                }
+                aggregateOrigins(metrics)
+            }
+            SourceField.HEART_RATE -> {
+                val metrics = buildSet {
+                    if (heartRatePerm in granted) {
+                        add(HeartRateRecord.BPM_AVG); add(HeartRateRecord.BPM_MIN); add(HeartRateRecord.BPM_MAX)
+                    }
+                    if (restingHrPerm in granted) add(RestingHeartRateRecord.BPM_AVG)
+                }
+                aggregateOrigins(metrics)
+            }
+            SourceField.HYDRATION ->
+                if (hydrationPerm !in granted) emptySet() else aggregateOrigins(setOf(HydrationRecord.VOLUME_TOTAL))
+            SourceField.SPO2 -> recordOrigins(OxygenSaturationRecord::class)
+            SourceField.WEIGHT -> recordOrigins(WeightRecord::class)
+            SourceField.NUTRITION -> recordOrigins(NutritionRecord::class)
+        }
     }
 
     /** The day's sleep, if the session ENDED on this local date (a session spanning midnight is

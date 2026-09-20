@@ -15,10 +15,12 @@ import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.data.model.HealthDay
 import com.daybook.app.data.model.HealthSession
 import com.daybook.app.data.model.HealthWeightReading
+import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.util.recordUnhandledException
 import com.daybook.app.util.safeLaunch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
@@ -114,7 +116,8 @@ class HealthTabViewModel @Inject constructor(
     private val database: AppDatabase,
     private val healthRepository: HealthRepository,
     private val appSettingsRepository: AppSettingsRepository,
-    private val sleepCountPrefs: com.daybook.app.data.workout.SleepCountPrefs
+    private val sleepCountPrefs: com.daybook.app.data.workout.SleepCountPrefs,
+    private val cloudSync: CloudSyncRepository
 ) : ViewModel() {
 
     private val zoneId: ZoneId = ZoneId.systemDefault()
@@ -132,11 +135,61 @@ class HealthTabViewModel @Inject constructor(
     private val _refreshToastToken = MutableStateFlow(0)
     private val _refreshToastMessage = MutableStateFlow("")
 
+    /** D-1 fix — every month the Health tab can currently render: `Day` mode's selected date, plus
+     *  every month `Range` mode's [start, end] spans (`LAST_3_MONTHS` alone can cover 4). */
+    private val neededMonths = combine(_selectedDate, _range) { date, range ->
+        val months = mutableSetOf(YearMonth.from(date).toString())
+        var m = YearMonth.from(range.start)
+        val endMonth = YearMonth.from(range.end)
+        while (!m.isAfter(endMonth)) {
+            months += m.toString()
+            m = m.plusMonths(1)
+        }
+        months
+    }
+
+    /** R-1(b) fix — released on `init`'s own diffing while this ViewModel is alive; this is the
+     *  ONLY release path once it's torn down (backing all the way out of Beast Mode, or the nav
+     *  destination popping) — without it, whatever this screen last showed stays pinned, and
+     *  therefore un-evictable, for the rest of the process's life. See [onCleared]. */
+    private var pinnedMonthsHeld: Set<String> = emptySet()
+
     init {
         viewModelScope.launch {
             val saved = appSettingsRepository.getSettings().healthTabLastMode
             _mode.value = if (saved == 1) HealthTabMode.AGGREGATE else HealthTabMode.DAY
         }
+        // D-1 fix (AUDIT_2026-09-20.md) — a month evicted by `CloudSyncRepository.evictStaleMonths`
+        // (anything outside `MonthPartitioner.recentMonths()`: the current + previous month) never
+        // came back for this screen, because nothing here ever called `ensureMonthHydrated`/
+        // `pinMonth` — only `HomeViewModel` did. A month "Import my past data" just wrote could be
+        // gone from Room again within a day, rendering as permanently empty. Same fix shape as
+        // `HomeViewModel.init` (`HomeViewModel.kt:343-357`): hydrate + pin whatever month(s) this
+        // screen is currently showing, and unpin whichever ones it's no longer showing.
+        //
+        // R-1 fix (HEALTH_RANGE_TAB_AND_SYNC_AUDIT_2026-09-20.md) — this used to call
+        // `cloudSync.pinMonth`/`unpinMonth`, the SAME un-refcounted set `HomeViewModel` pins/unpins
+        // into. A Home-screen month navigation unpinning its own month could unpin one this screen
+        // was still actively showing (e.g. Range mode's `LAST_3_MONTHS`), since this screen's own
+        // `neededMonths` hadn't changed and so never re-pinned it — `evictStaleMonths` was then free
+        // to delete it out from under an open Range view. Now uses `pinHealthTabMonth`/
+        // `unpinHealthTabMonth`, an isolated set only this ViewModel writes to (mirrors how
+        // `exportRangePins` is already isolated from `pinnedMonths`, per that field's own KDoc).
+        safeLaunch {
+            neededMonths.distinctUntilChanged().collect { months ->
+                (pinnedMonthsHeld - months).forEach { cloudSync.unpinHealthTabMonth(it) }
+                pinnedMonthsHeld = months
+                months.forEach { month ->
+                    runCatching { cloudSync.ensureMonthHydrated(month) }
+                    cloudSync.pinHealthTabMonth(month)
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        pinnedMonthsHeld.forEach { cloudSync.unpinHealthTabMonth(it) }
+        pinnedMonthsHeld = emptySet()
     }
 
     private val ladder = _ladderRefresh.flatMapLatest {

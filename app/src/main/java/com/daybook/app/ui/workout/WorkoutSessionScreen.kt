@@ -28,16 +28,23 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,11 +75,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import com.daybook.app.data.model.WorkoutSessionPhoto
 import com.daybook.app.data.model.WorkoutSet
 import com.daybook.app.data.workout.SetColumn
 import com.daybook.app.data.workout.WeightUnit
@@ -80,6 +94,7 @@ import com.daybook.app.data.workout.columnsFor
 import com.daybook.app.data.workout.formatElapsed
 import com.daybook.app.data.workout.formatVolume
 import com.daybook.app.data.workout.formatWeight
+import com.daybook.app.data.workout.hasTrackedValue
 import com.daybook.app.data.workout.isPersonalRecord
 import com.daybook.app.data.workout.kgToLb
 import com.daybook.app.data.workout.lbToKg
@@ -144,20 +159,44 @@ fun WorkoutSessionScreen(
     onFinished: () -> Unit,
     viewModel: WorkoutSessionViewModel = hiltViewModel()
 ) {
+    // Item 4 — a stale "Rest over" notification shouldn't linger once the user is back looking at
+    // the ring it duplicates. Fires on every resume, not just first composition, so it also covers
+    // "left the app while resting, it beeped, came back" without needing this screen to be
+    // recreated.
+    LifecycleResumeEffect(Unit) {
+        viewModel.dismissRestNotification()
+        onPauseOrDispose { }
+    }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val elapsed by viewModel.elapsedSeconds.collectAsStateWithLifecycle()
     val restRemaining by viewModel.restRemainingSeconds.collectAsStateWithLifecycle()
+    // Item 8 — the rest ring draws a DRAINING arc, so it needs the timer's total as well as what's
+    // left of it.
+    val restTotal by viewModel.restTotalSeconds.collectAsStateWithLifecycle()
     val finished by viewModel.finished.collectAsStateWithLifecycle()
     val errorMessage by viewModel.errorMessage.collectAsStateWithLifecycle()
     val errorToken by viewModel.errorToken.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val sessionPhotos by viewModel.sessionPhotos.collectAsStateWithLifecycle()
     var restSheetForBlock by remember { mutableStateOf<String?>(null) }
     var showDiscardConfirm by remember { mutableStateOf(false) }
     var blockOverflowFor by remember { mutableStateOf<String?>(null) }
     var historyFor by remember { mutableStateOf<Triple<String, String, String>?>(null) }
+    // Item 12 — the Finish sheet, and the stock-camera capture flow it drives.
+    var showFinishSheet by remember { mutableStateOf(false) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        viewModel.onCaptureResult(success)
+    }
+    val launchCapture: () -> Unit = { cameraLauncher.launch(viewModel.preparePendingCapture()) }
     // Feature addition — "I forgot to end this on time": the duration ring is tappable, opening
     // an editor that corrects the elapsed time before Finish (or any time mid-session).
     var showEditDuration by remember { mutableStateOf(false) }
+    // Item 8 — which block the rest timer belongs to. The timer itself is session-wide (one
+    // `_restEndsAt` in the ViewModel), but the rest-picker sheet edits ONE block's `restSeconds`,
+    // so the rest ring's tap target needs to remember which block started the countdown. Set
+    // wherever `startRest` is called; deliberately NOT cleared when the timer expires, so tapping
+    // the idle ring still reopens the right block's rest picker.
+    var restBlockId by remember { mutableStateOf<String?>(null) }
     // §2.12 fix — a set cell only commits on focus-loss; tapping Finish/Back/+Add Exercise while a
     // cell is still focused could otherwise leave its typed-but-uncommitted value never written.
     // Clearing focus here forces that commit (via `EditableSetCell`'s own `onFocusChanged`) before
@@ -210,47 +249,68 @@ fun WorkoutSessionScreen(
                     // StatCol it replaces — see [[appforfood-workout-feedback]].
                     val elapsedLabel = formatElapsed(elapsed)
                     val ringInteraction = remember { MutableInteractionSource() }
-                    Box {
-                        RingStat(
-                            progress = (elapsed / 3600f),
-                            ringColor = BeastPalette.hotAccent(),
-                            size = 108.dp,
-                            strokeWidth = 9.dp,
-                            // Feature addition — tapping the ring opens the duration editor, for
-                            // the "I forgot to end this on time" case (or any mid-session fix).
-                            modifier = Modifier.clickableImpl(ringInteraction) { showEditDuration = true }
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                // Bug fix — an hours-long session ("1:53:32") at a fixed 22sp
-                                // overflowed the ring's inner circle and crossed the stroke.
-                                // Sessions with an hour digit get a smaller size so it stays inside.
-                                Text(
-                                    elapsedLabel,
-                                    style = BeastText.BigNumber.copy(fontSize = if (elapsedLabel.count { it == ':' } > 1) 15.sp else 20.sp),
-                                    color = LocalAccent.current,
-                                    maxLines = 1
+                    // Item 8 — the duration ring and the rest ring are siblings in one
+                    // centre-aligned column, so they share a vertical axis and the card's height
+                    // is fixed by the taller (left) side. See [RestRing] for why the rest ring is
+                    // ALWAYS composed.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box {
+                            RingStat(
+                                progress = (elapsed / 3600f),
+                                ringColor = BeastPalette.hotAccent(),
+                                size = 108.dp,
+                                strokeWidth = 9.dp,
+                                // Feature addition — tapping the ring opens the duration editor, for
+                                // the "I forgot to end this on time" case (or any mid-session fix).
+                                modifier = Modifier.clickableImpl(ringInteraction) { showEditDuration = true }
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    // Bug fix — an hours-long session ("1:53:32") at a fixed 22sp
+                                    // overflowed the ring's inner circle and crossed the stroke.
+                                    // Sessions with an hour digit get a smaller size so it stays inside.
+                                    Text(
+                                        elapsedLabel,
+                                        style = BeastText.BigNumber.copy(fontSize = if (elapsedLabel.count { it == ':' } > 1) 15.sp else 20.sp),
+                                        color = LocalAccent.current,
+                                        maxLines = 1
+                                    )
+                                    Text("DURATION", style = BeastText.MicroLabel, color = DaybookColors.TextMuted)
+                                }
+                            }
+                            // A small edit badge makes the ring's tap target discoverable rather than
+                            // a hidden gesture.
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(DaybookColors.SurfaceElevated)
+                                    .border(1.dp, DaybookColors.Hairline, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    contentDescription = "Edit duration",
+                                    tint = DaybookColors.TextMuted,
+                                    modifier = Modifier.size(13.dp)
                                 )
-                                Text("DURATION", style = BeastText.MicroLabel, color = DaybookColors.TextMuted)
                             }
                         }
-                        // A small edit badge makes the ring's tap target discoverable rather than
-                        // a hidden gesture.
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .size(24.dp)
-                                .clip(CircleShape)
-                                .background(DaybookColors.SurfaceElevated)
-                                .border(1.dp, DaybookColors.Hairline, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Filled.Edit,
-                                contentDescription = "Edit duration",
-                                tint = DaybookColors.TextMuted,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
+                        RestRing(
+                            remainingSeconds = restRemaining,
+                            totalSeconds = restTotal,
+                            onClick = {
+                                // Running (or in its "Done" hold): tapping stops it — the same
+                                // meaning un-ticking the set that started it already has. Idle:
+                                // reopens the rest picker for whichever block last started one.
+                                if (restRemaining != null) viewModel.cancelRest()
+                                else restBlockId?.let { restSheetForBlock = it }
+                            },
+                            actionable = restRemaining != null || restBlockId != null
+                        )
                     }
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -268,21 +328,10 @@ fun WorkoutSessionScreen(
                         )
                     }
                 }
-                if (restRemaining != null) {
-                    Spacer(Modifier.height(10.dp))
-                    Box(
-                        Modifier
-                            .clip(AppShapes.pill)
-                            .background(LocalAccent.current.copy(alpha = 0.16f))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            if (restRemaining!! > 0) "Rest: ${restRemaining}s" else "Rest over",
-                            style = DaybookText.Caption.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                            color = LocalAccent.current
-                        )
-                    }
-                }
+                // Item 8 — the "Rest: 45s" pill that used to be appended here, INSIDE the card
+                // and behind an `if (restRemaining != null)`, is gone: it made the card grow (and
+                // everything below it reflow) the instant a set was ticked. The countdown is a
+                // permanently-reserved ring next to the duration ring instead — see [RestRing].
             }
             Spacer(Modifier.height(16.dp))
         }
@@ -318,7 +367,12 @@ fun WorkoutSessionScreen(
                             viewModel.toggleSetComplete(setId)
                             val rest = blockUi.block.restSeconds
                             if (wasIncomplete) {
-                                if (rest != null && rest > 0) viewModel.startRest(rest)
+                                if (rest != null && rest > 0) {
+                                    // Item 8 — remember whose timer this is, so the rest ring's
+                                    // tap can reopen the right block's rest picker.
+                                    restBlockId = blockUi.block.id
+                                    viewModel.startRest(rest)
+                                }
                             } else {
                                 viewModel.cancelRest()
                             }
@@ -373,10 +427,24 @@ fun WorkoutSessionScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             GhostButton(text = "Discard", onClick = { showDiscardConfirm = true }, filled = true)
-            FinishFab(onClick = { focusManager.clearFocus(force = true); viewModel.finish() })
+            // Item 12 — Finish now opens the photo-capture sheet instead of finishing directly;
+            // the sheet's own Finish button is what actually calls `viewModel.finish()`.
+            FinishFab(onClick = { focusManager.clearFocus(force = true); showFinishSheet = true })
         }
     }
     UndoSnack(token = errorToken, text = errorMessage ?: "")
+    }
+
+    if (showFinishSheet) {
+        FinishWorkoutSheet(
+            photos = sessionPhotos,
+            onDismiss = { showFinishSheet = false },
+            onDiscard = { showFinishSheet = false; showDiscardConfirm = true },
+            onFinish = { showFinishSheet = false; viewModel.finish() },
+            onCapture = launchCapture,
+            onRetake = { photo -> viewModel.removePhoto(photo); launchCapture() },
+            onRemove = { photo -> viewModel.removePhoto(photo) }
+        )
     }
 
     // §2.15 fix — this used to hardcode "0" ("Off"), so the sheet never reflected the block's
@@ -393,7 +461,12 @@ fun WorkoutSessionScreen(
             if (blockId != null) {
                 val seconds = key.toInt()
                 viewModel.setExerciseRest(blockId, seconds.takeIf { it > 0 })
-                if (seconds > 0) viewModel.startRest(seconds) else viewModel.cancelRest()
+                if (seconds > 0) {
+                    restBlockId = blockId   // item 8 — see `restBlockId`'s declaration
+                    viewModel.startRest(seconds)
+                } else {
+                    viewModel.cancelRest()
+                }
             }
         },
         dismissOnSelect = true,
@@ -438,6 +511,95 @@ fun WorkoutSessionScreen(
             onDismiss = { showEditDuration = false },
             onConfirm = { newSeconds -> viewModel.setElapsedSeconds(newSeconds); showEditDuration = false }
         )
+    }
+}
+
+/**
+ * Item 8 (Beast Mode round 2026-09-16) — the rest countdown, as a proper ring under the duration
+ * ring instead of the pill that used to be appended inside the stats card.
+ *
+ * **Its space is permanently reserved.** There is no `if (running)` around this composable: it is
+ * always laid out at the same fixed size, and only its CONTENT changes between the three states
+ * below. That is the whole point of the item — the old pill appeared and disappeared inside the
+ * card, so ticking a set grew the card and reflowed every exercise block under it.
+ *
+ * | State | Ring | Centre |
+ * |---|---|---|
+ * | idle (`remainingSeconds == null`) | empty, hairline, un-animated | "–", faint |
+ * | counting down | draining arc, hot accent | "45s" |
+ * | the 5s "Rest over" hold (`remainingSeconds == 0`) | empty, hot accent | "Done" |
+ *
+ * The arc DRAINS (full → empty) where the duration ring FILLS, which is the correct affordance for
+ * a countdown. [RingStat] is reused exactly as-is, so this is visually the same family as the
+ * duration ring by construction, one size down (88dp/8dp against 108dp/9dp — secondary, not a
+ * competing hero).
+ */
+@Composable
+private fun RestRing(
+    remainingSeconds: Long?,
+    totalSeconds: Int?,
+    onClick: () -> Unit,
+    actionable: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val running = remainingSeconds != null
+    val interaction = remember { MutableInteractionSource() }
+    val accent = BeastPalette.hotAccent()
+    // Guarded against a missing/zero total (a rest started before this build, or cancelled mid-
+    // tick) — a zero denominator would otherwise be NaN, which draws nothing at all.
+    val total = totalSeconds?.takeIf { it > 0 }
+    val progress = if (running && total != null) {
+        (remainingSeconds!!.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    Box(modifier) {
+        RingStat(
+            progress = progress,
+            ringColor = if (running) accent else DaybookColors.Hairline,
+            size = 88.dp,
+            strokeWidth = 8.dp,
+            // Idle: nothing to animate, and animating the ring to 0 on every recomposition of an
+            // inactive control is wasted frames.
+            animate = running,
+            modifier = if (actionable) Modifier.clickableImpl(interaction, onClick) else Modifier
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    when {
+                        remainingSeconds == null -> "–"
+                        remainingSeconds > 0L -> "${remainingSeconds}s"
+                        else -> "Done"
+                    },
+                    style = BeastText.BigNumber.copy(fontSize = 18.sp),
+                    color = if (running) accent else DaybookColors.TextFaint,
+                    maxLines = 1
+                )
+                Text(
+                    "REST",
+                    style = BeastText.MicroLabel,
+                    color = if (running) DaybookColors.TextMuted else DaybookColors.TextFaint
+                )
+            }
+        }
+        // Same discoverability badge the duration ring carries, shown only when the tap actually
+        // does something (a session that has never started a rest timer has no block to edit).
+        if (actionable) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(DaybookColors.SurfaceElevated)
+                    .border(1.dp, DaybookColors.Hairline, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = if (running) "Stop rest timer" else "Rest timer",
+                    tint = DaybookColors.TextMuted,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+        }
     }
 }
 
@@ -498,6 +660,123 @@ private fun FinishFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
     BeastPrimaryButton(text = "Finish", onClick = onClick, modifier = modifier, pill = true)
 }
 
+/**
+ * Item 12 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — the "Finish workout?" sheet: up to 3 optional
+ * photos (a capture tile while under 3, existing photos otherwise — tap one for Retake/Remove),
+ * then Discard/Finish. Optional by construction: Finish is always enabled regardless of photo
+ * count. Reuses [ModalBottomSheet] + [BottomSheetMenu], no new sheet primitive.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FinishWorkoutSheet(
+    photos: List<WorkoutSessionPhoto>,
+    onDismiss: () -> Unit,
+    onDiscard: () -> Unit,
+    onFinish: () -> Unit,
+    onCapture: () -> Unit,
+    onRetake: (WorkoutSessionPhoto) -> Unit,
+    onRemove: (WorkoutSessionPhoto) -> Unit
+) {
+    var menuFor by remember { mutableStateOf<WorkoutSessionPhoto?>(null) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = DaybookColors.Surface,
+        shape = AppShapes.sheet
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Spacing.screenH, vertical = 8.dp)) {
+            Text("Finish workout?", style = DaybookText.SectionTitle, color = DaybookColors.TextPrimary)
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                photos.forEach { photo ->
+                    WorkoutPhotoTile(photo = photo, onClick = { menuFor = photo })
+                }
+                if (photos.size < 3) {
+                    AddPhotoTile(onClick = onCapture)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            // Owner-decided (item 12, open question 2): phone-only, not backed up. Stated plainly
+            // rather than discovered later on a reinstall.
+            Text(
+                "Photos stay on this phone — they're not backed up.",
+                style = DaybookText.Caption,
+                color = DaybookColors.TextMuted
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                GhostButton(text = "Discard", onClick = onDiscard)
+                FinishFab(onClick = onFinish)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+
+    val target = menuFor
+    BottomSheetMenu(
+        visible = target != null,
+        onDismiss = { menuFor = null },
+        actions = listOfNotNull(
+            target?.let { p -> SheetAction(Icons.Filled.Edit, "Retake") { onRetake(p); menuFor = null } },
+            target?.let { p -> SheetAction(Icons.Filled.Delete, "Remove", destructive = true) { onRemove(p); menuFor = null } }
+        )
+    )
+}
+
+private val PHOTO_TILE_SIZE = 64.dp
+
+@Composable
+private fun WorkoutPhotoTile(photo: WorkoutSessionPhoto, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val context = LocalContext.current
+    Box(
+        modifier = Modifier
+            .size(PHOTO_TILE_SIZE)
+            .clip(AppShapes.tile)
+            .background(DaybookColors.SurfaceElevated)
+            .clickableImpl(interaction, onClick)
+    ) {
+        AsyncImage(
+            model = remember(photo.filePath) {
+                ImageRequest.Builder(context)
+                    .data(java.io.File(photo.filePath))
+                    // The file in filesDir IS the store — disk-caching a local file is pointless
+                    // and can serve a stale copy after a retake (same reasoning as Avatar.kt's
+                    // identical profile-photo pattern).
+                    .diskCachePolicy(CachePolicy.DISABLED)
+                    .memoryCacheKey(photo.filePath)
+                    .crossfade(true)
+                    .build()
+            },
+            contentDescription = "Workout photo",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+@Composable
+private fun AddPhotoTile(onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .size(PHOTO_TILE_SIZE)
+            .clip(AppShapes.tile)
+            .background(DaybookColors.SurfaceElevated)
+            .border(1.dp, DaybookColors.Hairline, AppShapes.tile)
+            .clickableImpl(interaction, onClick)
+            .semantics { contentDescription = "Add a photo" },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(Icons.Filled.Add, contentDescription = null, tint = DaybookColors.TextMuted)
+    }
+}
+
 @Composable
 private fun ExerciseBlockCard(
     blockUi: BlockUi,
@@ -528,13 +807,17 @@ private fun ExerciseBlockCard(
     // §3.7/§4.2 — the block picks up its exercise's muscle-group tint instead of always Neutral.
     val tint = muscleTint(blockUi.primaryMuscle)
     SoftCard(tint = tint, modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
             ExerciseThumbnail(
                 imageId = blockUi.imageId,
                 hasStartPeak = blockUi.hasStartPeak,
                 fallbackIcon = DaybookIcons.Category,
                 tint = tint,
-                size = 40.dp
+                size = 40.dp,
+                // Item 3 — equipment/muscle fallback art for a fully-described exercise with no
+                // RepDB photo.
+                primaryMuscle = blockUi.primaryMuscle,
+                equipment = blockUi.equipment
             )
             Spacer(Modifier.width(12.dp))
             Text(
@@ -557,7 +840,7 @@ private fun ExerciseBlockCard(
             )
             CircleIconButton(icon = Icons.Filled.MoreVert, contentDescription = "More", onClick = onOverflow)
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Spacing.sm))
         DaybookTextField(
             value = notesText,
             onValueChange = { notesText = it },
@@ -754,6 +1037,7 @@ private fun SetTable(
                                 initialValue = formatEditableNumber(displayWeight(s.weightKg, weightUnit)),
                                 keyboardType = KeyboardType.Decimal,
                                 placeholder = if (weightUnit == WeightUnit.LB) "lb" else "kg",
+                                placeholderValue = formatEditableNumber(displayWeight(prevForSet?.weightKg, weightUnit)).ifEmpty { null },
                                 onCommit = { text ->
                                     onUpdateWeight(s.id, text.toFloatOrNull()?.let { storedWeightKg(it, weightUnit) })
                                 },
@@ -763,6 +1047,7 @@ private fun SetTable(
                                 initialValue = s.reps?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "reps",
+                                placeholderValue = prevForSet?.reps?.toString(),
                                 onCommit = { text -> onUpdateReps(s.id, text.toIntOrNull()) },
                                 onTextChange = { liveRepsText = it }
                             )
@@ -770,6 +1055,7 @@ private fun SetTable(
                                 initialValue = s.durationSeconds?.toString() ?: "",
                                 keyboardType = KeyboardType.Number,
                                 placeholder = "sec",
+                                placeholderValue = prevForSet?.durationSeconds?.toString(),
                                 onCommit = { text -> onUpdateDuration(s.id, text.toIntOrNull()) },
                                 onTextChange = { liveDurationText = it }
                             )
@@ -779,6 +1065,7 @@ private fun SetTable(
                                 initialValue = formatEditableNumber(s.distanceMeters?.let { it / 1000f }),
                                 keyboardType = KeyboardType.Decimal,
                                 placeholder = "km",
+                                placeholderValue = formatEditableNumber(prevForSet?.distanceMeters?.let { it / 1000f }).ifEmpty { null },
                                 onCommit = { text -> onUpdateDistance(s.id, text.toFloatOrNull()?.let { it * 1000f }) },
                                 onTextChange = { liveDistanceText = it }
                             )
@@ -801,6 +1088,13 @@ private fun SetTable(
                                 )
                                 val toggleSize = 46.dp
                                 val mintTint = CardTints.Mint
+                                // Item 10 fix (owner LOCKED decision) — a set with nothing typed in
+                                // any of its tracked cells cannot be ticked. `candidateSet` already
+                                // mirrors live uncommitted text (see the PR-badge comment above),
+                                // so this enables the tick the instant a digit is typed, not only
+                                // after the field commits on blur. Already-completed rows stay
+                                // tappable regardless, so un-ticking is never blocked.
+                                val canComplete = completed || hasTrackedValue(blockUi.trackingMode, candidateSet)
                                 val completeBg by animateColorAsState(
                                     if (completed) mintTint.fillRaised else DaybookColors.SurfaceElevated,
                                     label = "setCompleteBg"
@@ -809,16 +1103,25 @@ private fun SetTable(
                                 val completeFg = if (completed) mintTint.accent else DaybookColors.TextPrimary
                                 Box(
                                     modifier = Modifier
-                                        .graphicsLayer { scaleX = completeScale; scaleY = completeScale }
+                                        .graphicsLayer {
+                                            scaleX = completeScale; scaleY = completeScale
+                                            alpha = if (canComplete) 1f else 0.4f
+                                        }
                                         .size(toggleSize)
                                         .clip(AppShapes.tile)
                                         .background(completeBg)
                                         .border(1.dp, completeBorder, AppShapes.tile)
-                                        .clickableImpl(completeInteraction) {
-                                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            onToggleComplete(s.id)
-                                        }
-                                        .semantics { contentDescription = "Complete set" },
+                                        .then(
+                                            if (canComplete) {
+                                                Modifier.clickableImpl(completeInteraction) {
+                                                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                    onToggleComplete(s.id)
+                                                }
+                                            } else Modifier
+                                        )
+                                        .semantics {
+                                            contentDescription = if (canComplete) "Complete set" else "Complete set — enter a value first"
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -858,7 +1161,8 @@ private fun SetTable(
  *  via [onCommit] only on focus-loss, never per-keystroke — a per-digit DB write would be wasteful
  *  and would fight the user mid-type ("Decided: save on focus-loss / moving to the next field").
  *  Local `text` is keyed on [initialValue] so a value pushed from Room (e.g. another device's
- *  sync, or "+ Add Set" seeding PREVIOUS) overwrites the field only when it's not the one
+ *  sync — item 10 fix: "+ Add Set" no longer seeds a real committed value here at all, only the
+ *  greyed [placeholderValue] hint) overwrites the field only when it's not the one
  *  currently being edited. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -870,6 +1174,12 @@ private fun EditableSetCell(
     // column header. A per-column unit hint, shown only while the cell is empty (same convention
     // `DaybookTextField`'s own `placeholder` uses), makes each field self-explanatory on its own.
     placeholder: String,
+    // Item 10 fix — last session's number for this exact cell (already formatted, same string
+    // `formatPrevious` would show for it), or null when there isn't one. Item 10 stopped `addSet`
+    // from writing this into the row's real columns, so it is shown here ONLY as a greyed hint —
+    // a stronger nudge than the generic unit placeholder, and typing over it replaces it with no
+    // extra code (same `remember(initialValue)`/`onValueChange` path, untouched).
+    placeholderValue: String? = null,
     onCommit: (String) -> Unit,
     // Bug fix round 3 — mirrors this cell's live (not-yet-committed) text up to the set-row level,
     // on every change, for whichever cell governs the current tracking mode's PR-relevant value(s)
@@ -973,10 +1283,20 @@ private fun EditableSetCell(
                     // the same size/weight as a real typed value, just in TextMuted — easy to
                     // mistake for an already-filled cell at a glance in a dense table. Smaller +
                     // lower alpha keeps it readable as a hint without competing with real digits.
+                    //
+                    // Item 10 fix — when a prior value exists, show IT (greyed, italic) instead of
+                    // the generic unit hint: a stronger, more useful nudge, and — because it is
+                    // rendered at the same size real typed text uses — italic is the one purely
+                    // structural cue (not just contrast) that stops it from being mistaken for an
+                    // already-typed value at a glance.
                     Text(
-                        placeholder,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = DaybookColors.TextMuted.copy(alpha = 0.55f),
+                        placeholderValue ?: placeholder,
+                        style = if (placeholderValue != null) {
+                            MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                        } else {
+                            MaterialTheme.typography.bodySmall
+                        },
+                        color = DaybookColors.TextMuted.copy(alpha = if (placeholderValue != null) 0.45f else 0.55f),
                         textAlign = TextAlign.Center
                     )
                 }

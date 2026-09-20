@@ -25,6 +25,17 @@ interface HealthDao {
     @Query("SELECT * FROM health_days WHERE local_date = :localDate")
     suspend fun getDay(localDate: String): HealthDay?
 
+    /** [owner feedback, 2026-09-20] — the auto-resolution candidate pool for
+     *  `HealthSourcePriority.resolveAuto`: the most recent day that actually has a recorded set of
+     *  contributing sources. */
+    @Query("SELECT activity_source_apps FROM health_days WHERE activity_source_apps IS NOT NULL ORDER BY local_date DESC LIMIT 1")
+    suspend fun mostRecentActivitySourceApps(): String?
+
+    /** [owner feedback, 2026-09-20] — bounds `HealthRepository.backfillActivitySourceApps` to
+     *  exactly the range the user's own history already covers. */
+    @Query("SELECT MIN(local_date) FROM health_days")
+    suspend fun earliestLocalDate(): String?
+
     @Query("SELECT * FROM health_days WHERE local_date BETWEEN :startYmd AND :endYmd ORDER BY local_date ASC")
     fun observeDaysInRange(startYmd: String, endYmd: String): Flow<List<HealthDay>>
 
@@ -44,6 +55,11 @@ interface HealthDao {
     /** Month eviction / month import (§7.5). */
     @Query("DELETE FROM health_days WHERE local_date BETWEEN :startYmd AND :endYmd")
     suspend fun deleteDaysInLocalDateRange(startYmd: String, endYmd: String)
+
+    /** S-1 fix — month-merge keep-local-if-not-named: only the dates the incoming payload
+     *  actually carries health data for are cleared, mirroring `staleSessionIds`. */
+    @Query("DELETE FROM health_days WHERE local_date IN (:dates)")
+    suspend fun deleteDaysByLocalDates(dates: List<String>)
 
     /** Full wipe — the Beast Mode backup restore path only. */
     @Query("DELETE FROM health_days")
@@ -70,14 +86,25 @@ interface HealthDao {
     @Query("DELETE FROM health_sessions WHERE local_date BETWEEN :startYmd AND :endYmd")
     suspend fun deleteSessionsInLocalDateRange(startYmd: String, endYmd: String)
 
+    /** S-1 fix — see `deleteDaysByLocalDates`. */
+    @Query("DELETE FROM health_sessions WHERE local_date IN (:dates)")
+    suspend fun deleteSessionsByLocalDates(dates: List<String>)
+
     /** Full wipe — the Beast Mode backup restore path only. */
     @Query("DELETE FROM health_sessions")
     suspend fun deleteAllSessions()
 
     /** §6.3's changes-token full-resync fallback and "Import my past data" both re-read a whole
-     *  window; existing ids in that window are needed so a re-read upserts cleanly. */
+     *  window; existing ids in that window are needed so a re-read upserts cleanly. D-3 fix — also
+     *  now the reconciliation source: any id in this set no longer present in a fresh window read
+     *  is stale (deleted upstream, or re-issued under a new Health Connect id) and gets removed. */
     @Query("SELECT id FROM health_sessions WHERE start_millis BETWEEN :fromMillis AND :toMillis")
     suspend fun sessionIdsStartingBetween(fromMillis: Long, toMillis: Long): List<String>
+
+    /** D-3 fix — the reconciliation delete: ids `sessionIdsStartingBetween` found that a fresh
+     *  window read no longer produced. */
+    @Query("DELETE FROM health_sessions WHERE id IN (:ids)")
+    suspend fun deleteSessionsByIds(ids: List<String>)
 
     // ------------------------------------------------------------------ health_weight_readings
     // HEALTH_VITALS_RICHNESS_PLAN.md §4 — same shape as the health_sessions block above.
@@ -98,7 +125,19 @@ interface HealthDao {
     @Query("DELETE FROM health_weight_readings WHERE local_date BETWEEN :startYmd AND :endYmd")
     suspend fun deleteWeightReadingsBetween(startYmd: String, endYmd: String)
 
+    /** S-1 fix — see `deleteDaysByLocalDates`. */
+    @Query("DELETE FROM health_weight_readings WHERE local_date IN (:dates)")
+    suspend fun deleteWeightReadingsByLocalDates(dates: List<String>)
+
     /** Full wipe — the Beast Mode backup restore path only. */
     @Query("DELETE FROM health_weight_readings")
     suspend fun deleteAllWeightReadings()
+
+    /** D-3 fix — see `sessionIdsStartingBetween`, same reconciliation shape. */
+    @Query("SELECT id FROM health_weight_readings WHERE at_millis BETWEEN :fromMillis AND :toMillis")
+    suspend fun weightReadingIdsBetween(fromMillis: Long, toMillis: Long): List<String>
+
+    /** D-3 fix — see `deleteSessionsByIds`. */
+    @Query("DELETE FROM health_weight_readings WHERE id IN (:ids)")
+    suspend fun deleteWeightReadingsByIds(ids: List<String>)
 }

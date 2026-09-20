@@ -330,6 +330,13 @@ internal fun parseBuiltinCatalog(jsonText: String): List<BuiltinExercise> {
 class ExerciseCatalog(private val context: Context) {
     @Volatile private var cached: List<BuiltinExercise>? = null
 
+    // Item 6 fix #4 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — `byId` used to be
+    // `builtins().firstOrNull { it.id == id }`, an O(525) linear scan called TWICE per Room row on
+    // every `observeExerciseCatalog()` emission (~37k-65k string compares on a ~60-row install).
+    // Both indexes are built once, lazily, off the same cache lifetime as `builtins()` itself.
+    @Volatile private var idIndex: Map<String, BuiltinExercise>? = null
+    @Volatile private var nameIndex: Map<String, BuiltinExercise>? = null
+
     fun builtins(): List<BuiltinExercise> {
         cached?.let { return it }
         synchronized(this) {
@@ -341,5 +348,19 @@ class ExerciseCatalog(private val context: Context) {
         }
     }
 
-    fun byId(id: String): BuiltinExercise? = builtins().firstOrNull { it.id == id }
+    fun byId(id: String): BuiltinExercise? {
+        val index = idIndex ?: synchronized(this) {
+            idIndex ?: builtins().associateBy { it.id }.also { idIndex = it }
+        }
+        return index[id]
+    }
+
+    /** Item 1 (Hevy import) / item 6's own refresh step 1 — a builtin's DISPLAY name, exact match
+     *  only, same semantics `builtins().firstOrNull { it.name == name }` had. */
+    fun byName(name: String): BuiltinExercise? {
+        val index = nameIndex ?: synchronized(this) {
+            nameIndex ?: builtins().associateBy { it.name }.also { nameIndex = it }
+        }
+        return index[name]
+    }
 }

@@ -866,3 +866,176 @@ val MIGRATION_30_31 = object : Migration(30, 31) {
         db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_enabled_since TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/**
+ * v31 -> v32 — BEAST_MODE_ROUND_2026-09-16_PLAN.md §S1 (sign-off given). 100% additive, shared by
+ * items 2 and 12 (one migration, not two): a new `workout_session_photos` table (item 12 — up to 3
+ * optional photos per workout session, device-local only, deliberately never in DATA_TABLES /
+ * BackupModel / ContentHash — see `WorkoutPhotoModel.kt`'s KDoc, same treatment as
+ * `app_settings.profile_photo_path` and `ai_exclusions`) plus one device-local `app_settings`
+ * column (item 2 — whether the "some exercises are missing details" prompt was dismissed for
+ * good). Nothing existing is read or rewritten. Each DEFAULT byte-matches the entity's
+ * @ColumnInfo(defaultValue), per this file's own house rule (see MIGRATION_30_31's KDoc).
+ */
+val MIGRATION_31_32 = object : Migration(31, 32) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `workout_session_photos` (`id` TEXT NOT NULL, " +
+                "`session_id` TEXT NOT NULL, `file_path` TEXT NOT NULL, " +
+                "`order_index` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_workout_session_photos_session_id` " +
+                "ON `workout_session_photos` (`session_id`)"
+        )
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN exercise_details_prompt_dismissed INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * Build 50 (owner review of the Health tab screenshot) — two additive nullable columns, 100%
+ * additive: `health_days.activity_source_apps` (item 1 — "which app/device wrote this", CSV of
+ * `dataOrigin.packageName`s, see `HealthDay.activitySourceApps`'s KDoc) and
+ * `app_settings.rest_timer_sound_uri` (item 2 — the rest timer's chosen alert tone, see
+ * `AppSettings.restTimerSoundUri`'s KDoc). Nothing existing is read or rewritten.
+ */
+val MIGRATION_32_33 = object : Migration(32, 33) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE health_days ADD COLUMN activity_source_apps TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN rest_timer_sound_uri TEXT")
+    }
+}
+
+/**
+ * [owner feedback, 2026-09-20] — four additive `app_settings` columns: the user's preferred
+ * Health Connect source package per aggregate family (Activity/Vitals, Weight, Nutrition — see
+ * `AppSettings`' own KDoc on each) plus a one-time gate for the `activity_source_apps` backfill
+ * (`HealthRepository.backfillActivitySourceApps`). Null (the default, no ALTER-time backfill
+ * needed since SQLite ALTER TABLE ADD COLUMN defaults every existing row to NULL for a nullable
+ * column with no DEFAULT) means "auto" — resolved at read time by `HealthSourcePriority`, never
+ * persisted as a concrete package until the user actually picks one in Settings. Nothing existing
+ * is read or rewritten.
+ */
+val MIGRATION_33_34 = object : Migration(33, 34) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_activity TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_weight TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_nutrition TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN activity_source_backfill_done INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * Owner feedback round 2 (2026-09-20) — splits the single combined `health_source_activity`
+ * preference into one nullable column per data point (Steps/Distance/Calories/Heart rate/SpO2/
+ * Hydration), so each can be pointed at a different Health Connect source app independently (the
+ * owner's report: "for each data point, I want a separate setting for this"). `health_source_weight`
+ * / `health_source_nutrition` are untouched — they were already their own settings.
+ *
+ * The six new columns are seeded from whatever `health_source_activity` already held (rather than
+ * left null/"Auto"), so a user who had already picked a specific app for the old combined setting
+ * doesn't see that choice silently reset. `health_source_activity` itself is left in place,
+ * unread from here on (see `AppSettings.healthSourceActivity`'s KDoc) — additive-only, nothing
+ * existing is dropped or rewritten beyond this one seed copy.
+ */
+val MIGRATION_34_35 = object : Migration(34, 35) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_steps TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_distance TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_calories TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_heart_rate TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_spo2 TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_hydration TEXT")
+        db.execSQL(
+            "UPDATE app_settings SET " +
+                "health_source_steps = health_source_activity, " +
+                "health_source_distance = health_source_activity, " +
+                "health_source_calories = health_source_activity, " +
+                "health_source_heart_rate = health_source_activity, " +
+                "health_source_spo2 = health_source_activity, " +
+                "health_source_hydration = health_source_activity " +
+                "WHERE health_source_activity IS NOT NULL"
+        )
+    }
+}
+
+/**
+ * Owner feedback round 3 (2026-09-20) — replaces the single-pick-per-metric preference with a
+ * ranked, ordered list per data point (a user can now say "prefer Google Fit, but fall back to Mi
+ * Fitness on days Google Fit has nothing"). New nullable `TEXT` columns hold a comma-joined,
+ * rank-ordered list of package names — same CSV convention as `health_days.activity_source_apps`
+ * (HealthConnectReader.kt). Seeded from the existing singular `health_source_*` columns (a
+ * single-package preference becomes a one-element ranked list), so nobody's current choice is
+ * silently reset. The old singular columns are left in place, unread from here on (matches
+ * MIGRATION_34_35's own precedent for `health_source_activity`). Nothing existing is dropped.
+ */
+val MIGRATION_35_36 = object : Migration(35, 36) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_steps_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_distance_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_calories_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_heart_rate_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_spo2_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_hydration_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_weight_ranked TEXT")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN health_source_nutrition_ranked TEXT")
+        db.execSQL(
+            "UPDATE app_settings SET " +
+                "health_source_steps_ranked = health_source_steps, " +
+                "health_source_distance_ranked = health_source_distance, " +
+                "health_source_calories_ranked = health_source_calories, " +
+                "health_source_heart_rate_ranked = health_source_heart_rate, " +
+                "health_source_spo2_ranked = health_source_spo2, " +
+                "health_source_hydration_ranked = health_source_hydration, " +
+                "health_source_weight_ranked = health_source_weight, " +
+                "health_source_nutrition_ranked = health_source_nutrition"
+        )
+    }
+}
+
+/**
+ * Owner feedback round 3 (2026-09-20) — Hydration-as-Intake: two additive `app_settings` columns
+ * (`hydration_reminder_time`, default "21:00" = 9pm; `hydration_task_id`, null until the
+ * system-managed Hydration `food_med_tasks` row is first created). `TaskType.HYDRATION` itself
+ * needs no SQL change (Room stores the enum by name in the existing `food_med_tasks.type` TEXT
+ * column). Nothing existing is read or rewritten.
+ */
+val MIGRATION_36_37 = object : Migration(36, 37) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_reminder_time TEXT NOT NULL DEFAULT '21:00'")
+        db.execSQL("ALTER TABLE app_settings ADD COLUMN hydration_task_id TEXT")
+    }
+}
+
+/**
+ * Firebase Storage backup round (2026-09-20) — two additive `workout_session_photos` columns:
+ * `cloud_path` (the Storage object path once uploaded) and `cloud_uploaded_at` (upload timestamp,
+ * null = not yet backed up). Every existing row starts as "not yet uploaded", which is correct —
+ * WorkoutPhotoCloudSync's startup sweep picks up every pre-existing local photo and queues it
+ * exactly like a brand-new one. Nothing existing is read or rewritten.
+ */
+val MIGRATION_37_38 = object : Migration(37, 38) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE workout_session_photos ADD COLUMN cloud_path TEXT")
+        db.execSQL("ALTER TABLE workout_session_photos ADD COLUMN cloud_uploaded_at INTEGER")
+    }
+}
+
+/**
+ * DI-2 fix (AUDIT_2026-09-16.md) — the single source of truth for "every migration this app has
+ * ever shipped, in order", shared by [com.daybook.app.di.DatabaseModule.provideDatabase] and the
+ * instrumented `MigrationTest.fullOpenAtLatestVersion()`. Before this fix the two lists were
+ * maintained by hand in two files; `fullOpenAtLatestVersion()` had silently drifted two versions
+ * stale (missing `MIGRATION_29_30`/`MIGRATION_30_31`) with nothing to catch it, because building a
+ * fresh database at the latest version never actually exercises `addMigrations(...)`. Add a new
+ * migration to this array ONCE and both call sites stay correct automatically.
+ */
+val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+    MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+    MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+    MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18,
+    MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
+    MIGRATION_23_24, MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28,
+    MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32, MIGRATION_32_33,
+    MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36, MIGRATION_36_37, MIGRATION_37_38
+)

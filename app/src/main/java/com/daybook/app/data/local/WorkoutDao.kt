@@ -298,15 +298,21 @@ interface WorkoutDao {
     suspend fun sessionAggregates(sessionIds: List<String>): List<SessionAggregate>
 
     /**
-     * The History row's single thumbnail (open question 5) — each session's first block (lowest
-     * `order_index`), one query for the whole visible page rather than per-row.
+     * The History row's thumbnail (open question 5) — one query for the whole visible page rather
+     * than per-row.
+     *
+     * Item 11 (Beast Mode round 2026-09-16) — this used to return only each session's FIRST block
+     * (`order_index = MIN(order_index)`), which is why a session that happened to open with a
+     * custom or imported exercise showed the generic icon even when four of its other five
+     * exercises had real artwork. It now returns every block of every session in the page, in
+     * block order, and `pickThumbnailExerciseId` chooses. Still exactly one query — the §2.4
+     * "never a query per row" rule is unchanged.
      */
     @Query(
         "SELECT we.session_id AS sessionId, we.exercise_id AS exerciseId FROM workout_exercises we " +
-            "WHERE we.session_id IN (:sessionIds) AND we.order_index = " +
-            "(SELECT MIN(order_index) FROM workout_exercises we2 WHERE we2.session_id = we.session_id)"
+            "WHERE we.session_id IN (:sessionIds) ORDER BY we.session_id, we.order_index"
     )
-    suspend fun firstExercisePerSession(sessionIds: List<String>): List<SessionFirstExercise>
+    suspend fun exercisesPerSession(sessionIds: List<String>): List<SessionExerciseRef>
 
     /** History's exercise filter (open question 3) — every exercise id ever logged in a session,
      *  for the filter-picker sheet; the repository resolves each id to its real name. */
@@ -336,5 +342,7 @@ data class ExerciseSetCount(val exerciseId: String, val setCount: Int)
 /** Plain Room POJO for [WorkoutDao.sessionAggregates] — not an @Entity. */
 data class SessionAggregate(val sessionId: String, val exerciseCount: Int, val setCount: Int, val totalVolumeKg: Double)
 
-/** Plain Room POJO for [WorkoutDao.firstExercisePerSession] — not an @Entity. */
-data class SessionFirstExercise(val sessionId: String, val exerciseId: String)
+/** Plain Room POJO for [WorkoutDao.exercisesPerSession] — not an @Entity. `order_index` is not
+ *  projected: the query already returns the rows in block order, so the caller never needs the
+ *  number itself. */
+data class SessionExerciseRef(val sessionId: String, val exerciseId: String)

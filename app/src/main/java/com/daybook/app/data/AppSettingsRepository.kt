@@ -147,6 +147,44 @@ class AppSettingsRepository @Inject constructor(
     suspend fun setHydrationGoalMl(ml: Int) { ensureRow(); database.appSettingsDao().updateHydrationGoalMl(ml) }
     suspend fun setHydrationUnit(unit: String) { ensureRow(); database.appSettingsDao().updateHydrationUnit(unit) }
 
+    // Item 2 (DB v32).
+    suspend fun setExerciseDetailsPromptDismissed(v: Boolean) {
+        ensureRow(); database.appSettingsDao().updateExerciseDetailsPromptDismissed(v)
+    }
+
+    // Build 50 item 2 (DB v33) — rest timer alert tone.
+    suspend fun setRestTimerSoundUri(v: String?) {
+        ensureRow(); database.appSettingsDao().updateRestTimerSoundUri(v)
+    }
+
+    // Owner feedback round 2 (2026-09-20) (DB v35) — one setting per data point, used by
+    // HealthSourcePriority/HealthConnectReader instead of naively summing every contributing app's
+    // records. Null = "auto".
+    suspend fun setHealthSourceSteps(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceSteps(v) }
+    suspend fun setHealthSourceDistance(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceDistance(v) }
+    suspend fun setHealthSourceCalories(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceCalories(v) }
+    suspend fun setHealthSourceHeartRate(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceHeartRate(v) }
+    suspend fun setHealthSourceSpo2(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceSpo2(v) }
+    suspend fun setHealthSourceHydration(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceHydration(v) }
+    suspend fun setHealthSourceWeight(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceWeight(v) }
+    suspend fun setHealthSourceNutrition(v: String?) { ensureRow(); database.appSettingsDao().updateHealthSourceNutrition(v) }
+    suspend fun setActivitySourceBackfillDone(v: Boolean) { ensureRow(); database.appSettingsDao().updateActivitySourceBackfillDone(v) }
+
+    // Owner feedback round 3 (2026-09-20) (DB v36) — ranked ordered list per metric. An empty list
+    // stores null (= pure Auto, same semantics as today's null preference).
+    suspend fun setHealthSourceStepsRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceStepsRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceDistanceRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceDistanceRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceCaloriesRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceCaloriesRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceHeartRateRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceHeartRateRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceSpo2Ranked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceSpo2Ranked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceHydrationRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceHydrationRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceWeightRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceWeightRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+    suspend fun setHealthSourceNutritionRanked(ranked: List<String>) { ensureRow(); database.appSettingsDao().updateHealthSourceNutritionRanked(ranked.takeIf { it.isNotEmpty() }?.joinToString(",")) }
+
+    // Owner feedback round 3 (2026-09-20) (DB v37) — Hydration-as-Intake.
+    suspend fun setHydrationReminderTime(hhmm: String) { ensureRow(); database.appSettingsDao().updateHydrationReminderTime(hhmm) }
+    suspend fun setHydrationTaskId(id: String?) { ensureRow(); database.appSettingsDao().updateHydrationTaskId(id) }
+
     /** Reactive settings stream — re-emits whenever the single settings row changes. */
     fun observeSettings(): Flow<AppSettings> =
         database.appSettingsDao().observeSettings().map { it ?: AppSettings() }

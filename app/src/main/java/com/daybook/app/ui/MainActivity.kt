@@ -80,8 +80,8 @@ import com.daybook.app.ui.theme.LocalOnAccent
 import com.daybook.app.ui.theme.onAccentInk
 import com.daybook.app.ui.workout.WorkoutRoutes
 import com.daybook.app.ui.workout.AddExerciseScreen
-import com.daybook.app.ui.workout.ExercisePickerMode
 import com.daybook.app.ui.workout.ExerciseFormScreen
+import com.daybook.app.ui.workout.ExerciseReviewScreen
 import com.daybook.app.ui.workout.RoutineEditScreen
 import com.daybook.app.ui.workout.WorkoutDetailScreen
 import com.daybook.app.ui.workout.WorkoutHistoryScreen
@@ -733,9 +733,13 @@ class MainActivity : FragmentActivity() {
         val goNewExercise: () -> Unit = remember(navController) {
             { navController.navigate(WorkoutRoutes.NEW_EXERCISE) }
         }
-        val goEditExercise: (String) -> Unit = remember(navController) {
-            { id -> navController.navigate(WorkoutRoutes.editExercise(id)) }
-        }
+        // §0.1 (Beast Mode round 2026-09-16) — the `goEditExercise` navigator that used to live
+        // here had exactly one consumer: `AddExerciseScreen`'s BROWSE-mode overflow menu, which
+        // was itself unreachable once Round B (§7.4) repurposed the LIBRARY nav slot to the Health
+        // tab. It is deleted with that dead branch. `WorkoutRoutes.EDIT_EXERCISE` below and
+        // `WorkoutRoutes.editExercise(id)` deliberately stay: the following round (items 1/2)
+        // re-homes "edit this exercise's details" onto a long-press sheet in the picker and needs
+        // both back.
         val goSettingsData: () -> Unit = remember(navController) {
             { navController.navigate("settings_data") { launchSingleTop = true } }
         }
@@ -1008,7 +1012,13 @@ class MainActivity : FragmentActivity() {
                     NotificationSettingsScreen(onNavigateBack = { navController.popBackStack() })
                 }
                 composable("settings_data") {
-                    DataSettingsScreen(onNavigateBack = { navController.popBackStack() })
+                    DataSettingsScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        // Item 1 — the main app's Settings screen navigating straight into a
+                        // Beast Mode route works because the whole app shares this one
+                        // `navController`/`NavHost`, not a nested Beast-Mode-only graph.
+                        onReviewNewExercises = { ids -> navController.navigate(WorkoutRoutes.exerciseReview(ids)) }
+                    )
                 }
                 composable("add_habit") {
                     AddHabitScreen(onNavigateBack = { navController.popBackStack() })
@@ -1091,7 +1101,8 @@ class MainActivity : FragmentActivity() {
                             WorkoutRoutes.HISTORY -> WorkoutHistoryScreen(
                                 contentPadding = scaffoldPadding,
                                 onOpenSession = goWorkoutSession,
-                                onOpenDetail = goWorkoutDetail
+                                onOpenDetail = goWorkoutDetail,
+                                onOpenWorkoutSettings = goWorkoutSettings
                             )
                             // Round B (§7.4) — repurposed nav slot: the exercise browser (BROWSE
                             // mode) is no longer a bottom-nav destination; this now renders the
@@ -1106,7 +1117,8 @@ class MainActivity : FragmentActivity() {
                                 onOpenWorkoutSettings = goWorkoutSettings,
                                 onStartSession = goWorkoutSession,
                                 onNewRoutine = { goRoutineEdit(null) },
-                                onEditRoutine = { id -> goRoutineEdit(id) }
+                                onEditRoutine = { id -> goRoutineEdit(id) },
+                                onFixExerciseDetails = { navController.navigate(WorkoutRoutes.exerciseReview()) }
                             )
                         }
                     }
@@ -1115,12 +1127,12 @@ class MainActivity : FragmentActivity() {
                     WorkoutSettingsScreen(
                         onNavigateBack = { navController.popBackStack() },
                         onLeaveBeastMode = exitBeastMode,
-                        onImportFromHevy = goSettingsData
+                        onImportFromHevy = goSettingsData,
+                        onFixExerciseDetails = { navController.navigate(WorkoutRoutes.exerciseReview()) }
                     )
                 }
                 composable(WorkoutRoutes.PICK_EXERCISE) {
                     AddExerciseScreen(
-                        mode = ExercisePickerMode.PICK,
                         contentPadding = scaffoldPadding,
                         onPick = { exerciseIds ->
                             // Bug fix — see `pickedExerciseId`'s KDoc. Set BEFORE popping so the
@@ -1130,9 +1142,7 @@ class MainActivity : FragmentActivity() {
                             navController.popBackStack()
                         },
                         onBack = { navController.popBackStack() },
-                        onNewExercise = goNewExercise,
-                        onEditExercise = goEditExercise,
-                        onOpenHistory = {}
+                        onNewExercise = goNewExercise
                     )
                 }
                 composable(WorkoutRoutes.NEW_EXERCISE) {
@@ -1140,6 +1150,14 @@ class MainActivity : FragmentActivity() {
                 }
                 composable(WorkoutRoutes.EDIT_EXERCISE) {
                     ExerciseFormScreen(onNavigateBack = { navController.popBackStack() })
+                }
+                // Items 1/2 — `ids` optional/nullable, same shape as ROUTINE_EDIT's `routineId`
+                // just below.
+                composable(
+                    WorkoutRoutes.EXERCISE_REVIEW,
+                    arguments = listOf(navArgument("ids") { type = NavType.StringType; nullable = true; defaultValue = null })
+                ) {
+                    ExerciseReviewScreen(onNavigateBack = { navController.popBackStack() })
                 }
                 composable(
                     WorkoutRoutes.ROUTINE_EDIT,

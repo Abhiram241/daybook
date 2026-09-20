@@ -58,3 +58,32 @@ val EquipmentLabels: Map<Equipment, String> = mapOf(
     Equipment.RESISTANCE_BAND to "Resistance band",
     Equipment.OTHER to "Other"
 )
+
+/**
+ * Item 3 (Beast Mode round 2026-09-16) — the bundled equipment illustration for an [Equipment]
+ * value, as the `<slug>` of `assets/exercises/images/equipment/<slug>.webp` (the same asset tree
+ * `ExerciseThumbnail` already loads the RepDB exercise photos from, so there is one loader and one
+ * code path, not a second `R.drawable` set). Returns `null` for the two values that must NOT get a
+ * picture:
+ *  - `NONE` is bodyweight: every candidate asset is a piece of apparatus (pull-up bar, dip
+ *    station, rings), so a push-up would end up illustrated with a pull-up bar. It falls through
+ *    to the muscle illustration instead, which is genuinely informative for bodyweight work.
+ *  - `OTHER` means "we don't know yet". Any picture would be a lie, and the plain icon doubles as
+ *    the "this exercise still needs its details filled in" cue.
+ *
+ * `MACHINE` deliberately maps to the chest-press machine: seat + back pad + handles + a visible
+ * weight stack is the universal shorthand for "gym machine", where leg-press/hack-squat read as
+ * leg-specific and smith-machine would collide with `BARBELL`.
+ *
+ * Only these 7 files are referenced; the rest of the bundled `equipment/` tree is unused.
+ */
+fun equipmentImageAsset(equipment: Equipment): String? = when (equipment) {
+    Equipment.BARBELL -> "barbell"
+    Equipment.DUMBBELL -> "dumbbell"
+    Equipment.KETTLEBELL -> "kettlebell"
+    Equipment.CABLE -> "cable"
+    Equipment.PLATE -> "plates"
+    Equipment.RESISTANCE_BAND -> "resistance-band"
+    Equipment.MACHINE -> "chest-press-machine"
+    Equipment.NONE, Equipment.OTHER -> null
+}
