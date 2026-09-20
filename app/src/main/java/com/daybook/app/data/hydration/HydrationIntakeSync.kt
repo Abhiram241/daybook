@@ -6,6 +6,7 @@ import com.daybook.app.data.local.AppDatabase
 import com.daybook.app.data.model.FoodMedTask
 import com.daybook.app.data.model.TaskType
 import com.daybook.app.ui.icons.Icons
+import com.daybook.app.util.DateTimeUtils
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -32,7 +33,7 @@ class HydrationIntakeSync @Inject constructor(
         val settings = settingsRepository.getSettings()
         val existingId = settings.hydrationTaskId
         val existing = existingId?.let { database.foodMedTaskDao().getTaskById(it) }
-        val timesJson = "[\"$timeHHmm\"]" // matches FoodMedTask.timesJson's existing JSON-array-of-"HH:mm" shape
+        val timesJson = hydrationTimesJson(timeHHmm)
         if (existing == null) {
             if (!enabled) return // never created, and turning on is what creates it — nothing to do
             val task = FoodMedTask(
@@ -51,5 +52,32 @@ class HydrationIntakeSync @Inject constructor(
             database.foodMedTaskDao().update(updated)
             if (enabled) scheduler.syncTask(updated.id) else scheduler.cancelTask(updated.id)
         }
+    }
+
+    companion object {
+        /**
+         * Builds the `food_med_tasks.times_json` value for the reminder time.
+         *
+         * Build 56 fix — despite the column name, `times_json` is NOT JSON: every other writer
+         * (`AddFoodMedViewModel`, `AddHabitViewModel`, `ExportImportRepository`) stores a
+         * COMMA-SEPARATED list of bare "HH:mm" via [DateTimeUtils.timesToJson], and the only
+         * reader, [DateTimeUtils.jsonToTimes], splits on "," and `LocalTime.parse`s each element.
+         * Builds 53-55 wrote a JSON-array literal (`["21:00"]`) here instead, which that reader
+         * silently drops per-element — so the Hydration task ended up with ZERO parsed times,
+         * `OccurrenceScheduler.slots()` returned an empty list, and no `food_med_occurrences` row
+         * was ever generated. Hence no Hydration card on Today, nothing in Intake, and no alarm,
+         * with no crash or logged failure to show for it (which is why both self-heal attempts in
+         * builds 54/55 appeared to succeed while changing nothing). Writing the format the reader
+         * actually expects is the fix; because [sync] rewrites `times_json` on every call and is
+         * invoked on each cold start and each Today load, already-broken installs repair
+         * themselves on the next launch without the user re-toggling anything.
+         */
+        internal fun hydrationTimesJson(timeHHmm: String): String {
+            val parsed = runCatching { java.time.LocalTime.parse(timeHHmm.trim(), FORMAT) }
+                .getOrElse { java.time.LocalTime.of(21, 0) }
+            return DateTimeUtils.timesToJson(listOf(parsed))
+        }
+
+        private val FORMAT = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
     }
 }

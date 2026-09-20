@@ -31,7 +31,28 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 53          // v0.8.0 build 53 (2026-09-20) — Beast Mode Settings
+        versionCode = 56          // v0.8.0 build 56 (2026-09-20) — ROOT CAUSE of the missing
+                                   // hydration reminder, at last: `times_json` is comma-separated
+                                   // bare "HH:mm" (not JSON, despite the name), but
+                                   // HydrationIntakeSync wrote a JSON-array literal. The reader
+                                   // dropped it silently, so the task had zero times, the
+                                   // scheduler generated zero occurrences, and nothing could ever
+                                   // render on Today or Intake — which is also why the builds 54
+                                   // and 55 self-heals "succeeded" while changing nothing. Broken
+                                   // installs repair themselves on the next launch.
+                                   // v0.8.0 build 55 (2026-09-20) — hydration self-heal wasn't
+                                   // enough on its own (a silent failure in the app-start-only
+                                   // attempt could leave it stuck); added a second, logged
+                                   // self-heal that also runs every time the Today tab loads, so
+                                   // it can't depend on a single fragile cold-start path.
+                                   // v0.8.0 build 54 (2026-09-20) — hydration reminder now
+                                   // self-heals onto the Intake tab/Today for anyone who had it
+                                   // enabled before this round (was stuck invisible). Removed the
+                                   // italic styling on workout session kg/reps entry fields.
+                                   // Fixed the exercise name not lining up with its thumbnail for
+                                   // short single-line names. History page now says "Muscle"
+                                   // instead of "Muscle Group" in its filter chip/picker.
+                                   // v0.8.0 build 53 (2026-09-20) — Beast Mode Settings
                                    // reorganized into categorized sub-screens with clearer
                                    // explanations. Data source priority is now a ranked list per
                                    // data point (falls back to the next app if the top one has no
@@ -131,18 +152,16 @@ android {
             // CLI command (both work; the CLI needs no Gradle DSL at all and is documented as
             // the primary path — see ACCENT_UPDATES_PLAN.md Phase 6 / the regression doc).
             firebaseAppDistribution {
-                releaseNotes = "Beast Mode Settings is reorganized into Appearance / Workout " +
-                    "defaults / Health Connect sync / Data source priority / Import & backup, " +
-                    "with clearer explanations. Data source priority is now a ranked list per " +
-                    "data point (Steps, Distance, Calories, Heart rate, SpO2, Hydration, Weight, " +
-                    "Nutrition) — set an order of apps to trust, and if your top choice has no " +
-                    "data for a day it falls back to the next one; changing the order now also " +
-                    "re-applies to your past days, not just new syncs. Hydration has moved out " +
-                    "of Beast Mode into Intake — turn it on in Settings, then log water and set " +
-                    "its reminder time (default 9pm) from Intake or Today, same as other intake " +
-                    "items; it still logs to Health Connect. Workout session photos now back up " +
-                    "to the cloud. Fixed spacing/alignment issues on the New habit form, workout " +
-                    "detail and session screens, and made History's 3 filter chips equal width."
+                releaseNotes = "Hydration reminder is fixed — really this time.\n\n" +
+                    "The root cause is found: the Hydration reminder was being saved with its " +
+                    "time in the wrong format, so the app read it as having no time at all and " +
+                    "never created the daily reminder. Nothing was ever scheduled, which is why " +
+                    "it showed up nowhere and why the last two \"fixes\" appeared to work but " +
+                    "changed nothing.\n\n" +
+                    "After installing this build, just open the app: Hydration repairs itself " +
+                    "automatically and appears on Today and in Intake straight away — tap it to " +
+                    "log your water any time of day, not only at the reminder time. The reminder " +
+                    "itself now fires at the time set in Settings > Hydration."
                 groups = "testers"
             }
         }

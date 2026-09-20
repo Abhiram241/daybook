@@ -3,7 +3,9 @@ package com.daybook.app
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.daybook.app.data.AppSettingsRepository
 import com.daybook.app.data.WorkoutRepository
+import com.daybook.app.data.hydration.HydrationIntakeSync
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.util.CrashHandler
 import com.daybook.app.util.notification.NotificationUtils
@@ -22,6 +24,8 @@ class DaybookApplication : Application(), Configuration.Provider {
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var cloudSyncRepository: CloudSyncRepository
     @Inject lateinit var workoutRepository: WorkoutRepository
+    @Inject lateinit var hydrationIntakeSync: HydrationIntakeSync
+    @Inject lateinit var settingsRepository: AppSettingsRepository
 
     // Item 6 fix #1 (BEAST_MODE_ROUND_2026-09-16_PLAN.md) — no GlobalScope anywhere in this app
     // (a standing rule, verified by AUDIT_2026-09-16.md's battery section); a dedicated
@@ -53,5 +57,18 @@ class DaybookApplication : Application(), Configuration.Provider {
         // `AddExerciseViewModel` still call the same idempotent path as a safety net for the
         // cold-start race — this just makes that race vanishingly unlikely to be lost.
         appScope.launch { runCatching { workoutRepository.warmExerciseCatalog() } }
+        // Owner feedback round 4 (2026-09-20) — self-healing bootstrap: HydrationIntakeSync.sync()
+        // is only otherwise called from HydrationSettingsViewModel's toggle/time-change handlers,
+        // so a user who already had `hydration_enabled = true` from before Hydration-as-Intake
+        // shipped never gets a `FoodMedTask` row created for it (hydration_task_id stays null
+        // forever) — nothing to show in Intake or on Today, regardless of the reminder time. Fire
+        // this idempotent sync on every cold start so an already-enabled install self-heals without
+        // the user having to re-toggle the setting.
+        appScope.launch {
+            runCatching {
+                val s = settingsRepository.getSettings()
+                hydrationIntakeSync.sync(s.hydrationEnabled, s.hydrationReminderTime)
+            }.onFailure { com.daybook.app.util.recordUnhandledException(it) }
+        }
     }
 }

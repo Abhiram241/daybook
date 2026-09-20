@@ -230,7 +230,14 @@ class HomeViewModel @Inject constructor(
     // Hydration-as-Intake (2026-09-20): hydration's daily amount is still Room's source of truth
     // (mirrored to Health Connect) — only the old synthetic-HomeItem/streak machinery is gone.
     // Used by [logHydration] for the Today card's tap-to-log dialog.
-    private val hydrationRepository: com.daybook.app.data.hydration.HydrationRepository
+    private val hydrationRepository: com.daybook.app.data.hydration.HydrationRepository,
+    // Owner feedback round 5 (2026-09-20) — safety net alongside DaybookApplication's own
+    // cold-start bootstrap call (see HydrationIntakeSync's KDoc): that one is a fire-and-forget
+    // Application-scope coroutine wrapped in a bare runCatching, so a failure there is invisible
+    // and unretried until the next process restart. Re-running the same idempotent sync() here,
+    // every time Today's ViewModel is created, means opening the Today tab itself is enough to
+    // self-heal an already-enabled-but-never-synced hydration reminder — not just a cold app start.
+    private val hydrationIntakeSync: com.daybook.app.data.hydration.HydrationIntakeSync
 ) : ViewModel() {
 
     /** Null when notifications can actually be posted; otherwise why they can't (Phase 7, N-2). */
@@ -267,6 +274,15 @@ class HomeViewModel @Inject constructor(
     private var pinnedMonth: String? = null
 
     init {
+        // Owner feedback round 5 (2026-09-20) — see the constructor param's KDoc: self-heal
+        // hydration's reminder row every time Today loads, not just on a cold app start. Logged
+        // (not silently swallowed) so a real failure is at least visible in Crashlytics.
+        safeLaunch {
+            runCatching {
+                val s = settingsRepository.getSettings()
+                hydrationIntakeSync.sync(s.hydrationEnabled, s.hydrationReminderTime)
+            }.onFailure { com.daybook.app.util.recordUnhandledException(it) }
+        }
         // v0.5.1 §N: only the current and previous month are hydrated into Room (SD-3a). When the
         // selected date moves into any other month, fetch that month's cloud doc and merge it in.
         //

@@ -807,7 +807,13 @@ private fun ExerciseBlockCard(
     // §3.7/§4.2 — the block picks up its exercise's muscle-group tint instead of always Neutral.
     val tint = muscleTint(blockUi.primaryMuscle)
     SoftCard(tint = tint, modifier = Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+        // Owner feedback round 4 (2026-09-20) — Top-alignment (from the prior spacing pass, meant
+        // to keep the icon buttons pinned to a wrapped 3-line name's first line) broke the far more
+        // common case: a short, single-line name no longer lines up with the 40dp thumbnail beside
+        // it. Back to CenterVertically — the actual name-crowds-the-notes-field bug that pass fixed
+        // was the spacer height below this Row, not this alignment, so reverting it doesn't
+        // reintroduce that issue.
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             ExerciseThumbnail(
                 imageId = blockUi.imageId,
                 hasStartPeak = blockUi.hasStartPeak,
@@ -1292,7 +1298,10 @@ private fun EditableSetCell(
                     Text(
                         placeholderValue ?: placeholder,
                         style = if (placeholderValue != null) {
-                            MaterialTheme.typography.bodyLarge.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                            // Owner feedback round 4 (2026-09-20) — italics on the previous-value
+                            // ghost read as a styling bug on real kg/reps entries, not a hint.
+                            // Dimmed color/alpha alone is enough to distinguish it from typed text.
+                            MaterialTheme.typography.bodyLarge
                         } else {
                             MaterialTheme.typography.bodySmall
                         },

@@ -260,7 +260,7 @@ fun WorkoutHistoryScreen(
     SortSheet(
         visible = showMuscleGroupSheet,
         onDismiss = { showMuscleGroupSheet = false },
-        title = "Muscle group",
+        title = "Muscle",
         sortOptions = MuscleGroup.entries.map { g ->
             val imageRes = muscleImageRes(g)
             SortOption(
@@ -311,7 +311,7 @@ private fun HistoryFilterBar(
         horizontalArrangement = Arrangement.spacedBy(Spacing.chipGap)
     ) {
         DaybookChip(
-            label = selectedMuscleGroup?.let { "${MuscleGroupLabels[it].orEmpty()} ▾" } ?: "Muscle Group ▾",
+            label = selectedMuscleGroup?.let { "${MuscleGroupLabels[it].orEmpty()} ▾" } ?: "Muscle ▾",
             selected = selectedMuscleGroup != null,
             onClick = { if (selectedMuscleGroup != null) onClearMuscleGroup() else onOpenMuscleGroupSheet() },
             modifier = Modifier.weight(1f)
