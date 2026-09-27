@@ -131,6 +131,15 @@ interface FoodMedOccurrenceDao {
     @Query("SELECT notification_id FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for < :before")
     suspend fun staleNotificationIdsForTask(taskId: String, before: Long): List<Int>
 
+    /** Audit finding #16 fix — see [HabitOccurrenceDao.futurePendingAlarmRefsForHabit]; food/med
+     *  side. Read BEFORE [deleteFuturePendingForTask]/[deleteFuturePendingExcept] delete the rows. */
+    @Query("SELECT id, notification_id FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from")
+    suspend fun futurePendingAlarmRefsForTask(taskId: String, from: Long): List<PendingAlarmRef>
+
+    /** Audit finding #22 fix — see [HabitOccurrenceDao.existingIdsForHabit]; food/med side. */
+    @Query("SELECT id FROM food_med_occurrences WHERE task_id = :taskId")
+    suspend fun existingIdsForTask(taskId: String): List<String>
+
     @Query("DELETE FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from")
     suspend fun deleteFuturePendingForTask(taskId: String, from: Long)
 
@@ -146,6 +155,11 @@ interface FoodMedOccurrenceDao {
     /** v0.5.3 Phase 3 (A2) — see [HabitOccurrenceDao.deleteFuturePendingExcept]; food/med side. */
     @Query("DELETE FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from AND id NOT IN (:keep)")
     suspend fun deleteFuturePendingExcept(taskId: String, from: Long, keep: List<String>)
+
+    /** Audit finding #16 fix — see [HabitOccurrenceDao.futurePendingAlarmRefsExceptForHabit];
+     *  food/med side. */
+    @Query("SELECT id, notification_id FROM food_med_occurrences WHERE task_id = :taskId AND status = 'PENDING' AND scheduled_for >= :from AND id NOT IN (:keep)")
+    suspend fun futurePendingAlarmRefsExceptForTask(taskId: String, from: Long, keep: List<String>): List<PendingAlarmRef>
 
     /** v0.5.3 Phase 3 (S15) — see [HabitOccurrenceDao.deleteByIds]; food/med side. */
     @Query("DELETE FROM food_med_occurrences WHERE id IN (:ids)")

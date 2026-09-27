@@ -42,8 +42,11 @@ interface HealthDao {
     @Query("SELECT * FROM health_days WHERE local_date BETWEEN :startYmd AND :endYmd ORDER BY local_date ASC")
     suspend fun getDaysInRange(startYmd: String, endYmd: String): List<HealthDay>
 
-    /** Full export path (§7.5) — every day, regardless of month. */
-    @Query("SELECT * FROM health_days")
+    /** Full export path (§7.5) — every day, regardless of month.
+     *
+     *  Audit finding #22 fix — see WorkoutDao.getAllSessions' identical fix; `local_date` is this
+     *  table's own natural, stable ordering key. */
+    @Query("SELECT * FROM health_days ORDER BY local_date ASC")
     suspend fun getAllDays(): List<HealthDay>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -75,8 +78,10 @@ interface HealthDao {
     @Query("SELECT * FROM health_sessions WHERE local_date BETWEEN :startYmd AND :endYmd ORDER BY start_millis ASC")
     suspend fun getSessionsInRange(startYmd: String, endYmd: String): List<HealthSession>
 
-    /** Full export path (§7.5) — every session, regardless of month. */
-    @Query("SELECT * FROM health_sessions")
+    /** Full export path (§7.5) — every session, regardless of month.
+     *
+     *  Audit finding #22 fix — see WorkoutDao.getAllSessions' identical fix. */
+    @Query("SELECT * FROM health_sessions ORDER BY id ASC")
     suspend fun getAllSessions(): List<HealthSession>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

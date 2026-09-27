@@ -34,8 +34,16 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sessions WHERE id = :id")
     suspend fun getSession(id: String): WorkoutSession?
 
-    /** Full export path (§4.4 item 1) — every session, regardless of month. */
-    @Query("SELECT * FROM workout_sessions")
+    /**
+     * Full export path (§4.4 item 1) — every session, regardless of month.
+     *
+     * Audit finding #22 fix — this fed `MonthPartitioner`'s per-month content hash with no
+     * `ORDER BY`, so SQLite's own physical row order (which can shift after a REPLACE re-inserts a
+     * row at a new rowid) could change the exported list's order with no actual data change,
+     * producing a different hash and a spurious re-upload of that month. Ordering by `id` is
+     * arbitrary but stable — REPLACE-driven rowid churn can no longer perturb it.
+     */
+    @Query("SELECT * FROM workout_sessions ORDER BY id ASC")
     suspend fun getAllSessions(): List<WorkoutSession>
 
     /** Export path (§4.4 item 1) — inclusive on both ends, "yyyy-MM-dd" strings sort chronologically. */

@@ -21,6 +21,15 @@ import com.google.firebase.appdistribution.FirebaseAppDistributionException
 object InAppUpdateChecker {
     private const val TAG = "InAppUpdateChecker"
 
+    /** Battery/network fix (finding #13) — `MainActivity.onResume()` calls [checkForUpdate] on
+     *  EVERY foreground, including returns from a permission/camera/biometric screen within the
+     *  same session, not just a genuine app relaunch. Throttling here (rather than at the call
+     *  site) keeps every current and future caller correct by construction. Four hours is frequent
+     *  enough that a tester still sees a new build the same day it's pushed, without paying a
+     *  network round trip on every single foreground. */
+    private const val THROTTLE_MILLIS = 4 * 60 * 60 * 1000L
+    @Volatile private var lastCheckAtMillis = 0L
+
     /**
      * [onAuthenticationCanceled] fires ONLY when the tester explicitly dismisses/cancels the
      * SDK's own "Enable testing features" sign-in prompt (`Status.AUTHENTICATION_CANCELED`) — the
@@ -29,6 +38,9 @@ object InAppUpdateChecker {
      * disable future checks since they're transient/unrelated to tester intent.
      */
     fun checkForUpdate(activity: Activity, onAuthenticationCanceled: () -> Unit = {}) {
+        val now = System.currentTimeMillis()
+        if (now - lastCheckAtMillis < THROTTLE_MILLIS) return
+        lastCheckAtMillis = now
         FirebaseAppDistribution.getInstance()
             .updateIfNewReleaseAvailable()
             .addOnFailureListener { e ->

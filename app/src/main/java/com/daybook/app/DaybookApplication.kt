@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.daybook.app.data.AppSettingsRepository
-import com.daybook.app.data.WorkoutRepository
 import com.daybook.app.data.hydration.HydrationIntakeSync
 import com.daybook.app.data.sync.CloudSyncRepository
 import com.daybook.app.util.CrashHandler
@@ -23,7 +22,6 @@ class DaybookApplication : Application(), Configuration.Provider {
     @Inject lateinit var notificationUtils: NotificationUtils
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var cloudSyncRepository: CloudSyncRepository
-    @Inject lateinit var workoutRepository: WorkoutRepository
     @Inject lateinit var hydrationIntakeSync: HydrationIntakeSync
     @Inject lateinit var settingsRepository: AppSettingsRepository
 
@@ -51,12 +49,13 @@ class DaybookApplication : Application(), Configuration.Provider {
         // Start observing auth state so cloud sync attaches/detaches with sign-in. Non-blocking:
         // it only launches coroutines and reads the persisted session from local disk (R9).
         cloudSyncRepository.start()
-        // Item 6 fix #1 — warm the exercise catalog (the ~1 MB RepDB JSON parse + the one-time
-        // rename/addition/dedupe pass, ~1,090 Room queries before this round's fix, ~3 after) well
-        // before the picker could ever need it, off the UI thread. `observeExerciseCatalog()` and
-        // `AddExerciseViewModel` still call the same idempotent path as a safety net for the
-        // cold-start race — this just makes that race vanishingly unlikely to be lost.
-        appScope.launch { runCatching { workoutRepository.warmExerciseCatalog() } }
+        // Battery fix (finding #4) — `warmExerciseCatalog()` (the ~1 MB RepDB JSON parse + the
+        // one-time rename/addition/dedupe pass) used to run here unconditionally, meaning even a
+        // process woken solely to service a single reminder alarm (no Activity ever created) paid
+        // this cost. It is now warmed from MainActivity.onCreate() instead — still well before the
+        // exercise picker could ever need it for any real app open, but no longer paid by a
+        // headless alarm/receiver process. `observeExerciseCatalog()` and `AddExerciseViewModel`
+        // still call the same idempotent path as a safety net regardless of where it's warmed from.
         // Owner feedback round 4 (2026-09-20) — self-healing bootstrap: HydrationIntakeSync.sync()
         // is only otherwise called from HydrationSettingsViewModel's toggle/time-change handlers,
         // so a user who already had `hydration_enabled = true` from before Hydration-as-Intake

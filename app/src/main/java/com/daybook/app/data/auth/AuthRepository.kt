@@ -67,6 +67,19 @@ class AuthRepository @Inject constructor(
     private val _state = MutableStateFlow<AuthState>(AuthState.Loading)
     val state: StateFlow<AuthState> = _state.asStateFlow()
 
+    // Battery/correctness fix: a forced getIdToken(true) call was previously made from inside
+    // EVERY IdTokenListener callback — which fires on registration (i.e. every process start) and
+    // on every token change. A successful forced refresh mints a new token, and per the SDK's
+    // documented contract that change re-notifies this same listener — so the naive version could
+    // become a continuous refresh loop (one securetoken.googleapis.com round trip triggering
+    // another, forever), not just one network call per launch. This flag makes at most one forced
+    // check be in flight at a time: a callback that fires while a check is already running (which
+    // includes the very re-notification the in-flight check itself may cause) is a no-op, so the
+    // loop cannot sustain itself. The next GENUINE token change (the SDK's normal ~hourly refresh,
+    // or a real sign-in) still gets exactly one revocation check, which is all this ever needed to
+    // detect an account deleted/disabled elsewhere.
+    private val checkingRevocation = java.util.concurrent.atomic.AtomicBoolean(false)
+
     init {
         auth.addAuthStateListener { fa -> _state.value = snapshot(fa) }
         // Token revocation (account deleted/disabled elsewhere): a forced refresh that fails with
@@ -74,12 +87,16 @@ class AuthRepository @Inject constructor(
         // failure (offline) is ignored so this never disturbs an offline session.
         val idTokenListener = FirebaseAuth.IdTokenListener { fa ->
             val user = fa.currentUser
-            if (user != null) {
+            if (user != null && checkingRevocation.compareAndSet(false, true)) {
                 scope.launch {
-                    val err = runCatching { user.getIdToken(true).awaitCompat() }.exceptionOrNull()
-                    if (err != null && err.javaClass.simpleName == "FirebaseAuthInvalidUserException") {
-                        Log.w(TAG, "session revoked — local sign-out")
-                        runCatching { auth.signOut() }
+                    try {
+                        val err = runCatching { user.getIdToken(true).awaitCompat() }.exceptionOrNull()
+                        if (err != null && err.javaClass.simpleName == "FirebaseAuthInvalidUserException") {
+                            Log.w(TAG, "session revoked — local sign-out")
+                            runCatching { auth.signOut() }
+                        }
+                    } finally {
+                        checkingRevocation.set(false)
                     }
                 }
             }

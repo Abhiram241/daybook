@@ -11,6 +11,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.daybook.app.data.UploadPendingOutcome
 import com.daybook.app.data.WorkoutPhotoCloudSync
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -31,7 +32,13 @@ class WorkoutPhotoUploadWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
-        if (photoCloudSync.uploadPending()) Result.success() else Result.retry()
+        // Audit finding #18 fix — NoAccount is not retry-worthy: nobody is signed in, and sign-in
+        // itself already explicitly re-enqueues this worker (CloudSyncRepository.onAuthState).
+        // Retrying every ~30s while signed out achieved nothing and never stopped.
+        when (photoCloudSync.uploadPending()) {
+            UploadPendingOutcome.NoAccount, UploadPendingOutcome.AllUploaded -> Result.success()
+            UploadPendingOutcome.PartialFailure -> Result.retry()
+        }
     } catch (t: Throwable) {
         Log.e(TAG, "workout photo upload failed", t)
         Result.retry()
@@ -48,8 +55,12 @@ class WorkoutPhotoUploadWorker @AssistedInject constructor(
                 )
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
                 .build()
+            // Battery fix (finding #18) — every caller here is routine (a photo was just added, or
+            // an account just signed in); an upload already actually in flight from a previous
+            // enqueue must not be cancelled and restarted by a later one landing on top of it.
+            // KEEP lets an in-flight/backoff-waiting attempt run its own course.
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
+                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)
         }
     }
 }

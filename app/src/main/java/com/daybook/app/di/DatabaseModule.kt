@@ -129,9 +129,11 @@ object DatabaseModule {
         database: AppDatabase,
         reader: HealthConnectReader,
         stateStore: HealthSyncStateStore,
-        appSettingsRepository: AppSettingsRepository
+        appSettingsRepository: AppSettingsRepository,
+        // Audit finding #1 fix — see HealthRepository.pullWindow's residency guard.
+        cloudSyncProvider: javax.inject.Provider<com.daybook.app.data.sync.CloudSyncRepository>
     ): HealthRepository =
-        HealthRepository(database, reader, stateStore, appSettingsRepository)
+        HealthRepository(database, reader, stateStore, appSettingsRepository, cloudSyncProvider)
 
     // DAILY_REPORT_PLAN.md §4.
     @Provides
@@ -139,7 +141,9 @@ object DatabaseModule {
     fun provideDailyReportRepository(
         database: AppDatabase,
         workoutRepository: WorkoutRepository,
-        appSettingsRepository: AppSettingsRepository
+        appSettingsRepository: AppSettingsRepository,
+        // Audit finding #1 fix — see DailyReportRepository.saveAiSummary's residency guard.
+        cloudSyncProvider: javax.inject.Provider<com.daybook.app.data.sync.CloudSyncRepository>
     ): com.daybook.app.data.DailyReportRepository =
-        com.daybook.app.data.DailyReportRepository(database, workoutRepository, appSettingsRepository)
+        com.daybook.app.data.DailyReportRepository(database, workoutRepository, appSettingsRepository, cloudSyncProvider)
 }

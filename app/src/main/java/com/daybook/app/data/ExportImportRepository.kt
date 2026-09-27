@@ -1063,6 +1063,14 @@ class ExportImportRepository @Inject constructor(
             )
             val habitDelete = (habitMerge.deletePending - keepIfShownPending).toList()
             val taskDelete = (taskMerge.deletePending - keepIfShownPending).toList()
+            // Audit finding #6 fix: `mergeMonth`'s `upsert` set is what actually excludes an
+            // unresolved incoming row from overwriting an already-resolved local one (see its
+            // KDoc) — filter the rows about to be inserted down to exactly that set. Previously
+            // this filter did not exist at all: `habitMerge`/`taskMerge` were computed only to
+            // read `.deletePending` below, and every incoming row was inserted regardless, which is
+            // the bug itself (a stale incoming MISSED/PENDING silently clobbering a real answer).
+            val habitUpsertIds = habitMerge.upsert.toHashSet()
+            val taskUpsertIds = taskMerge.upsert.toHashSet()
             // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 6 (S-3): kept as Sets now — they're used for a
             // Kotlin-side `NOT IN` filter below (see deletePendingByLocalMonthBefore's KDoc for why
             // this can't just be a chunked NOT-IN query), not passed to SQL as a bound-variable list.
@@ -1095,11 +1103,17 @@ class ExportImportRepository @Inject constructor(
                         if (it.isNotEmpty()) database.foodMedOccurrenceDao().deleteByIds(it)
                     }
                 }
-                if (habitOccurrences.isNotEmpty()) {
-                    database.habitOccurrenceDao().insertAll(*habitOccurrences.toTypedArray())
+                // Audit finding #6 fix: only the ids `mergeMonth` actually cleared for upsert are
+                // written — an incoming row protected from downgrade (still unresolved, while
+                // local already holds a resolved row for that id) is skipped, leaving whatever is
+                // already in Room for that id untouched.
+                val habitToInsert = habitOccurrences.filter { it.id in habitUpsertIds }
+                val taskToInsert = foodMedOccurrences.filter { it.id in taskUpsertIds }
+                if (habitToInsert.isNotEmpty()) {
+                    database.habitOccurrenceDao().insertAll(*habitToInsert.toTypedArray())
                 }
-                if (foodMedOccurrences.isNotEmpty()) {
-                    database.foodMedOccurrenceDao().insertAll(*foodMedOccurrences.toTypedArray())
+                if (taskToInsert.isNotEmpty()) {
+                    database.foodMedOccurrenceDao().insertAll(*taskToInsert.toTypedArray())
                 }
 
                 // BUG_AUDIT_REPORT.md §1.1 fix: this used to be full delete-then-insert over the
@@ -1190,10 +1204,18 @@ class ExportImportRepository @Inject constructor(
             return ImportResult(success = false, message = UNSUPPORTED)
         }
         return try {
-            val existingHabitNotif = database.habitDao().observeAllHabits().first()
-                .associate { it.id to it.notificationId }
-            val existingTaskNotif = database.foodMedTaskDao().observeAllTasks().first()
-                .associate { it.id to it.notificationId }
+            val existingHabits = database.habitDao().observeAllHabits().first()
+            val existingTasks = database.foodMedTaskDao().observeAllTasks().first()
+            val existingHabitNotif = existingHabits.associate { it.id to it.notificationId }
+            val existingTaskNotif = existingTasks.associate { it.id to it.notificationId }
+            // Audit finding #7 — see protectedFromPruneByRecency's KDoc.
+            val now = System.currentTimeMillis()
+            val protectedHabitIds = protectedFromPruneByRecency(
+                existingHabits.associate { it.id to it.createdAt }, now
+            )
+            val protectedTaskIds = protectedFromPruneByRecency(
+                existingTasks.associate { it.id to it.createdAt }, now
+            )
 
             val habits = defs.habits.map { d ->
                 Habit(
@@ -1262,7 +1284,8 @@ class ExportImportRepository @Inject constructor(
                 if (prompts.isNotEmpty()) {
                     database.customPromptDao().insertAll(*prompts.toTypedArray())
                 }
-                val (_, staleHabits) = defsDelta(database.habitDao().allIds().toSet(), remoteHabitIds)
+                val (_, staleHabitsAll) = defsDelta(database.habitDao().allIds().toSet(), remoteHabitIds)
+                val staleHabits = staleHabitsAll - protectedHabitIds
                 if (staleHabits.isNotEmpty()) database.habitDao().deleteByIds(staleHabits.toList())
                 // Build 57 — NEVER prune the system-managed Hydration task, even when the remote
                 // definitions don't carry it. It is created locally by `HydrationIntakeSync`, so
@@ -1277,7 +1300,7 @@ class ExportImportRepository @Inject constructor(
                 // and re-established on every launch, so excluding it loses nothing.
                 val hydrationIds = database.foodMedTaskDao().hydrationTaskIds().toSet()
                 val (_, staleTasksAll) = defsDelta(database.foodMedTaskDao().allIds().toSet(), remoteTaskIds)
-                val staleTasks = staleTasksAll - hydrationIds
+                val staleTasks = staleTasksAll - hydrationIds - protectedTaskIds
                 if (staleTasks.isNotEmpty()) database.foodMedTaskDao().deleteByIds(staleTasks.toList())
 
                 // A4: upsert incoming custom exercises, delete local ones absent from the remote set.
@@ -1290,7 +1313,16 @@ class ExportImportRepository @Inject constructor(
                 // and a file that actually carries exercises/routines get to prune; a Daybook-kind
                 // or empty-definitions file only upserts.
                 if (exercisesAndRoutinesAuthoritative) {
-                    val (_, staleExercises) = defsDelta(database.exerciseDao().allIds().toSet(), remoteExerciseIds)
+                    // Audit finding #7 — same recency protection as habits/tasks above, computed
+                    // from the full local rows (needed for createdAt; allIds() alone isn't enough).
+                    val existingExercises = database.exerciseDao().getAll()
+                    val protectedExerciseIds = protectedFromPruneByRecency(
+                        existingExercises.associate { it.id to it.createdAt }, now
+                    )
+                    val (_, staleExercisesAll) = defsDelta(
+                        existingExercises.mapTo(HashSet()) { it.id }, remoteExerciseIds
+                    )
+                    val staleExercises = staleExercisesAll - protectedExerciseIds
                     staleExercises.chunked(SQLITE_MAX_VARS).forEach {
                         if (it.isNotEmpty()) database.exerciseDao().deleteByIds(it)
                     }
@@ -1304,7 +1336,15 @@ class ExportImportRepository @Inject constructor(
                     database.routineDao().upsertRoutineExercises(remoteRoutineExercises)
                 }
                 if (exercisesAndRoutinesAuthoritative) {
-                    val (_, staleRoutines) = defsDelta(database.routineDao().allIds().toSet(), remoteRoutineIds)
+                    // Audit finding #7 — same recency protection as above.
+                    val existingRoutines = database.routineDao().getAllRoutinesIncludingArchived()
+                    val protectedRoutineIds = protectedFromPruneByRecency(
+                        existingRoutines.associate { it.id to it.createdAt }, now
+                    )
+                    val (_, staleRoutinesAll) = defsDelta(
+                        existingRoutines.mapTo(HashSet()) { it.id }, remoteRoutineIds
+                    )
+                    val staleRoutines = staleRoutinesAll - protectedRoutineIds
                     if (staleRoutines.isNotEmpty()) {
                         staleRoutines.forEach { database.routineDao().deleteRoutineExercises(it) }
                         database.routineDao().deleteByIds(staleRoutines.toList())
@@ -1432,6 +1472,28 @@ internal fun defsDelta(
     localIds: Set<String>,
     remoteIds: Set<String>
 ): Pair<Set<String>, Set<String>> = remoteIds to (localIds - remoteIds)
+
+/**
+ * Audit finding #7 fix: [defsDelta]'s deletion side assumes every local id absent from the
+ * incoming remote set has already been seen (and later un-created) by the cloud — true for a row
+ * this device previously pushed, false for a row created here so recently it may not have reached
+ * ANY remote definitions doc yet (the 45s debounce, or simply being offline since creating it). A
+ * local habit/task/exercise/routine created within [graceMillis] of [now] is excluded from
+ * deletion regardless of what the incoming set says. Worst case, a row that was genuinely deleted
+ * elsewhere but happens to share an id newly (re)created here within the grace window survives one
+ * extra apply and is pruned on the next one, once it ages out of the window — the alternative
+ * (deleting a definition the user just created) is unrecoverable. Pure — [DefinitionsPruneGraceTest].
+ */
+internal fun protectedFromPruneByRecency(
+    createdAtByLocalId: Map<String, Long>,
+    now: Long,
+    graceMillis: Long = DEFS_PRUNE_GRACE_MILLIS
+): Set<String> = createdAtByLocalId.filterValues { now - it < graceMillis }.keys
+
+/** Audit finding #7 — see [protectedFromPruneByRecency]. Comfortably longer than the 45s push
+ *  debounce and the two-retry `ensureMonthHydrated` backoff, short enough that a row genuinely
+ *  deleted elsewhere is pruned within one normal usage session of it happening. */
+internal const val DEFS_PRUNE_GRACE_MILLIS = 5 * 60 * 1000L
 
 // ------------------------------------------------------------------ S-2 fix pure helper
 
@@ -1617,10 +1679,13 @@ internal data class OccKey(val id: String, val resolved: Boolean)
 
 /**
  * v0.5.3 Phase 3 (S15): the outcome of merging one month.
- *  - [upsert]       — every incoming id (REPLACE on PK; the cloud is the source for what it names);
+ *  - [upsert]       — incoming ids safe to REPLACE on PK (the cloud is the source for what it
+ *                     names) — EXCEPT an unresolved incoming row for an id this device already
+ *                     holds resolved (audit finding #6 fix, below);
  *  - [deletePending] — local ids that are still PENDING and absent from incoming (stale window slots);
- *  - [keepLocal]    — local ids that are resolved and absent from incoming (this device's unseen
- *                     offline edits — must survive the merge).
+ *  - [keepLocal]    — local ids left untouched by the merge: resolved-and-absent-from-incoming
+ *                     (this device's unseen offline edits), AND (finding #6) resolved-locally-but-
+ *                     unresolved-incoming (a stale snapshot must not downgrade a real answer).
  */
 internal data class MergeResult(
     val upsert: List<String>,
@@ -1629,18 +1694,34 @@ internal data class MergeResult(
 )
 
 /**
- * v0.5.3 Phase 3 (S15): pure per-log month merge. Union by PK; a local resolved row the cloud does
- * not name is kept; a local PENDING row the cloud does not name is dropped; a local PENDING row the
- * cloud *does* name is upserted (not dropped). Covers "A logs breakfast, B logs lunch": A's
- * breakfast (local, resolved, not in B's incoming) lands in [MergeResult.keepLocal] and survives.
- * Pure — [MonthMergeTest].
+ * v0.5.3 Phase 3 (S15) + audit finding #6 fix: pure per-log month merge. Union by PK; a local
+ * resolved row the cloud does not name is kept; a local PENDING row the cloud does not name is
+ * dropped; a local PENDING row the cloud *does* name is upserted (not dropped). Covers "A logs
+ * breakfast, B logs lunch": A's breakfast (local, resolved, not in B's incoming) lands in
+ * [MergeResult.keepLocal] and survives.
+ *
+ * Finding #6: an incoming row that is itself UNRESOLVED (still PENDING, or an overdue slot the
+ * exporter wrote as MISSED — which [mapDaysToOccurrences] maps back to PENDING on the way in) must
+ * never overwrite a LOCAL row for the same id that is already resolved (LOGGED/COMPLETED/SKIPPED,
+ * with whatever real content — a journal answer's `qaJson`, a response — that implies). Without
+ * this, a device that pushed before observing another device's real answer for a past slot could
+ * have that stale, content-free snapshot silently clobber the real answer the instant this device
+ * applied the remote month — permanently, since the resulting re-export then matches the (now
+ * blanked) local state and nothing ever re-pushes the lost answer. An incoming row that is ITSELF
+ * resolved (a genuine edit/completion made on another device) is unaffected and still wins
+ * normally — this only blocks a downgrade to unresolved. Pure — [MonthMergeTest].
  */
 internal fun mergeMonth(local: List<OccKey>, incoming: List<OccKey>): MergeResult {
     val incomingIds = incoming.mapTo(HashSet()) { it.id }
+    val localResolvedIds = local.filter { it.resolved }.mapTo(HashSet()) { it.id }
+    val protectedFromDowngrade = incoming
+        .filter { !it.resolved && it.id in localResolvedIds }
+        .mapTo(HashSet()) { it.id }
     return MergeResult(
-        upsert = incoming.map { it.id },
+        upsert = incoming.filter { it.id !in protectedFromDowngrade }.map { it.id },
         deletePending = local.filter { !it.resolved && it.id !in incomingIds }.map { it.id },
-        keepLocal = local.filter { it.resolved && it.id !in incomingIds }.map { it.id }
+        keepLocal = local.filter { it.resolved && it.id !in incomingIds }.map { it.id } +
+            protectedFromDowngrade
     )
 }
 

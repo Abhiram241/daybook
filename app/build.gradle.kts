@@ -31,7 +31,26 @@ android {
         applicationId = "com.daybook.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 57          // v0.8.0 build 57 (2026-09-20) — the remaining two hydration
+        versionCode = 58          // v0.8.0 build 58 (2026-09-27) — correctness/battery audit round
+                                   // (no new features): fixed a real cloud data-loss bug where
+                                   // writing into an evicted month (import past health data, an AI
+                                   // daily summary, logging hydration for an old date) could replace
+                                   // that whole month's cloud history with just the new entry; a
+                                   // false "sync conflict" prompt that could fire from nothing more
+                                   // than a reminder's time passing, which silently paused sync
+                                   // while still showing "Synced"; a stale snapshot from one device
+                                   // that could overwrite another device's real journal answer; a
+                                   // sign-out that could leave one account's workout/health/photo
+                                   // data readable by (and re-uploaded under) the next account
+                                   // signed in on the same device; and an account deletion that left
+                                   // workout photos behind in the cloud forever. Battery: removed a
+                                   // token-refresh call that could loop on every app launch, closed
+                                   // several background retry storms that used to re-run expensive
+                                   // sync work every ~30 seconds indefinitely, stopped closing and
+                                   // reopening the cloud connection on every app open, throttled the
+                                   // update check, and fixed a couple of leaked reminder alarms.
+                                   // Nothing to toggle — this all repairs itself.
+                                   // v0.8.0 build 57 (2026-09-20) — the remaining two hydration
                                    // faults behind "in Intake but not on Today, and now there are
                                    // two of it": (1) a lost-update race between the builds 54/55
                                    // bootstraps inserted a second Hydration task — sync() is now
@@ -165,23 +184,35 @@ android {
             // CLI command (both work; the CLI needs no Gradle DSL at all and is documented as
             // the primary path — see ACCENT_UPDATES_PLAN.md Phase 6 / the regression doc).
             firebaseAppDistribution {
-                releaseNotes = "Hydration on Today, and the duplicate Hydration, both fixed.\n\n" +
-                    "Three separate faults were stacked on top of each other:\n\n" +
-                    "1. The reminder was saved with its time in the wrong format, so the app read " +
-                    "it as having no time at all and never scheduled anything (fixed in the last " +
-                    "build).\n" +
-                    "2. Two startup repair checks added in earlier builds could run at the same " +
-                    "moment and each create their own Hydration reminder — that is the duplicate " +
-                    "you are seeing. The app now keeps the original one (with all its history) " +
-                    "and removes the extra automatically.\n" +
-                    "3. Syncing could delete the Hydration reminder and immediately recreate it " +
-                    "under a new identity, which orphaned that day\'s entry and left it showing " +
-                    "in Intake but not on Today. Sync no longer touches it.\n\n" +
-                    "Also, Hydration now appears on Today even if you install or open the app " +
-                    "after its reminder time has already passed, so you can log water at any " +
-                    "hour instead of waiting for the next day.\n\n" +
-                    "Just open the app after installing — all of this repairs itself, with " +
-                    "nothing to toggle."
+                releaseNotes = "A correctness and battery round — nothing new to look at, a lot fixed underneath.\n\n" +
+                    "Cloud sync:\n" +
+                    "1. Found and fixed a real data-loss bug: importing old health history, " +
+                    "generating an AI summary for an old date, or logging hydration for an old " +
+                    "date could, in the wrong circumstances, replace an entire month's worth of " +
+                    "your cloud backup with just that one new entry. Fixed.\n" +
+                    "2. A false \"your data doesn't match the cloud\" prompt could appear just " +
+                    "from a reminder's time passing, with sync silently stuck afterward even " +
+                    "though the app still said \"Synced.\" Fixed — and if you ever do see that " +
+                    "prompt now, it's a real one.\n" +
+                    "3. If you use Daybook on two devices, one device's out-of-date data could, " +
+                    "in rare timing, overwrite a journal answer the other device had already " +
+                    "saved. Fixed.\n" +
+                    "4. Signing out no longer risks leaving your workout/health history readable " +
+                    "by (or uploaded under) the next account signed into the same device.\n" +
+                    "5. Deleting your account now also cleans up any workout photos that had " +
+                    "been backed up to the cloud, instead of leaving them behind.\n\n" +
+                    "Battery:\n" +
+                    "6. Removed a login-check call that could end up repeating itself every time " +
+                    "the app opens.\n" +
+                    "7. Fixed a few different \"keep retrying every 30 seconds forever\" loops " +
+                    "that could fire in the background when there was nothing useful to retry.\n" +
+                    "8. The app no longer holds an open cloud connection while sitting in the " +
+                    "background.\n" +
+                    "9. The update check (this screen you're reading) no longer runs on every " +
+                    "single time you open the app.\n" +
+                    "10. Fixed a couple of cases where an old reminder time change could leave a " +
+                    "phantom alarm armed.\n\n" +
+                    "Nothing to toggle — just open the app after installing."
                 groups = "testers"
             }
         }

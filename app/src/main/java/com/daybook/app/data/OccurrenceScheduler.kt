@@ -193,12 +193,22 @@ class OccurrenceScheduler @Inject constructor(
         // their armed alarm, survive), delete only genuinely removed slots. `dao.insert` is
         // OnConflictStrategy.IGNORE, so a surviving row is never overwritten by the loop below.
         val wantedIds = taskSlots.filter { it >= now - 60_000L }.map { occId(taskId, it) }
+        // Audit finding #16 fix — a slot dropped from the new schedule (a times edit, or a
+        // timezone change shifting which slots fall in-window) could be the currently-armed
+        // alarm; cancel each dropped row's alarm BEFORE the delete below removes it, so it can't
+        // fire later for a row that no longer exists.
+        db.foodMedOccurrenceDao().futurePendingAlarmRefsExceptForTask(taskId, now, wantedIds)
+            .forEach { notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = false) }
+        // Audit finding #22 fix — read once, up front, so the insert loop below can skip minting
+        // (a persistent SharedPreferences write) for a slot that already has a row.
+        val existingIds = dao.existingIdsForTask(taskId).toHashSet()
         // One transaction: the window is never observed half-rewritten by a concurrent reader.
         val orphaned = db.withTransaction {
             dao.deleteFuturePendingExcept(taskId, now, wantedIds)
             for (millis in taskSlots) {
                 if (millis < now - 60_000L) continue
                 val id = occId(taskId, millis)
+                if (id in existingIds) continue   // survives with its existing notification_id/alarm
                 dao.insert(
                     FoodMedOccurrence(
                         id = id,
@@ -311,8 +321,14 @@ class OccurrenceScheduler @Inject constructor(
 
     private suspend fun cancelTaskInternal(taskId: String) {
         val dao = db.foodMedOccurrenceDao()
+        // Audit finding #16 fix — used to cancel only getNextPendingForTask's single earliest
+        // pending row (which can be an overdue refire row, not necessarily the one actually
+        // armed), then delete every future pending row regardless — leaking that other row's
+        // alarm. Cancel every future pending row's alarm individually first; AlarmManager.cancel
+        // on a PendingIntent that was never actually armed is a harmless no-op.
+        val refs = dao.futurePendingAlarmRefsForTask(taskId, 0L)
+        refs.forEach { notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = false) }
         dao.getNextPendingForTask(taskId, 0L)?.let {
-            notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = false)
             notificationUtils.cancelNotification(it.notificationId)
         }
         dao.deleteFuturePendingForTask(taskId, 0L)
@@ -345,11 +361,17 @@ class OccurrenceScheduler @Inject constructor(
         // v0.5.3 Phase 3 (A2) — see [syncTaskInternal]: spare the rows for slots still in the
         // schedule so their notification_id (and armed alarm) is reused, not leaked and re-minted.
         val wantedIds = habitSlots.filter { it >= now - 60_000L }.map { occId(habitId, it) }
+        // Audit finding #16 fix — see syncTaskInternal's identical fix.
+        db.habitOccurrenceDao().futurePendingAlarmRefsExceptForHabit(habitId, now, wantedIds)
+            .forEach { notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = true) }
+        // Audit finding #22 fix — see syncTaskInternal's identical fix.
+        val existingIds = dao.existingIdsForHabit(habitId).toHashSet()
         val orphaned = db.withTransaction {
             dao.deleteFuturePendingExcept(habitId, now, wantedIds)
             for (millis in habitSlots) {
                 if (millis < now - 60_000L) continue
                 val id = occId(habitId, millis)
+                if (id in existingIds) continue   // survives with its existing notification_id/alarm
                 dao.insert(
                     HabitOccurrence(
                         id = id,
@@ -416,11 +438,44 @@ class OccurrenceScheduler @Inject constructor(
 
     private suspend fun cancelHabitInternal(habitId: String) {
         val dao = db.habitOccurrenceDao()
+        // Audit finding #16 fix — see cancelTaskInternal's identical fix.
+        val refs = dao.futurePendingAlarmRefsForHabit(habitId, 0L)
+        refs.forEach { notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = true) }
         dao.getNextPendingForHabit(habitId, 0L)?.let {
-            notificationUtils.cancelReminderAlarm(it.id, it.notificationId, isHabit = true)
             notificationUtils.cancelNotification(it.notificationId)
         }
         dao.deleteFuturePendingForHabit(habitId, 0L)
+    }
+
+    // ------------------------------------------------------------------ audit finding #19 fix
+
+    /**
+     * Audit finding #19 fix — atomically checks-and-records the SHOWN event for a food/med
+     * occurrence, under the same [syncMutex] [armNextTaskInternal]'s `hasShownEvent` check uses.
+     * [AlarmReceiver.fireFoodMed] used to do this check-then-insert directly against `db` with no
+     * lock at all, which could race a concurrent `syncTask()` sweep for the SAME occurrence — most
+     * concretely, a cold start where the hydration alarm itself is what woke the process: the
+     * receiver's `fireFoodMed` and `DaybookApplication`'s hydration self-heal
+     * (`HydrationIntakeSync.sync` → `syncTask` → `armNextTaskInternal`) both run as independent
+     * coroutines right after `Application.onCreate()`, unsynchronized. If `armNextTaskInternal`'s
+     * check landed between `fireFoodMed`'s post and its (previously unlocked) SHOWN insert, it
+     * would see "not shown yet" and arm a second "catch-up" alarm for the same overdue occurrence
+     * — a duplicate notification plus an extra wakeup. Returns true only when this call is the one
+     * that recorded it (i.e. it was not already shown) — callers use this instead of their own
+     * hasShownEvent check.
+     */
+    suspend fun recordFoodMedShown(occurrenceId: String, taskId: String): Boolean = syncMutex.withLock {
+        if (db.foodMedEventDao().hasShownEvent(occurrenceId)) return@withLock false
+        db.foodMedEventDao().insert(FoodMedEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = taskId))
+        true
+    }
+
+    /** Audit finding #19 fix — see [recordFoodMedShown]; habit side ([AlarmReceiver.fireHabit] /
+     *  `fireBatch`'s identical race). */
+    suspend fun recordHabitShown(occurrenceId: String, habitId: String): Boolean = syncMutex.withLock {
+        if (db.habitEventDao().hasShownEvent(occurrenceId)) return@withLock false
+        db.habitEventDao().insert(HabitEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = habitId))
+        true
     }
 
     // ------------------------------------------------------------------ bulk

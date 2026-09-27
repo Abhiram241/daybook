@@ -50,8 +50,17 @@ class SyncFlushWorker @AssistedInject constructor(
                 // backs off linearly instead of hammering.
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
                 .build()
+            // Battery fix (finding #5) — this is the ONLY call site (onAppStop's routine, automatic
+            // flush-on-background), never a user-initiated "Sync now" (that pushes directly, see
+            // CloudSyncRepository.syncNow). REPLACE used to mean every single app background reset
+            // an already-scheduled retry's backoff back to its 30s floor, so a run stuck retrying
+            // (see CloudSyncRepository.flushPendingPush's KDoc for when that could still happen)
+            // never actually backed off — it re-hammered at ~30s indefinitely, once per app open/
+            // close cycle. KEEP lets an already-enqueued/retrying attempt run its own course; a
+            // later onAppStop with nothing outstanding is already a cheap no-op via
+            // flushPendingPush's own pendingPush check regardless of which policy wins here.
             WorkManager.getInstance(context)
-                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.REPLACE, request)
+                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)
         }
     }
 }

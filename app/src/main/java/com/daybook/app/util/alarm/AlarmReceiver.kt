@@ -6,9 +6,6 @@ import android.content.Intent
 import android.util.Log
 import com.daybook.app.data.OccurrenceScheduler
 import com.daybook.app.data.local.AppDatabase
-import com.daybook.app.data.model.Event
-import com.daybook.app.data.model.FoodMedEvent
-import com.daybook.app.data.model.HabitEvent
 import com.daybook.app.data.model.Occurrence
 import com.daybook.app.util.notification.NotificationUtils
 import dagger.hilt.android.AndroidEntryPoint
@@ -97,12 +94,9 @@ class AlarmReceiver : BroadcastReceiver() {
                 val titles = unresolved.mapNotNull { db.habitDao().getHabitById(it.habitId)?.title }
                 notificationUtils.showBatchHabitNotification(unresolved.size, titles)
                 // One SHOWN event per occurrence, guarded exactly like fireHabit (v0.5.1 §H).
-                unresolved.forEach { occ ->
-                    if (!db.habitEventDao().hasShownEvent(occ.id)) {
-                        // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the SHOWN event.
-                        db.habitEventDao().insert(HabitEvent(occurrenceId = occ.id, action = Event.Action.SHOWN, itemId = occ.habitId))
-                    }
-                }
+                // Audit finding #19 fix — mutex-guarded check-and-insert (see
+                // OccurrenceScheduler.recordHabitShown's KDoc for the race this closes).
+                unresolved.forEach { occ -> scheduler.recordHabitShown(occ.id, occ.habitId) }
             }
         } finally {
             // SB-1 fix (AUDIT_2026-09-16.md) — the alarm that just fired, whether the regular
@@ -175,10 +169,8 @@ class AlarmReceiver : BroadcastReceiver() {
         // Detail screen's Activity list read "Shown, Shown, Completed". The scheduler no longer
         // re-arms such a row; this makes a duplicate *post* cost at most a duplicate notification,
         // never corrupted history.
-        if (!isRefire && !db.habitEventDao().hasShownEvent(occurrenceId)) {
-            // v0.5.3 Phase 2 (A4): denormalise the owning habit id onto the SHOWN event.
-            db.habitEventDao().insert(HabitEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = occ.habitId))
-        }
+        // Audit finding #19 fix — mutex-guarded check-and-insert, see recordHabitShown's KDoc.
+        if (!isRefire) scheduler.recordHabitShown(occurrenceId, occ.habitId)
         // B-2 fix (AUDIT_2026-09-16.md) — this refire chain used to be unconditional: no cap, no
         // counter, re-arming forever until the user resolved the occurrence or the (unrelated)
         // 24h stale sweep happened to run. `shouldRefireHabit` bounds it and, when the chain must
@@ -223,11 +215,8 @@ class AlarmReceiver : BroadcastReceiver() {
             Log.w(TAG, "fireFoodMed: $occurrenceId notification suppressed — no SHOWN event, no refire")
             return
         }
-        // v0.5.1 §H — see fireHabit.
-        if (!isRefire && !db.foodMedEventDao().hasShownEvent(occurrenceId)) {
-            // v0.5.3 Phase 2 (A4): denormalise the owning task id onto the SHOWN event.
-            db.foodMedEventDao().insert(FoodMedEvent(occurrenceId = occurrenceId, action = Event.Action.SHOWN, itemId = occ.taskId))
-        }
+        // v0.5.1 §H — see fireHabit. Audit finding #19 fix — mutex-guarded check-and-insert.
+        if (!isRefire) scheduler.recordFoodMedShown(occurrenceId, occ.taskId)
         // B-2 fix (AUDIT_2026-09-16.md) — see fireHabit's identical guard.
         if (!scheduler.shouldRefireFoodMed(occ)) {
             Log.i(TAG, "fireFoodMed: $occurrenceId hit the refire cap — auto-skipped, chain stopped")

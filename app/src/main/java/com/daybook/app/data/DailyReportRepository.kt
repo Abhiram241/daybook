@@ -132,15 +132,41 @@ data class TodoEntryRow(
 class DailyReportRepository @Inject constructor(
     private val database: AppDatabase,
     private val workoutRepository: WorkoutRepository,
-    private val appSettingsRepository: AppSettingsRepository
+    private val appSettingsRepository: AppSettingsRepository,
+    // Audit finding #1 fix — see saveAiSummary's residency guard.
+    private val cloudSyncProvider: javax.inject.Provider<com.daybook.app.data.sync.CloudSyncRepository>
 ) {
 
     private val ymd: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
-    /** §3.5 step 3 — upserts the cached summary for one day. Regenerating replaces the row for
-     *  that date (one summary per day, never a history of regenerations). */
-    suspend fun saveAiSummary(summary: DailyReportAiSummary) {
+    /**
+     * §3.5 step 3 — upserts the cached summary for one day. Regenerating replaces the row for
+     * that date (one summary per day, never a history of regenerations).
+     *
+     * Audit finding #1 fix (cloud data-loss): a summary for an arbitrary past date can land in a
+     * month CloudSyncRepository has evicted (its Room rows dropped once its hash matched the
+     * cloud) — writing into it anyway would make the next push replace that month's entire cloud
+     * document with just this one row. Rehydrates the month first (a cheap no-op if already
+     * resident, which every recent date always is); if the month genuinely can't be reached
+     * (offline), the save is refused rather than risking it — returns false so the caller can tell
+     * the user to connect and retry, matching OccurrenceScheduler.backfillHabit's established
+     * pattern for the same hazard.
+     */
+    suspend fun saveAiSummary(summary: DailyReportAiSummary): Boolean {
+        val date = runCatching { LocalDate.parse(summary.localDate) }.getOrNull()
+        if (date != null) {
+            val cloudSync = cloudSyncProvider.get()
+            val month = java.time.YearMonth.from(date).toString()
+            if (!cloudSync.isMonthResident(month)) {
+                cloudSync.ensureMonthHydrated(month)
+                if (!cloudSync.isMonthResident(month)) {
+                    android.util.Log.w("DailyReportRepository", "saveAiSummary(${summary.localDate}): month not resident — refusing to avoid overwriting cloud history")
+                    return false
+                }
+            }
+        }
         database.dailyReportAiSummaryDao().upsert(summary)
+        return true
     }
 
     /** DAILY_REPORT_REDESIGN_PLAN.md §7.2 — chat's configurable multi-day context. [startDate]..

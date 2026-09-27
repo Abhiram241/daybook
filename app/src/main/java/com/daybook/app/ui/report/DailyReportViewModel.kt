@@ -249,7 +249,7 @@ class DailyReportViewModel @Inject constructor(
                 }
                 when (result) {
                     is AiResult.Success -> {
-                        repository.saveAiSummary(
+                        val saved = repository.saveAiSummary(
                             DailyReportAiSummary(
                                 localDate = state.selectedDate.toString(),
                                 provider = provider.name,
@@ -265,6 +265,13 @@ class DailyReportViewModel @Inject constructor(
                                 )
                             )
                         )
+                        // Audit finding #1 fix — saveAiSummary now refuses a write into a month it
+                        // can't safely rehydrate first (offline), rather than risking the cloud
+                        // data-loss the fix closes. Surface that instead of silently losing the
+                        // generation the user just paid for/waited on.
+                        if (!saved) {
+                            _generationError.value = "That month isn't loaded yet — connect and try generating again."
+                        }
                     }
                     is AiResult.Failure -> _generationError.value = result.message
                 }

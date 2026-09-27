@@ -33,6 +33,11 @@ interface WorkoutPhotoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(photos: List<WorkoutSessionPhoto>)
 
+    /** Audit finding #17 fix — read before [deleteById] so the caller can also delete this photo's
+     *  cloud copy (its `cloud_path`, if it was ever uploaded) via WorkoutPhotoCloudSync. */
+    @Query("SELECT * FROM workout_session_photos WHERE id = :id")
+    suspend fun getById(id: String): WorkoutSessionPhoto?
+
     @Query("DELETE FROM workout_session_photos WHERE id = :id")
     suspend fun deleteById(id: String)
 

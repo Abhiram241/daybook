@@ -451,6 +451,19 @@ class HomeViewModel @Inject constructor(
      *  [item] may be a synthesised past-day slot with no occurrence row yet (`isBackfill`), so the
      *  resolve path mirrors [replyToItem]'s own isBackfill branch. */
     fun logHydration(item: HomeItem, date: LocalDate, amountMl: Int, unit: String) = safeLaunch {
+        // Audit finding #1 fix (cloud data-loss): `hydrationRepository.setDay` used to run
+        // unconditionally, before `backfillFoodMed`'s own residency check below — so logging water
+        // for a date in a month CloudSyncRepository has evicted (rows dropped once its hash matched
+        // the cloud) could write a hydration row into it, and the next push would then replace that
+        // whole cloud month document with just this one row. Same guard `monthReady`/backfillHabit
+        // already use elsewhere: rehydrate first (a no-op for the always-resident recent months
+        // this is used for almost all of the time), refuse if that's genuinely not possible offline.
+        val month = YearMonth.from(date).toString()
+        if (!cloudSync.isMonthResident(month)) cloudSync.ensureMonthHydrated(month)
+        if (!cloudSync.isMonthResident(month)) {
+            postUndoFeedback("That month isn't loaded yet — connect and retry.")
+            return@safeLaunch
+        }
         val result = hydrationRepository.setDay(date, amountMl)
         val text = com.daybook.app.data.hydration.HydrationUnits.format(amountMl, unit)
         when {

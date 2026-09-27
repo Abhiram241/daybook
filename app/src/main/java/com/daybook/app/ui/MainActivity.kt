@@ -117,6 +117,14 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var workoutFontPrefs: com.daybook.app.data.workout.WorkoutFontPrefs
     @Inject lateinit var workoutThemePrefs: com.daybook.app.data.workout.WorkoutThemePrefs
     @Inject lateinit var healthRepository: com.daybook.app.data.HealthRepository
+    @Inject lateinit var workoutRepository: com.daybook.app.data.WorkoutRepository
+
+    private companion object {
+        /** Battery fix (finding #4) — see the warm-up call in [onCreate] for why this moved out of
+         *  DaybookApplication.onCreate(). Guards against redoing it for a second MainActivity
+         *  instance in the same process (a config change, or task recreation). */
+        val exerciseCatalogWarmed = java.util.concurrent.atomic.AtomicBoolean(false)
+    }
 
     /** (occurrenceId, isHabit) from a tapped notification, consumed once by [MainApp]. */
     private val deepLinkOccurrence = MutableStateFlow<Pair<String, Boolean>?>(null)
@@ -148,6 +156,15 @@ class MainActivity : FragmentActivity() {
         applyWindowTheme()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         readDeepLink(intent)
+
+        // Battery fix (finding #4) — warms the exercise catalog (the ~1 MB RepDB JSON parse + the
+        // one-time rename/addition/dedupe pass) here instead of DaybookApplication.onCreate(), so a
+        // process woken only to service a reminder alarm (no Activity ever created) never pays this
+        // cost. `observeExerciseCatalog()` / `AddExerciseViewModel` still fall back to the same
+        // idempotent path if the picker somehow opens before this completes.
+        if (exerciseCatalogWarmed.compareAndSet(false, true)) {
+            lifecycleScope.launch { runCatching { workoutRepository.warmExerciseCatalog() } }
+        }
 
         // Ask for the display's highest refresh rate as a SOFT hint, but only when it's worth it.
         // `preferredRefreshRate` (unlike the old `preferredDisplayModeId`) does not pin the panel
@@ -423,10 +440,18 @@ class MainActivity : FragmentActivity() {
         // The moment the user is most likely to leave — flush any pending cloud push immediately
         // instead of waiting out the 3 s debounce (FIREBASE_0.5_PLAN.md §4). Failure-inert.
         runCatching { cloudSyncRepository.onAppStop() }
+        // Battery fix (finding #4) — close the two live Firestore listeners while backgrounded;
+        // see detachListenersForBackground's KDoc. Ordered AFTER onAppStop() so the flush above
+        // still observes whatever listener-applied state existed up to this point.
+        runCatching { cloudSyncRepository.detachListenersForBackground() }
     }
 
     override fun onResume() {
         super.onResume()
+        // Battery fix (finding #4) — re-open the listeners closed in onStop(). Firestore's initial
+        // snapshot on (re)attach always reflects current server state, so nothing that changed
+        // while backgrounded is missed.
+        runCatching { cloudSyncRepository.reattachListenersForForeground() }
         // v0.5.1 §K: re-arm the lock if the app sat in the background longer than the timeout.
         // onResume runs before setContent's recomposition on a warm resume, so the flag is already
         // correct by the time the gate composable reads it.

@@ -17,6 +17,7 @@ import com.daybook.app.util.recordUnhandledException
 import com.daybook.app.util.runCatchingCancellable
 import java.time.Instant
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeoutException
@@ -41,7 +42,11 @@ class HealthRepository(
     private val database: AppDatabase,
     private val reader: HealthConnectReader,
     private val stateStore: HealthSyncStateStore,
-    private val appSettingsRepository: AppSettingsRepository
+    private val appSettingsRepository: AppSettingsRepository,
+    // Audit finding #1 fix — see the residency guard in pullWindow. Provider<> (not a direct
+    // CloudSyncRepository) mirrors OccurrenceScheduler's own identical need to break the DI cycle
+    // (CloudSyncRepository -> ... -> a repository that would otherwise need it eagerly).
+    private val cloudSyncProvider: javax.inject.Provider<com.daybook.app.data.sync.CloudSyncRepository>
 ) {
     private val zoneId: ZoneId get() = ZoneId.systemDefault()
     private val ymd: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
@@ -138,6 +143,16 @@ class HealthRepository(
         if (result != null) return result
         Log.e(TAG, "automatic pull timed out after ${AUTOMATIC_PULL_TIMEOUT_MILLIS}ms")
         recordUnhandledException(TimeoutException("HealthRepository automatic pull timed out"))
+        // Battery fix (finding #12) — this timeout cancels `pull()` mid-flight, so it never
+        // reaches its own `stateStore.lastPullAt = ...` bookkeeping (whatever Room already wrote
+        // via pullWindow's per-batch upserts up to this point is safe and stays — only the "we
+        // just tried" stamp is missing). Left unset, `lastPullAt` stays stuck at its old value
+        // forever, which makes `pullOnResume`'s 15-minute throttle check ALWAYS see "long overdue"
+        // — a single timeout used to make every later resume re-attempt the same expensive (up to
+        // 90-day) window forever, never actually throttled. Stamping it here — even though this
+        // particular attempt failed — restores the throttle's real purpose: bound how often this
+        // expensive path can run, regardless of whether the last attempt succeeded.
+        stateStore.lastPullAt = System.currentTimeMillis()
         val msg = "Couldn't refresh your health data. Last updated ${lastUpdatedRelative()}."
         setStatus(msg, failed = true)
         return PullOutcome.Failure(msg)
@@ -548,6 +563,22 @@ class HealthRepository(
         var weightReadingsWritten = false
         val fetchedWeightIds = HashSet<String>()
 
+        // Audit finding #1 fix (cloud data-loss): CloudSyncRepository's month-partitioned sync only
+        // keeps the current/recent months' Room rows resident — an older month's rows are evicted
+        // once its hash matches the cloud, and `doPush` treats ANY month with local rows as fully
+        // known. Writing health days into an evicted month here (e.g. "Import my past data"
+        // reaching back a year, or `reresolveSourcePreferences` re-touching a user's whole history)
+        // would make `doPush` replace that entire cloud month document with just these few new
+        // rows, destroying the rest of its history (habits, intake, workouts). Rehydrate every
+        // month this window touches BEFORE writing anything into it — `ensureMonthHydrated` is a
+        // cheap no-op for an already-resident month (including every signed-out case, and every
+        // month in the normal ~30-day automatic window, which is always resident).
+        val cloudSync = cloudSyncProvider.get()
+        val touchedMonths = allDates.mapTo(LinkedHashSet()) { YearMonth.from(it).toString() }
+        for (month in touchedMonths) {
+            if (!cloudSync.isMonthResident(month)) runCatchingCancellable { cloudSync.ensureMonthHydrated(month) }
+        }
+
         // B-3/D-2 fix — the window's existing rows are read once, up front, instead of a query per
         // day: (1) lets each incoming day be merge-aware-upserted (D-2 — a metric this read didn't
         // return keeps whatever was already stored, instead of REPLACE nulling it out), and (2)
@@ -566,9 +597,20 @@ class HealthRepository(
             totalDays += results.size
             failedDays += results.count { it.failed }
             daysWithRealData += results.count { r -> r.day?.let { !isEmptyHealthDay(it) } == true }
-            val batchDays = results.mapNotNull { it.day }
+            val mergedDays = results.mapNotNull { it.day }
                 .map { day -> mergeHealthDay(existingByDate[day.localDate], day) }
                 .filterNot { merged -> existingByDate[merged.localDate]?.let { sameHealthDayPayload(it, merged) } == true }
+            // Audit finding #1 — final safety net: a month the rehydrate attempt above couldn't
+            // reach (offline) is still not resident. Writing it anyway is exactly the data-loss bug
+            // this fix closes, so those days are skipped (not written) rather than risking it; they
+            // are naturally retried on the next pull once connectivity returns.
+            val (batchDays, skipped) = mergedDays.partition {
+                cloudSync.isMonthResident(YearMonth.from(LocalDate.parse(it.localDate)).toString())
+            }
+            if (skipped.isNotEmpty()) {
+                Log.w(TAG, "pullWindow: skipping ${skipped.size} day(s) in a non-resident month — would risk overwriting unrelated cloud history")
+                failedDays += skipped.size
+            }
             batchDays.forEach { existingByDate[it.localDate] = it }
             daysChanged += batchDays.size
             val batchWeightReadings = results.flatMap { it.weightReadings }

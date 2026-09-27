@@ -94,6 +94,28 @@ class HealthSyncStateStore(ctx: Context) {
         get() = !prefs.getBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V2, false)
         set(pending) = prefs.edit().putBoolean(KEY_SLEEP_DEDUP_RESYNC_DONE_V2, !pending).apply()
 
+    /**
+     * Audit finding #8 fix — called alongside wiping the `health_days`/`health_sessions`/
+     * `health_weight_readings` Room tables on sign-out, so this bookkeeping (which governs whether
+     * the next pull takes the cheap incremental-delta path or a full re-read) doesn't claim
+     * "already synced through X" against tables that were just emptied — left as-is, the next
+     * account's first pull would take the delta branch against a now-empty Room and silently never
+     * properly re-populate its local health history from Health Connect (a device-level store,
+     * unaffected by which Daybook account is signed in). Deliberately leaves
+     * [backgroundPermissionDenied] (an OS permission decision, not account data) and
+     * [sleepDedupResyncPending] / [lastStatusMessage] (one-shot app-version migration / cosmetic
+     * status bookkeeping) untouched.
+     */
+    fun resetForAccountWipe() {
+        prefs.edit()
+            .remove(KEY_CHANGES_TOKEN)
+            .remove(KEY_GRANTED_SCOPE)
+            .putLong(KEY_LAST_PULL_AT, 0L)
+            .putLong(KEY_LAST_FULL_RESYNC_AT, 0L)
+            .putLong(KEY_BACKFILL_THROUGH, 0L)
+            .apply()
+    }
+
     private companion object {
         const val KEY_CHANGES_TOKEN = "health_changes_token"
         const val KEY_GRANTED_SCOPE = "health_granted_scope"

@@ -370,14 +370,18 @@ class WorkoutRepository @Inject constructor(
         // `workout_session_photos` rows INSIDE it (so a crash mid-delete can't leave a row
         // pointing at a file that's already gone, or vice versa), then delete the actual files
         // AFTER it commits — disk I/O has no business holding a database write lock.
-        val photoPaths = database.workoutPhotoDao().getForSession(id).map { it.filePath }
+        val photos = database.workoutPhotoDao().getForSession(id)
         database.withTransaction {
             database.workoutDao().deleteSetsForSession(id)
             database.workoutDao().deleteExercisesForSession(id)
             database.workoutDao().deleteSession(id)
             database.workoutPhotoDao().deleteForSessions(listOf(id))
         }
+        val photoPaths = photos.map { it.filePath }
         if (photoPaths.isNotEmpty()) workoutPhotoStore.deleteFiles(photoPaths)
+        // Audit finding #17 fix — see WorkoutPhotoCloudSync.deleteCloudPhotos' KDoc.
+        val cloudPaths = photos.mapNotNull { it.cloudPath }
+        if (cloudPaths.isNotEmpty()) workoutPhotoCloudSync.deleteCloudPhotos(cloudPaths)
     }
 
     /** "Discard Workout" on the live session screen — same operation as [deleteSession], named
@@ -414,8 +418,12 @@ class WorkoutRepository @Inject constructor(
 
     /** "Remove" from the retake/remove sheet. */
     suspend fun deleteSessionPhoto(photoId: String, filePath: String) {
+        // Audit finding #17 fix — the row (and its cloudPath, if any) must be read before
+        // deleteById removes it.
+        val cloudPath = database.workoutPhotoDao().getById(photoId)?.cloudPath
         database.workoutPhotoDao().deleteById(photoId)
         workoutPhotoStore.deleteFiles(listOf(filePath))
+        if (cloudPath != null) workoutPhotoCloudSync.deleteCloudPhotos(listOf(cloudPath))
     }
 
     /** The startup/daily orphan sweep's "what's still referenced" input — see

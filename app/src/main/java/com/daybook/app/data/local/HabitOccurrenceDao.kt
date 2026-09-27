@@ -1,5 +1,6 @@
 package com.daybook.app.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
@@ -13,6 +14,10 @@ import java.util.*
 
 /** One row per habit: the earliest still-pending occurrence at or after a reference time. */
 data class HabitNextMillis(val habitId: String, val nextMillis: Long)
+
+/** Audit finding #16 — id + notification_id for one pending occurrence, enough to cancel its
+ *  alarm ([com.daybook.app.util.notification.NotificationUtils.cancelReminderAlarm] takes both). */
+data class PendingAlarmRef(val id: String, @ColumnInfo(name = "notification_id") val notificationId: Int)
 
 /**
  * v0.5.3 Phase 3 (A4): a two-column projection of an occurrence — everything the Detail stats fold
@@ -99,6 +104,24 @@ interface HabitOccurrenceDao {
     @Query("SELECT notification_id FROM habit_occurrences WHERE habit_id = :habitId AND status = 'PENDING' AND scheduled_for < :before")
     suspend fun staleNotificationIdsForHabit(habitId: String, before: Long): List<Int>
 
+    /** Audit finding #16 fix — every future pending row's alarm-cancel key, read BEFORE
+     *  [deleteFuturePendingForHabit]/[deleteFuturePendingExcept] delete the rows. Cancelling only
+     *  the single earliest pending row (the previous behavior, via [getNextPendingForHabit]) could
+     *  leave a LATER future row's alarm armed and orphaned — Android's AlarmManager has no
+     *  "cancel all alarms for this app" call, only per-PendingIntent, so every row that's about to
+     *  be deleted needs its own explicit cancel. */
+    @Query("SELECT id, notification_id FROM habit_occurrences WHERE habit_id = :habitId AND status = 'PENDING' AND scheduled_for >= :from")
+    suspend fun futurePendingAlarmRefsForHabit(habitId: String, from: Long): List<PendingAlarmRef>
+
+    /** Audit finding #22 fix — every existing row's id for this habit, regardless of status, so
+     *  [com.daybook.app.data.OccurrenceScheduler.syncHabitInternal]'s sweep can skip minting a
+     *  fresh notification id (a persistent `SharedPreferences` write, see `NotificationIdSequence`)
+     *  for a slot that already has a row — `insert`'s `OnConflictStrategy.IGNORE` would have
+     *  no-opped the insert anyway, but the mint's write cost was already paid for nothing on every
+     *  single sweep (app resume, boot, daily worker, …) for every already-scheduled slot. */
+    @Query("SELECT id FROM habit_occurrences WHERE habit_id = :habitId")
+    suspend fun existingIdsForHabit(habitId: String): List<String>
+
     @Query("DELETE FROM habit_occurrences WHERE habit_id = :habitId AND status = 'PENDING' AND scheduled_for >= :from")
     suspend fun deleteFuturePendingForHabit(habitId: String, from: Long)
 
@@ -112,6 +135,14 @@ interface HabitOccurrenceDao {
      */
     @Query("DELETE FROM habit_occurrences WHERE habit_id = :habitId AND status = 'PENDING' AND scheduled_for >= :from AND id NOT IN (:keep)")
     suspend fun deleteFuturePendingExcept(habitId: String, from: Long, keep: List<String>)
+
+    /** Audit finding #16 fix — the alarm-cancel keys for exactly the rows [deleteFuturePendingExcept]
+     *  is about to remove (a schedule edit, or a timezone change, dropping a slot from the new
+     *  schedule). Read BEFORE the delete — one of these can be the currently-armed alarm, and
+     *  leaving it uncancelled means it still fires at the old time with a row that no longer
+     *  exists (a leaked wakeup for nothing). */
+    @Query("SELECT id, notification_id FROM habit_occurrences WHERE habit_id = :habitId AND status = 'PENDING' AND scheduled_for >= :from AND id NOT IN (:keep)")
+    suspend fun futurePendingAlarmRefsExceptForHabit(habitId: String, from: Long, keep: List<String>): List<PendingAlarmRef>
 
     /** v0.5.3 Phase 3 (S15): targeted delete of specific occurrence ids — the per-log merge in
      *  `importMonth` removes exactly the stale window slots it identified, nothing else. */

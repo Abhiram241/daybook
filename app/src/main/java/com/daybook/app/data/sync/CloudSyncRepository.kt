@@ -124,6 +124,13 @@ class CloudSyncRepository @Inject constructor(
     // on CloudSyncRepository (both take only AppDatabase/Context), so no Hilt cycle risk.
     private val settingsRepository: com.daybook.app.data.AppSettingsRepository,
     private val profilePhotoStore: com.daybook.app.data.ProfilePhotoStore,
+    // Audit finding #8: the sign-out wipe previously never touched Beast Mode's workout/health
+    // data or its bookkeeping store, so a second account signing in on the same device inherited
+    // (and could re-upload into its own cloud) the first account's history.
+    private val workoutPhotoStore: com.daybook.app.data.WorkoutPhotoStore,
+    private val healthSyncStateStore: com.daybook.app.data.health.HealthSyncStateStore,
+    // Audit finding #17: deleteRemoteDoc (account deletion) never cleaned up Storage photos.
+    private val workoutPhotoCloudSync: com.daybook.app.data.WorkoutPhotoCloudSync,
     @ApplicationContext private val context: Context
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -148,9 +155,14 @@ class CloudSyncRepository @Inject constructor(
     private var trackerObserver: InvalidationTracker.Observer? = null
     private var parentReg: ListenerRegistration? = null
     private var monthsReg: ListenerRegistration? = null
-    private var currentUid: String? = null
+    // Audit finding #21 fix — read and written from both Firestore's own callback threads
+    // (snapshot listeners, addOnCompleteListener via awaitCompat) and the IO-dispatched coroutines
+    // this class launches; @Volatile guarantees a write on one thread is visible to a read on
+    // another (a plain field gives no such guarantee — a stale cached read is a real possibility,
+    // not just a theoretical one, across CPU cores).
+    @Volatile private var currentUid: String? = null
     /** True while a D2 prompt is unanswered — sync stays paused for the session. */
-    private var conflictPaused = false
+    @Volatile private var conflictPaused = false
     private var started = false
 
     // LOGIN_REDESIGN_RISK_FIX_PLAN.md Phase 11 (S-6): the "fourth echo guard" (`hydrating`, an
@@ -214,8 +226,14 @@ class CloudSyncRepository @Inject constructor(
      * v0.5.3 Phase 1 (S9): months whose gzipped payload is over the 1 MiB hard doc limit. They are
      * skipped by [doPush] (a `batch.commit()` including one fails permanently) and retried only
      * once a later re-export drops them back under the limit.
+     *
+     * Audit finding #21 fix — a plain `mutableSetOf()` here is read/written from both `doPush`
+     * (an IO coroutine) and could race a concurrent access from another coroutine on the same
+     * mutex-protected path; `Collections.synchronizedSet` matches every other cross-coroutine set
+     * in this class ([pinnedMonths], [exportRangePins], [healthTabPinnedMonths]) for the same
+     * reason their own KDocs already give.
      */
-    private val oversizedMonths: MutableSet<String> = mutableSetOf()
+    private val oversizedMonths: MutableSet<String> = Collections.synchronizedSet(mutableSetOf<String>())
 
     /** Call once (from DaybookApplication). Idempotent. */
     fun start() {
@@ -254,6 +272,18 @@ class CloudSyncRepository @Inject constructor(
                 // `AuthState.Loading` (never emitted after SignedIn in practice, but guard anyway)
                 // must NOT wipe — it would erase a solo user's data on nothing.
                 val genuineSignOut = st is AuthState.SignedOut
+                // Audit finding #11 fix: an edit inside the 45s debounce window, or made offline
+                // just before this, previously had `pendingPush` silently discarded by the wipe
+                // below with no attempt to save it. Best-effort + bounded: this must never make
+                // sign-out visibly hang, so a slow/offline attempt just times out (the edit is lost
+                // exactly as before), but a normal, connected sign-out now has a real chance to save
+                // it first. Must run BEFORE teardown() — doPush needs currentUid, which teardown
+                // clears — and before the wipe, which would otherwise race it.
+                if (genuineSignOut && syncState.pendingPush) {
+                    withTimeoutOrNull(SIGN_OUT_FLUSH_TIMEOUT_MILLIS) {
+                        runCatching { pushMutex.withLock { doPush(force = false) } }
+                    }
+                }
                 teardown()
                 if (genuineSignOut) wipeLocalForSignOut() else syncState.clearForSignOut()
             }
@@ -295,6 +325,12 @@ class CloudSyncRepository @Inject constructor(
      */
     suspend fun wipeAllLocalData() {
         runCatching { scheduler.cancelAllReminders() }
+        // Audit finding #8: collected BEFORE the transaction (matches WorkoutPhotoStore.deleteFiles'
+        // own documented contract — file I/O has no business holding a database write lock) so the
+        // photo files can be removed once the transaction (which deletes their Room rows) commits.
+        val photoPaths = runCatching {
+            database.workoutPhotoDao().getAll().map { it.filePath }
+        }.getOrDefault(emptyList())
         database.withTransaction {
             database.habitEventDao().deleteAll()
             database.foodMedEventDao().deleteAll()
@@ -310,7 +346,27 @@ class CloudSyncRepository @Inject constructor(
             database.aiExclusionDao().deleteAll()
             // Hydration habit — one account's water log must not carry into another's.
             database.hydrationDao().deleteAll()
+            // Audit finding #8 fix — these were never wiped, so a second account signing in on the
+            // same device inherited the first account's Beast Mode (workout/Health Connect) data
+            // and AI report summaries, and doPush later re-uploaded them into the new account's own
+            // cloud months the moment it had ANY habit of its own.
+            database.workoutDao().deleteAllSets()
+            database.workoutDao().deleteAllExercises()
+            database.workoutDao().deleteAllSessions()
+            database.workoutPhotoDao().deleteAll()
+            database.routineDao().deleteAllRoutineExercises()
+            database.routineDao().deleteAllRoutines()
+            database.exerciseDao().deleteAll()
+            database.healthDao().deleteAllSessions()
+            database.healthDao().deleteAllDays()
+            database.healthDao().deleteAllWeightReadings()
+            database.dailyReportAiSummaryDao().deleteAll()
         }
+        // Outside the transaction, matching deleteFiles' own contract (see photoPaths above).
+        runCatching { workoutPhotoStore.deleteFiles(photoPaths) }
+            .onFailure { Log.w(TAG, "wipeAllLocalData: photo file cleanup failed", it) }
+        runCatching { healthSyncStateStore.resetForAccountWipe() }
+            .onFailure { Log.w(TAG, "wipeAllLocalData: health sync state reset failed", it) }
         syncState.reset()
         hydrationAttempted.clear()
         pinnedMonths.clear()
@@ -452,8 +508,41 @@ class CloudSyncRepository @Inject constructor(
                 pushMutex.withLock { doPush(force = true, prefetched = localBackup) }
             SyncLogic.BootstrapAction.PULL_REMOTE ->
                 pushMutex.withLock { pullRemote(uid, parent, remoteMonthHashes) }
-            SyncLogic.BootstrapAction.CONFLICT ->
-                raiseConflict(uid, parent, localBackup, remoteMonthHashes)
+            SyncLogic.BootstrapAction.CONFLICT -> {
+                // Battery/correctness fix: a hash mismatch here is very often NOT a genuine
+                // two-device conflict. `exportBackup`'s own status mapping (see its KDoc, S13)
+                // derives BackupStatus.MISSED for any overdue-but-unresolved PENDING slot purely
+                // from wall-clock time at export time — so simply reopening the app after a
+                // reminder's time has passed (and before `scheduler.syncAll()`/the next debounced
+                // push has reconciled + re-pushed that) makes this device's fresh local hash differ
+                // from what it last pushed, with zero real edits by anyone. Previously this always
+                // surfaced the D2 data-loss-risk dialog and permanently wedged sync into Paused
+                // until the user picked a side — including "Restore from cloud", which would have
+                // discarded real local work over a false alarm.
+                //
+                // The fix: only escalate to the user-facing conflict prompt when the diverging
+                // remote content could plausibly belong to ANOTHER device. Every remote doc (parent
+                // and month) already carries the writing device's id (F_DEVICE) for exactly this
+                // kind of echo detection (see SyncLogic.shouldApply's guard 3). If every mismatched
+                // doc's last writer was THIS device, nothing else could have changed it since this
+                // device's own last push — the divergence is necessarily this device's own state
+                // moving forward (whether that's the routine time-drift above or a genuine local
+                // edit made after that push), and it is always safe to just push it, never a
+                // possible loss of someone else's data.
+                val mismatchedMonths = (comparableRemoteMonthHashes.keys + localMonthHashes.keys)
+                    .filterTo(HashSet()) { comparableRemoteMonthHashes[it] != localMonthHashes[it] }
+                val defsMatch = localDefsHash != null && parent?.getString(F_DEFS_HASH) == localDefsHash
+                val ownedByThisDevice = runCatching {
+                    divergenceOwnedByThisDevice(uid, parent, defsMatch, mismatchedMonths)
+                }.getOrDefault(false)
+                if (ownedByThisDevice) {
+                    Log.i(TAG, "bootstrap: hash mismatch but every diverging doc was last written by " +
+                        "this device (deviceId=${syncState.deviceId}) — pushing instead of prompting")
+                    pushMutex.withLock { doPush(force = true, prefetched = localBackup) }
+                } else {
+                    raiseConflict(uid, parent, localBackup, remoteMonthHashes)
+                }
+            }
         }
         // v0.5.3 Phase 1 (S2): the resident data now belongs to this uid (CONFLICT leaves it
         // untouched — resolveConflict sets it once the user picks a side).
@@ -682,7 +771,23 @@ class CloudSyncRepository @Inject constructor(
             // `localMonthHashes`, sees the un-pushed months still dirty, and re-pushes them. Worst
             // case is one CONFLICT prompt on relaunch if >450 months changed in the interrupted
             // run (a partial higher-rev set on the cloud). No data loss, no manual recovery.
-            for (batch in batches) batch.commit().awaitCompat()
+            //
+            // Audit finding #10 fix: this loop used to run with no bound at all while holding
+            // `pushMutex` — on a network that's "connected" but has no real internet access,
+            // `awaitCompat()` can sit for a very long time (well past what a user would ever wait),
+            // during which the status row is stuck reading "Syncing" (never reaches Offline) and
+            // every other mutex-holding operation (`ensureMonthHydrated`, `hydrateRange`,
+            // `resolveConflict`, "Sync now") blocks behind it. A bounded timeout turns that into
+            // the exact same self-healing "interrupted mid-loop" case the comment above already
+            // covers — nothing new to reason about — instead of an indefinite hang.
+            val committed = withTimeoutOrNull(PUSH_COMMIT_TIMEOUT_MILLIS) {
+                for (batch in batches) batch.commit().awaitCompat()
+            }
+            if (committed == null) {
+                Log.w(TAG, "push commit timed out after ${PUSH_COMMIT_TIMEOUT_MILLIS}ms — treating as offline")
+                _status.value = SyncStatus.Offline
+                return
+            }
 
             if (defsChanged) syncState.definitionsHash = defsHash
             if (aiChanged) syncState.aiSettingsHash = aiHash
@@ -1032,6 +1137,29 @@ class CloudSyncRepository @Inject constructor(
         monthsReg = scopedMonthsListener(uid)
     }
 
+    /**
+     * Battery fix (finding #4) — the parent + months snapshot listeners are two open gRPC
+     * streams that used to stay live for as long as the process did, including the entire time
+     * the app sat backgrounded (they were only ever torn down on sign-out). Called from
+     * MainActivity.onStop(): while backgrounded, this device won't proactively observe another
+     * device's edits, but nothing about pushing ITS OWN edits depends on these listeners (that's
+     * `doPush`/`SyncFlushWorker`, unaffected), and [reattachListenersForForeground] re-establishes
+     * them (with a fresh initial snapshot of current server state, so nothing is missed) the
+     * moment the app is foregrounded again. No-op if already detached (e.g. signed out).
+     */
+    fun detachListenersForBackground() {
+        parentReg?.remove(); parentReg = null
+        monthsReg?.remove(); monthsReg = null
+    }
+
+    /** Battery fix (finding #4) — counterpart to [detachListenersForBackground], called from
+     *  MainActivity.onResume(). No-op if already attached or signed out. */
+    fun reattachListenersForForeground() {
+        val uid = currentUid ?: return
+        if (parentReg != null) return
+        attachSnapshotListeners(uid)
+    }
+
     // User request (Firestore sync for AI meta-prompts + privacy settings) — `shouldApply`'s
     // "we already hold exactly this content" echo-guard (step 2) used to compare ONLY the
     // definitions hash. Now that a parent-doc push can bump `revision` with `defsHash` UNCHANGED
@@ -1300,6 +1428,27 @@ class CloudSyncRepository @Inject constructor(
         }
     }
 
+    /**
+     * Battery/correctness fix (bootstrap CONFLICT false-positive) — true only when every doc that
+     * actually diverges from local (the parent, if [defsMatch] is false; each month in
+     * [mismatchedMonths]) was last written by [SyncStateStore.deviceId], i.e. this exact
+     * install. A single fetch per diverging doc (bounded by the resident month count, ~1-3 in
+     * practice) — cheap, and only run on the rare hash-mismatch path, never on every bootstrap.
+     */
+    private suspend fun divergenceOwnedByThisDevice(
+        uid: String,
+        parent: DocumentSnapshot?,
+        defsMatch: Boolean,
+        mismatchedMonths: Set<String>
+    ): Boolean {
+        if (!defsMatch && parent?.getString(F_DEVICE) != syncState.deviceId) return false
+        for (month in mismatchedMonths) {
+            val doc = fetchDocServer(monthRef(uid, month)) ?: return false
+            if (doc.getString(F_DEVICE) != syncState.deviceId) return false
+        }
+        return true
+    }
+
     // ------------------------------------------------------------------ conflict (D2)
 
     private suspend fun raiseConflict(
@@ -1334,7 +1483,13 @@ class CloudSyncRepository @Inject constructor(
             remoteHabits = remoteDefs?.habits?.size ?: 0,
             remoteDays = remoteDays
         )
-        markIdle()
+        // Battery/correctness fix: this used to call markIdle(), which set the sync row to
+        // "Synced" (SyncStatus.Idle) at the exact moment sync was actually halted
+        // (conflictPaused = true, above) pending the user's D2 decision — the status row lied
+        // about the app's real state until the next failed push flipped it to Paused. Every other
+        // path that suppresses sync for this reason (dismissConflict) already reports Paused
+        // directly; this is the one place that didn't.
+        _status.value = SyncStatus.Paused
     }
 
     /** D2 resolution. `restoreFromCloud` = replace this device; else replace the cloud. */
@@ -1421,8 +1576,21 @@ class CloudSyncRepository @Inject constructor(
             }
             FlushOutcome.PROCEED -> {}
         }
-        return runCatching { pushMutex.withLock { doPush(force = false) } }.isSuccess &&
-            !syncState.pendingPush
+        val pushResult = runCatching { pushMutex.withLock { doPush(force = false) } }
+        if (pushResult.isFailure) return false   // a genuine exception — worth retrying.
+        // Battery fix (finding #5): doPush can leave pendingPush=true with no exception thrown for
+        // two reasons this worker retrying can never resolve on its own: a dismissed D2 conflict
+        // (only the user picking a side, via resolveConflict's own explicit push, moves this
+        // forward) and a genuinely empty account (nothing exists to push until a future edit
+        // re-arms pendingPush through the normal InvalidationTracker path). Previously both left
+        // pendingPush armed with no error, so `Result.retry()` below hammered every ~30s forever —
+        // each attempt repeating the same expensive cold-start-shaped work for nothing. Reporting
+        // success here just stops THIS worker's retries; it changes no other behavior; every other
+        // still-outstanding reason (an oversized month, a genuine offline failure) still falls
+        // through to the original pendingPush check and keeps retrying exactly as before.
+        if (conflictPaused) return true
+        if (isLocalEmpty()) return true
+        return !syncState.pendingPush
     }
 
     /**
@@ -1452,6 +1620,12 @@ class CloudSyncRepository @Inject constructor(
                 docRef(uid).delete().awaitCompat()
             }.onFailure { Log.w(TAG, "deleteRemoteDoc failed", it); com.daybook.app.util.recordUnhandledException(it) }.isSuccess
         } finally {
+            // Audit finding #17 fix — a Firestore parent-doc delete above never touches Storage;
+            // without this, every deleted account's workout photos were orphaned in Storage
+            // forever. Best-effort (deleteAllCloudPhotos never throws) — must not affect whether
+            // this function itself reports success, since the Firestore deletion above is the
+            // part that actually matters for "can this uid's data still be read".
+            runCatching { workoutPhotoCloudSync.deleteAllCloudPhotos(uid) }
             conflictPaused = false
         }
     }
@@ -1509,9 +1683,18 @@ class CloudSyncRepository @Inject constructor(
             ?.mapNotNull { (k, v) -> if (k is String && v is String) k to v else null }
             ?.toMap()
 
+    // Battery fix (finding #9): this used to check only habits + food/med tasks, so a Beast-Mode-
+    // only user (workouts/Health Connect, hydration off by default, no Daybook-side habits or
+    // intake reminders at all) was ALWAYS "local empty" — doPush bailed on every single debounce,
+    // onAppStop and worker run, forever, meaning that account was never backed up at all, and
+    // (before the #5 fix above) drove the retry-storm bug on top of it. Workout sessions and
+    // Health Connect data are exactly as real as a habit for this purpose — `DATA_TABLES` already
+    // syncs both — so they must count here too.
     private suspend fun isLocalEmpty(): Boolean =
         database.habitDao().observeAllHabits().first().isEmpty() &&
-            database.foodMedTaskDao().observeAllTasks().first().isEmpty()
+            database.foodMedTaskDao().observeAllTasks().first().isEmpty() &&
+            database.workoutDao().getAllSessions().isEmpty() &&
+            database.healthDao().getAllDays().isEmpty()
 
     private fun markIdle() {
         syncState.lastSyncedAtMillis = System.currentTimeMillis()
@@ -1535,6 +1718,14 @@ class CloudSyncRepository @Inject constructor(
         // habit ticks) while `onAppStop`'s unconditional flush (see below) still guarantees nothing
         // sits unpushed for more than the time the user has the app open.
         const val DEBOUNCE_MS = 45_000L
+        /** Audit finding #10 fix — see the `withTimeoutOrNull` call in `doPush`'s commit loop.
+         *  Generous enough that a normal, briefly-slow connection never trips it (a push is at
+         *  most a few small gzipped month docs), short enough that a "connected but no internet"
+         *  network doesn't hold `pushMutex` for anywhere near what a user would wait through. */
+        const val PUSH_COMMIT_TIMEOUT_MILLIS = 25_000L
+        /** Audit finding #11 fix — see the sign-out flush attempt in `onAuthState`. Short: a
+         *  sign-out must feel instant even when this can't complete in time. */
+        const val SIGN_OUT_FLUSH_TIMEOUT_MILLIS = 5_000L
         /** B-3 fix (AUDIT_2026-09-16.md) — see `SyncStateStore.lastMaintenanceAt`'s KDoc. */
         const val MAINTENANCE_THROTTLE_MILLIS = 6 * 60 * 60 * 1000L
         /** B-1 fix — see `attachTracker`'s `onInvalidated` comment. */

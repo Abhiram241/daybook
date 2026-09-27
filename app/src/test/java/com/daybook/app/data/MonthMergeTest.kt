@@ -72,4 +72,22 @@ class MonthMergeTest {
         assertFalse("A's breakfast is never deleted", r.deletePending.contains("meal:0800"))
         assertTrue("the stale pending slot is cleared once the cloud claims it", r.deletePending.isEmpty())
     }
+
+    /** Audit finding #6: a stale incoming snapshot (still unresolved — either a genuine PENDING,
+     *  or an overdue slot the exporter wrote as MISSED, which round-trips back to PENDING on
+     *  import) must never overwrite an already-resolved local row for the same id. */
+    @Test fun `a stale unresolved incoming row never downgrades an already-resolved local row`() {
+        val r = mergeMonth(local = listOf(resolved("journal:0900")), incoming = listOf(pending("journal:0900")))
+        assertTrue("the stale incoming row is not applied", r.upsert.isEmpty())
+        assertEquals("the resolved local row (and its content) is left untouched", listOf("journal:0900"), r.keepLocal)
+        assertTrue("a protected row is never deleted either", r.deletePending.isEmpty())
+    }
+
+    /** A genuinely resolved incoming row (a real edit/completion from another device) still wins
+     *  normally — only an unresolved incoming snapshot is blocked from downgrading. */
+    @Test fun `a resolved incoming row still overwrites a resolved local row`() {
+        val r = mergeMonth(local = listOf(resolved("journal:0900")), incoming = listOf(resolved("journal:0900")))
+        assertEquals(listOf("journal:0900"), r.upsert)
+        assertTrue(r.keepLocal.isEmpty())
+    }
 }
