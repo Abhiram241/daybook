@@ -133,3 +133,4 @@ Nothing ships unless all four pass from a clean state:
   **gitignored** — without them the release build falls back to the debug key.
 - Device-local settings (accent, font, week-start, quiet hours, etc.) live only in
   `app_settings` on the device — they are not synced and not in the JSON backup.
+
